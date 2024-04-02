@@ -1,0 +1,39 @@
+mechsys (1.3-1) unstable; urgency=low
+
+  * Blender GUI improved a lot
+  * Blender GUI: Now all properties are stored in the same (geometry) object
+  * Blender GUI: Generation of o2 elements added
+  * Blender GUI: Results/Report added
+  * Blender GUI: Drawing of Moment, Axial, and Shear forces for Beams added
+  * Reinforcements (embedded) added
+  * Biot/coupled elment added
+
+ -- Dorival Pedroso <dorival.pedroso@gmail.com>  Fri, 19 Jun 2009 12:29:28 +1000
+
+mechsys (1.2-1) unstable; urgency=low
+
+  * Blender GUI improved: Blocks can now be defined in a single mesh
+  * Blender: Mesh generation automatically set nodes/faces boundary conditions
+  * Blender: Colours can be defined for faces boundary conditions
+  * Blender: Settings is now an independent box
+  * Blender: Scripts generation both for mesh and FE simulations added
+  * Check for errors in 2D and 3D meshes improved
+
+ -- Dorival Pedroso <dorival.pedroso@gmail.com>  Wed, 05 Nov 2008 17:35:11 +1000
+
+mechsys (1.1-1) unstable; urgency=low
+
+  * Diffusion element added. Steady-state heat tests added.
+  * Unstructured mesh can now generate O2 elements (tri6).
+  * UMFPACK is now default.
+  * Simulation of linear structures (trusses) in Blender is now possible.
+  * Output of principal stresses and strains added
+
+ -- Dorival Pedroso <dorival.pedroso@gmail.com>  Sun, 28 Sep 2008 19:21:36 +1000
+
+mechsys (1.0-1) unstable; urgency=low
+
+  * Initial Release.
+  * To get the date, use: date -R
+
+ -- Dorival Pedroso <dorival.pedroso@gmail.com>  Sun, 07 Sep 2008 16:11:06 +1000

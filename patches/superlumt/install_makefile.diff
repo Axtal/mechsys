@@ -1,0 +1,4 @@
+16c16
+< 	csh install.csh
+---
+> 	bash install.bash

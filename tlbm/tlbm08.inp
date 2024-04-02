@@ -1,0 +1,13 @@
+sphere     = ptype     Particle type
+1         = Render    Produce visualization files?       
+241       = nx        x dimension of lbm grid           
+61       = ny        y dimension of lbm grid             
+61       = nz        z dimension of lbm grid                
+1.0     = nu        viscosity of the fluid    
+0.4       = dx        grid size    
+1.6e-2    = dt        time step    
+1.5e-2    = Dp        fluid acceleration    
+3.6        = R         particle size   
+0.00      = w         angular velocity 
+0.0      = ang        angle of the body around the z axis
+10000.0   = Tf        time

@@ -1,0 +1,18 @@
+MySoil Soil name
+Cube Specimen type "Sphere"/"Cube"/"Cylinder"/"File"
+3 6 24 6 1.0 1.0 1.0   number of size, size of specimen mm, factor of specimen (x,y,z)
+Discrete Type of filling "Layer", "Discrete"
+6 Number of processors
+2.65 Soil particle density T/m3 = g/mm3
+0.35 Soil porosity
+5 Max % of fraction per interval
+6 1 GSD number of points and Number of shape:
+000 0.50 2.65 1.0 0.0 0.0 0.0 fraction diameter density sphere cube tetrahedron rectagular_box
+010 0.60 2.65 1.0 0.0 0.0 0.0
+050 0.70 2.65 1.0 0.0 0.0 0.0
+080 0.80 2.65 1.0 0.0 0.0 0.0
+090 0.90 2.65 1.0 0.0 0.0 0.0
+100 1.00 2.65 1.0 0.0 0.0 0.0 
+0.00005 approximation
+1 2 4 Rectangular box size ratios
+

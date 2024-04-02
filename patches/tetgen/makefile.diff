@@ -1,0 +1,19 @@
+22c22
+< CXXFLAGS = -g
+---
+> CXXFLAGS = -O2 -fPIC
+28c28
+< PREDCXXFLAGS = -O0
+---
+> PREDCXXFLAGS = -O0 -fPIC
+41c41
+< SWITCHES = -Wall -DSELF_CHECK
+---
+> SWITCHES = -DSELF_CHECK
+55a56,57
+> all: tetlib
+> 
+61c63
+< 	ar r libtet.a tetgen.o predicates.o
+---
+> 	ar r libtetgen.a tetgen.o predicates.o

@@ -1,0 +1,47 @@
+#!/usr/bin/make -f
+
+PYVERS=$(shell pyversions -vr)
+
+clean:
+	dh_testdir
+	dh_testroot
+	rm -f *-stamp
+	rm -rf build*
+	find . -name *\.py[co] -exec rm {} \;
+	dh_clean
+
+build: $(PYVERS:%=build-python%)
+	touch $@
+
+build-python%:
+	dh_testdir
+	cmake -DINSTALL_ROOT=$(CURDIR)/debian/mechsys/ .
+	make
+	touch $@
+
+install: build $(PYVERS:%=install-python%)
+	test -d $(CURDIR)/debian/mechsys/usr/share/blender/scripts/ || mkdir -p $(CURDIR)/debian/mechsys/usr/share/blender/scripts/
+	cp lib/blender/*.py $(CURDIR)/debian/mechsys/usr/share/blender/scripts/
+
+install-python%:
+	make install
+
+binary-indep: build install
+
+binary-arch: build install
+	dh_testdir
+	dh_testroot
+	dh_installchangelogs 
+	dh_installdocs
+	dh_pycentral
+	dh_strip
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	dh_shlibdeps
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary: binary-indep binary-arch
+.PHONY: build clean binary-indep binary-arch binary install

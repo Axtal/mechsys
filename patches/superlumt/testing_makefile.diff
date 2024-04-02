@@ -1,0 +1,32 @@
+78c78
+< pstest.out: pstest pstest.csh
+---
+> pstest.out: pstest pstest.bash
+80c80
+< 	csh pstest.csh
+---
+> 	bash pstest.bash
+82c82
+< pdtest.out: pdtest pdtest.csh
+---
+> pdtest.out: pdtest pdtest.bash
+84c84
+< 	csh pdtest.csh
+---
+> 	bash pdtest.bash
+86c86
+< pctest.out: pctest pctest.csh
+---
+> pctest.out: pctest pctest.bash
+88c88
+< 	csh pctest.csh
+---
+> 	bash pctest.bash
+90c90
+< pztest.out: pztest pztest.csh
+---
+> pztest.out: pztest pztest.bash
+92c92
+< 	csh pztest.csh
+---
+> 	bash pztest.bash

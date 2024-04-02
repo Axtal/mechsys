@@ -1,0 +1,79 @@
+5357a5358
+>   axtbclen = aytbclen = bxtcalen = bytcalen = cxtablen = cytablen = 0;
+7827a7829
+>   /* DORIVAL =============================================
+7833a7836
+>   ============================================= DORIVAL */
+8220a8224,8225
+>   toprcasing.orient = 0;
+>   toprcasing.tri    = NULL;
+8409a8415
+>       /* DORIVAL =======================================================
+8412a8419
+>        ======================================================= DORIVAL */
+10805a10813,10816
+>   farlefttri.orient  = 0;
+>   farlefttri.tri     = NULL;
+>   farrighttri.orient = 0;
+>   farrighttri.tri    = NULL;
+11739a11751
+>   /* DORIVAL ==============================================
+11740a11753
+>   ================================================ DORIVAL */
+11929a11943
+>   /* DORIVAL ==============================================
+11930a11945
+>   =============================================== DORIVAL */
+13395c13410,13412
+<         setvertexmark(newvertex, mark(currentenc));
+---
+>         /* DORIVAL ===================================================
+>         setvertexmark(newvertex, mark(currentenc)); //////////////////// <<<<<<<<<<<<<<<<<<<< DORIVAL, dorival
+>         ==================================================== DORIVAL */
+13768c13785,13787
+<             setvertexmark(newvertex, mark(checkmark));
+---
+>             /* DORIVAL ==============================================
+>             setvertexmark(newvertex, mark(checkmark)); /// <<<<<<<<<<<<<<<<<<<, dorival DORIVAL
+>             =============================================== DORIVAL */
+14496c14515
+<                    int **trianglelist, REAL **triangleattriblist)
+---
+>                    int **trianglelist, REAL **triangleattriblist, int **triedgemarks)
+14498c14517
+< void writeelements(m, b, trianglelist, triangleattriblist)
+---
+> void writeelements(m, b, trianglelist, triangleattriblist, triedgemarks)
+14502a14522
+> int **triedgemarks;
+14524a14545
+>   int *temarks;
+14534a14556,14558
+>   long en;
+>   struct osub checkmark;
+>   subseg sptr;                      /* Temporary variable used by tspivot(). */
+14551a14576,14578
+>   if (*triedgemarks == (int *) NULL) {
+>     *triedgemarks = (int *) trimalloc((int) (m->triangles.items * 3 * sizeof(int)));
+>   }
+14553a14581
+>   temarks = *triedgemarks;
+14574a14603,14612
+>     en = elementnumber - b->firstnumber;
+>     for (triangleloop.orient=0; triangleloop.orient<3; triangleloop.orient++) {
+>       tspivot(triangleloop, checkmark);
+>       if ((checkmark.ss==NULL) || (checkmark.ss==m->dummysub)) {
+>         temarks[en*3+triangleloop.orient] = 0;
+>       } else {
+>         temarks[en*3+triangleloop.orient] = mark(checkmark);
+>       }
+>     }
+>     triangleloop.orient = 0;
+15669c15707
+< void triangulate(char *triswitches, struct triangulateio *in,
+---
+> void triangulate(char const * triswitches, struct triangulateio *in,
+15909c15947
+<     writeelements(&m, &b, &out->trianglelist, &out->triangleattributelist);
+---
+>     writeelements(&m, &b, &out->trianglelist, &out->triangleattributelist, &out->triedgemarks);

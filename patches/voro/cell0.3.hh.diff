@@ -1,0 +1,9 @@
+206a207,209
+> 		inline int cycle_up(int a,int p); // mechsys
+> 		inline int cycle_down(int a,int p); // mechsys
+> 		inline void reset_edges(); // mechsys
+241,242d243
+< 		inline int cycle_up(int a,int p);
+< 		inline int cycle_down(int a,int p);
+252d252
+< 		inline void reset_edges();

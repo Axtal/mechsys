@@ -1,0 +1,22 @@
+1.5                 = power_law_exponent
+8                   = number_of_threads
+2000                  = loop_times
+200                 = which_model_shown_to_us
+1		    = when n DFN models are finished, output one time
+10000               = MC_times
+10                 = increment_of_fracture_density
+10                  = ratio of model size and Ra
+6                   = average value of R_low and R_up
+3                   = R_low
+9                   = R_up
+uniform             = orientation distribution
+z                   = percolation_direction
+30                  = mean dip direction
+20                  = mean dip angle
+20                  = fisher constant
+0.1                 = min dip direction
+0.5                 = max dip direction
+30                  = min dip angle
+80                  = max dip angle
+
+

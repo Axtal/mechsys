@@ -1,0 +1,4 @@
+126c126
+<         return ((first_ < last_) && (stride_ == 1) || (first_ == last_));
+---
+>         return (((first_ < last_) && (stride_ == 1)) || (first_ == last_));

@@ -1,0 +1,20 @@
+31120c31120
+<     if (b->neighout) {
+---
+>     //if (b->neighout) { // mechsys
+31123c31123
+<     }
+---
+>     //} // mechsys
+31285c31285,31286
+<         if (b->neighout > 1) {
+---
+> 
+>         //if (b->neighout > 1) { // mechsys
+31291a31293
+>             if (out!=(tetgenio*)NULL) out->tetfacemarkers[neigh1].m[tface.loc] = marker; // mechsys
+31293c31295,31296
+<         }
+---
+>         //} // mechsys
+> 

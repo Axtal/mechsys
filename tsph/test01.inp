@@ -1,0 +1,11 @@
+1       = Case study (0 Bingham fluid or 1 elastoplastic soil)
+1.0e-1  = Mu Bingham final viscosity
+4.0e-1  = T0 Minimun shear stress
+45.0    = Phi Friction angle for elastoplastic soil
+0.0     = C Cohesion for elastoplastic soil
+0.7e6   = K Bulk modulus
+0.3     = Nu Poisson ratio
+30.0    = N Number of SPH particles per length
+0.1     = H Height of the box in m
+0.2     = L Lenght of the box in m
+999     = NF Number of frames

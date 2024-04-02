@@ -1,0 +1,32 @@
+Source: mechsys
+Section: science
+Priority: optional
+Maintainer: Dorival Pedroso <dorival.pedroso@gmail.com>
+Build-Depends: debhelper (>= 7.0), python-central (>= 0.6), python2.6 (>= 2.6), cmake, \
+ libblitz0-dev, libsuitesparse-dev, libboost-python1.37-dev, libigraph-dev, libsuperlu3-dev, gfortran
+Standards-Version: 3.8.0
+XS-Python-Version: >= 2.6
+
+Package: mechsys
+Architecture: any
+Depends: ${python:Depends}, ${shlibs:Depends}, blender, paraview, \
+ libblitz0-dev, libsuitesparse-dev, libboost-python1.37-dev, libigraph-dev, libsuperlu3-dev, gfortran
+XB-Python-Version: ${python:Versions}
+Description: Open Library for Mechanics
+ MechSys is a comprehensive library (through C++ or Python) to the
+ implementation of software related to Mechanical Systems. It includes
+ a framework for linear algebra, tensorial calculus, mesh generation,
+ and numerical algorithms.
+ .
+ MechSys also includes the following programs:
+ -- FEM (Finite Element Method) to the solution of 2D and 3D problems,
+ such as water flow, heat transfer, equilibrium (quasi-static), or
+ hydro-mechanical coupling
+ -- MPM (Material Point Method) to the solution of dynamic equilibrium
+ problems
+ .
+ MechSys/FEM and MechSys/MPM programs run inside a very friendly
+ graphical interface (GUI) based on Blender, where CAD, mesh
+ generation, simulations, and visualisation co-exist.
+ .
+ Homepage: http://mechsys.nongnu.org

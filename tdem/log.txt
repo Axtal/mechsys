@@ -1,0 +1,597 @@
+In file included from /usr/include/boost/bind.hpp:30,
+                 from /usr/include/boost/property_tree/json_parser/detail/parser.hpp:7,
+                 from /usr/include/boost/property_tree/json_parser/detail/read.hpp:13,
+                 from /usr/include/boost/property_tree/json_parser.hpp:16,
+                 from /home/sergio/mechsys/mechsys/dem/particle.h:31,
+                 from /home/sergio/mechsys/mechsys/dem/interacton.h:30,
+                 from /home/sergio/mechsys/mechsys/dem/domain.h:62,
+                 from /home/sergio/mechsys/tdem/ttt.cpp:20:
+/usr/include/boost/bind.hpp:36:1: note: ‘#pragma message: The practice of declaring the Bind placeholders (_1, _2, ...) in the global namespace is deprecated. Please use <boost/bind/bind.hpp> + using namespace boost::placeholders, or define BOOST_BIND_GLOBAL_PLACEHOLDERS to retain the current behavior.’
+   36 | BOOST_PRAGMA_MESSAGE(
+      | ^~~~~~~~~~~~~~~~~~~~
+/home/sergio/mechsys/mechsys/dem/interacton.h: In instantiation of ‘bool DEM::CInteracton::_update_disp_calc_force(FeatureA_T&, FeatureB_T&, DEM::FrictionMap_t&, DEM::ListContacts_t&, double, const Vec3_t&, size_t) [with FeatureA_T = Array<blitz::TinyVector<double, 3>*>; FeatureB_T = Array<DEM::Torus*>; DEM::FrictionMap_t = std::unordered_map<long unsigned int, blitz::TinyVector<double, 3> >; DEM::ListContacts_t = Array<std::pair<int, int> >; Vec3_t = blitz::TinyVector<double, 3>; size_t = long unsigned int]’:
+/home/sergio/mechsys/mechsys/dem/interacton.h:282:33:   required from here
+/home/sergio/mechsys/mechsys/dem/interacton.h:327:18: error: no matching function for call to ‘Distance(blitz::TinyVector<double, 3>&, DEM::Torus&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  327 |         Distance ((*A[i]), (*B[j]), xi, xf, s, Per);
+      |         ~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/sergio/mechsys/mechsys/dem/special_functions.h:23,
+                 from /home/sergio/mechsys/mechsys/dem/particle.h:37:
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&)’
+   53 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:62:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:62:54: note:   no known conversion for argument 2 from ‘DEM::Torus’ to ‘const DEM::Edge&’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                         ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+   74 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:79:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:79:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Edge&’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&)’
+   85 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:137:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:137:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Edge&’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&)’
+  196 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:247:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:247:54: note:   no known conversion for argument 2 from ‘DEM::Torus’ to ‘const DEM::Face&’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                         ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  304 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:309:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:309:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Face&’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  315 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:321:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:321:57: note:   no known conversion for argument 2 from ‘DEM::Torus’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                          ~~~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Torus&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  328 | inline void Distance (Vec3_t const & V0, Torus const & T1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note: candidate: ‘void DEM::Distance(const Torus&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  342 | inline void Distance (Torus const & T1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Cylinder&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  347 | inline void Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note: candidate: ‘void DEM::Distance(const Cylinder&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  378 | inline void Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&)’
+  385 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&, const Vec3_t&)’
+  390 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&)’
+  399 | inline double Distance (Edge const & E, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&, const Vec3_t&)’
+  406 | inline double Distance (Edge const & E, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&)’
+  413 | inline double Distance (Vec3_t const & V, Edge const & E)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&, const Vec3_t&)’
+  418 | inline double Distance (Vec3_t const & V, Edge const & E, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&)’
+  423 | inline double Distance (Edge const & E0, Edge const & E1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&, const Vec3_t&)’
+  430 | inline double Distance (Edge const & E0, Edge const & E1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&)’
+  437 | inline double Distance (Face const & F, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&, const Vec3_t&)’
+  444 | inline double Distance (Face const & F, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&)’
+  451 | inline double Distance (Vec3_t const & V, Face const & F)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&, const Vec3_t&)’
+  456 | inline double Distance (Vec3_t const & V, Face const & F,Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Torus&, const Vec3_t&)’
+  461 | inline double Distance (Vec3_t const & V0, Torus const & T1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note: candidate: ‘double DEM::Distance(const Torus&, const Vec3_t&, const Vec3_t&)’
+  468 | inline double Distance (Torus const & T1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Cylinder&, const Vec3_t&)’
+  475 | inline double Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note: candidate: ‘double DEM::Distance(const Cylinder&, const Vec3_t&, const Vec3_t&)’
+  482 | inline double Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/interacton.h: In instantiation of ‘bool DEM::CInteracton::_update_disp_calc_force(FeatureA_T&, FeatureB_T&, DEM::FrictionMap_t&, DEM::ListContacts_t&, double, const Vec3_t&, size_t) [with FeatureA_T = Array<DEM::Torus*>; FeatureB_T = Array<blitz::TinyVector<double, 3>*>; DEM::FrictionMap_t = std::unordered_map<long unsigned int, blitz::TinyVector<double, 3> >; DEM::ListContacts_t = Array<std::pair<int, int> >; Vec3_t = blitz::TinyVector<double, 3>; size_t = long unsigned int]’:
+/home/sergio/mechsys/mechsys/dem/interacton.h:283:33:   required from here
+/home/sergio/mechsys/mechsys/dem/interacton.h:327:18: error: no matching function for call to ‘Distance(DEM::Torus&, blitz::TinyVector<double, 3>&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  327 |         Distance ((*A[i]), (*B[j]), xi, xf, s, Per);
+      |         ~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&)’
+   53 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:62:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:62:38: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+   74 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:79:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:79:36: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const DEM::Edge&’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&)’
+   85 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:137:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:137:36: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const DEM::Edge&’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&)’
+  196 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:247:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:247:38: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  304 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:309:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:309:36: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const DEM::Face&’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  315 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:321:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:321:38: note:   no known conversion for argument 1 from ‘DEM::Torus’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Torus&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  328 | inline void Distance (Vec3_t const & V0, Torus const & T1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note: candidate: ‘void DEM::Distance(const Torus&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  342 | inline void Distance (Torus const & T1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Cylinder&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  347 | inline void Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note: candidate: ‘void DEM::Distance(const Cylinder&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  378 | inline void Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&)’
+  385 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&, const Vec3_t&)’
+  390 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&)’
+  399 | inline double Distance (Edge const & E, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&, const Vec3_t&)’
+  406 | inline double Distance (Edge const & E, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&)’
+  413 | inline double Distance (Vec3_t const & V, Edge const & E)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&, const Vec3_t&)’
+  418 | inline double Distance (Vec3_t const & V, Edge const & E, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&)’
+  423 | inline double Distance (Edge const & E0, Edge const & E1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&, const Vec3_t&)’
+  430 | inline double Distance (Edge const & E0, Edge const & E1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&)’
+  437 | inline double Distance (Face const & F, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&, const Vec3_t&)’
+  444 | inline double Distance (Face const & F, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&)’
+  451 | inline double Distance (Vec3_t const & V, Face const & F)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&, const Vec3_t&)’
+  456 | inline double Distance (Vec3_t const & V, Face const & F,Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Torus&, const Vec3_t&)’
+  461 | inline double Distance (Vec3_t const & V0, Torus const & T1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note: candidate: ‘double DEM::Distance(const Torus&, const Vec3_t&, const Vec3_t&)’
+  468 | inline double Distance (Torus const & T1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Cylinder&, const Vec3_t&)’
+  475 | inline double Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note: candidate: ‘double DEM::Distance(const Cylinder&, const Vec3_t&, const Vec3_t&)’
+  482 | inline double Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/interacton.h: In instantiation of ‘bool DEM::CInteracton::_update_disp_calc_force(FeatureA_T&, FeatureB_T&, DEM::FrictionMap_t&, DEM::ListContacts_t&, double, const Vec3_t&, size_t) [with FeatureA_T = Array<blitz::TinyVector<double, 3>*>; FeatureB_T = Array<DEM::Cylinder*>; DEM::FrictionMap_t = std::unordered_map<long unsigned int, blitz::TinyVector<double, 3> >; DEM::ListContacts_t = Array<std::pair<int, int> >; Vec3_t = blitz::TinyVector<double, 3>; size_t = long unsigned int]’:
+/home/sergio/mechsys/mechsys/dem/interacton.h:284:33:   required from here
+/home/sergio/mechsys/mechsys/dem/interacton.h:327:18: error: no matching function for call to ‘Distance(blitz::TinyVector<double, 3>&, DEM::Cylinder&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  327 |         Distance ((*A[i]), (*B[j]), xi, xf, s, Per);
+      |         ~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&)’
+   53 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:62:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:62:54: note:   no known conversion for argument 2 from ‘DEM::Cylinder’ to ‘const DEM::Edge&’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                         ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+   74 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:79:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:79:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Edge&’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&)’
+   85 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:137:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:137:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Edge&’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&)’
+  196 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:247:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:247:54: note:   no known conversion for argument 2 from ‘DEM::Cylinder’ to ‘const DEM::Face&’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                         ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  304 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:309:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:309:36: note:   no known conversion for argument 1 from ‘blitz::TinyVector<double, 3>’ to ‘const DEM::Face&’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  315 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:321:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:321:57: note:   no known conversion for argument 2 from ‘DEM::Cylinder’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                                          ~~~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Torus&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  328 | inline void Distance (Vec3_t const & V0, Torus const & T1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note: candidate: ‘void DEM::Distance(const Torus&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  342 | inline void Distance (Torus const & T1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Cylinder&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  347 | inline void Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note: candidate: ‘void DEM::Distance(const Cylinder&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  378 | inline void Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&)’
+  385 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&, const Vec3_t&)’
+  390 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&)’
+  399 | inline double Distance (Edge const & E, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&, const Vec3_t&)’
+  406 | inline double Distance (Edge const & E, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&)’
+  413 | inline double Distance (Vec3_t const & V, Edge const & E)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&, const Vec3_t&)’
+  418 | inline double Distance (Vec3_t const & V, Edge const & E, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&)’
+  423 | inline double Distance (Edge const & E0, Edge const & E1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&, const Vec3_t&)’
+  430 | inline double Distance (Edge const & E0, Edge const & E1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&)’
+  437 | inline double Distance (Face const & F, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&, const Vec3_t&)’
+  444 | inline double Distance (Face const & F, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&)’
+  451 | inline double Distance (Vec3_t const & V, Face const & F)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&, const Vec3_t&)’
+  456 | inline double Distance (Vec3_t const & V, Face const & F,Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Torus&, const Vec3_t&)’
+  461 | inline double Distance (Vec3_t const & V0, Torus const & T1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note: candidate: ‘double DEM::Distance(const Torus&, const Vec3_t&, const Vec3_t&)’
+  468 | inline double Distance (Torus const & T1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Cylinder&, const Vec3_t&)’
+  475 | inline double Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note: candidate: ‘double DEM::Distance(const Cylinder&, const Vec3_t&, const Vec3_t&)’
+  482 | inline double Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/interacton.h: In instantiation of ‘bool DEM::CInteracton::_update_disp_calc_force(FeatureA_T&, FeatureB_T&, DEM::FrictionMap_t&, DEM::ListContacts_t&, double, const Vec3_t&, size_t) [with FeatureA_T = Array<DEM::Cylinder*>; FeatureB_T = Array<blitz::TinyVector<double, 3>*>; DEM::FrictionMap_t = std::unordered_map<long unsigned int, blitz::TinyVector<double, 3> >; DEM::ListContacts_t = Array<std::pair<int, int> >; Vec3_t = blitz::TinyVector<double, 3>; size_t = long unsigned int]’:
+/home/sergio/mechsys/mechsys/dem/interacton.h:285:33:   required from here
+/home/sergio/mechsys/mechsys/dem/interacton.h:327:18: error: no matching function for call to ‘Distance(DEM::Cylinder&, blitz::TinyVector<double, 3>&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  327 |         Distance ((*A[i]), (*B[j]), xi, xf, s, Per);
+      |         ~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&)’
+   53 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:53:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:62:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:62:38: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+   62 | inline void Distance (Vec3_t const & V, Edge const & E, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+   74 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:74:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:79:13: note: candidate: ‘void DEM::Distance(const Edge&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:79:36: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const DEM::Edge&’
+   79 | inline void Distance (Edge const & E, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&)’
+   85 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:85:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:137:13: note: candidate: ‘void DEM::Distance(const Edge&, const Edge&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:137:36: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const DEM::Edge&’
+  137 | inline void Distance (Edge const & E0, Edge const & E1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&)’
+  196 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:196:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:247:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Face&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:247:38: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  247 | inline void Distance (Vec3_t const & V, Face const & F, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  304 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:304:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:309:13: note: candidate: ‘void DEM::Distance(const Face&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:309:36: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const DEM::Face&’
+  309 | inline void Distance (Face const & F, Vec3_t const & V, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~^
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&)’
+  315 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:315:13: note:   candidate expects 4 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:321:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Vec3_t&, Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:321:38: note:   no known conversion for argument 1 from ‘DEM::Cylinder’ to ‘const Vec3_t&’ {aka ‘const blitz::TinyVector<double, 3>&’}
+  321 | inline void Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t & S, Vec3_t const & Per)
+      |                       ~~~~~~~~~~~~~~~^~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Torus&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  328 | inline void Distance (Vec3_t const & V0, Torus const & T1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:328:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note: candidate: ‘void DEM::Distance(const Torus&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  342 | inline void Distance (Torus const & T1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:342:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note: candidate: ‘void DEM::Distance(const Vec3_t&, const Cylinder&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  347 | inline void Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:347:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note: candidate: ‘void DEM::Distance(const Cylinder&, const Vec3_t&, Vec3_t&, Vec3_t&, const Vec3_t&)’
+  378 | inline void Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t & Xi, Vec3_t & Xf, Vec3_t const & Per)
+      |             ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:378:13: note:   candidate expects 5 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&)’
+  385 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:385:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Vec3_t&, const Vec3_t&)’
+  390 | inline double Distance (Vec3_t const & V0, Vec3_t const & V1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:390:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&)’
+  399 | inline double Distance (Edge const & E, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:399:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note: candidate: ‘double DEM::Distance(const Edge&, const Vec3_t&, const Vec3_t&)’
+  406 | inline double Distance (Edge const & E, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:406:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&)’
+  413 | inline double Distance (Vec3_t const & V, Edge const & E)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:413:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Edge&, const Vec3_t&)’
+  418 | inline double Distance (Vec3_t const & V, Edge const & E, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:418:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&)’
+  423 | inline double Distance (Edge const & E0, Edge const & E1)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:423:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note: candidate: ‘double DEM::Distance(const Edge&, const Edge&, const Vec3_t&)’
+  430 | inline double Distance (Edge const & E0, Edge const & E1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:430:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&)’
+  437 | inline double Distance (Face const & F, Vec3_t const & V)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:437:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note: candidate: ‘double DEM::Distance(const Face&, const Vec3_t&, const Vec3_t&)’
+  444 | inline double Distance (Face const & F, Vec3_t const & V, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:444:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&)’
+  451 | inline double Distance (Vec3_t const & V, Face const & F)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:451:15: note:   candidate expects 2 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Face&, const Vec3_t&)’
+  456 | inline double Distance (Vec3_t const & V, Face const & F,Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:456:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Torus&, const Vec3_t&)’
+  461 | inline double Distance (Vec3_t const & V0, Torus const & T1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:461:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note: candidate: ‘double DEM::Distance(const Torus&, const Vec3_t&, const Vec3_t&)’
+  468 | inline double Distance (Torus const & T1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:468:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note: candidate: ‘double DEM::Distance(const Vec3_t&, const Cylinder&, const Vec3_t&)’
+  475 | inline double Distance (Vec3_t const & V0, Cylinder const & C1, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:475:15: note:   candidate expects 3 arguments, 6 provided
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note: candidate: ‘double DEM::Distance(const Cylinder&, const Vec3_t&, const Vec3_t&)’
+  482 | inline double Distance (Cylinder const & C1, Vec3_t const & V0, Vec3_t const & Per)
+      |               ^~~~~~~~
+/home/sergio/mechsys/mechsys/dem/distance.h:482:15: note:   candidate expects 3 arguments, 6 provided
+make[3]: *** [tdem/CMakeFiles/ttt.dir/build.make:79: tdem/CMakeFiles/ttt.dir/ttt.cpp.o] Error 1
+make[2]: *** [CMakeFiles/Makefile2:1425: tdem/CMakeFiles/ttt.dir/all] Error 2
+make[1]: *** [CMakeFiles/Makefile2:1432: tdem/CMakeFiles/ttt.dir/rule] Error 2
+make: *** [Makefile:148: tdem/CMakeFiles/ttt.dir/rule] Error 2

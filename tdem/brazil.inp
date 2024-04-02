@@ -1,0 +1,24 @@
+2             RenderVideo?
+60            n_divisions;        
+5.0           thickness;          
+100.0          radius;
+1.0e5         Kn;                 
+1.0e5         Kt;                 
+1.0e5         Bn;                 
+1.0e5         Bt;                 
+0.0e3         Bm;                 
+-0.2          Gn;                 
+0.0           Gt;                 
+0.001         eps;                
+20.0          Amax;
+0.3          Alpha;
+0.4           width;
+1.0           SR of plates
+0.0          angle0
+0.0          angle             
+5.0e-5        dt;
+0.1           dtOut;
+10.0          Tf;
+0.01       strf;
+0.001     strflu
+1000.0    ome

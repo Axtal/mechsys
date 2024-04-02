@@ -1,0 +1,10 @@
+76c76
+< CSWITCHES = -O -DLINUX -I/usr/X11R6/include -L/usr/X11R6/lib
+---
+> CSWITCHES = -fPIC -O2 -DLINUX -I/usr/X11R6/include -L/usr/X11R6/lib
+97c97
+< all: $(BIN)triangle $(BIN)showme
+---
+> all: trilibrary
+99a100
+> 	ar r libtriangle.a triangle.o

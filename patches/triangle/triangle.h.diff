@@ -1,0 +1,6 @@
+264a265
+>   int *triedgemarks;                     /* Out (size = 3*numberoftriangles) */
+283c284
+< void triangulate(char *, struct triangulateio *, struct triangulateio *,
+---
+> void triangulate(char const *, struct triangulateio *, struct triangulateio *,
