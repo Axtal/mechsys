@@ -113,14 +113,16 @@ public:
     Array<double>         nu,     ///< Viscosity for each fluid
     iVec3_t               Ndim,   ///< Cell divisions per side
     double                dx,     ///< Space spacing
-    double                dt);    ///< Time step
+    double                dt,     ///< Time step
+    LBMSolver Solver=NavierStokes);    ///< The solver 
 
     //Special constructor with only one component, the parameters are the same as above
     Domain (LBMethod      Method, ///< Type of array, for example D2Q9
     double                nu,     ///< Viscosity for each fluid
     iVec3_t               Ndim,   ///< Cell divisions per side
     double                dx,     ///< Space spacing
-    double                dt);    ///< Time step
+    double                dt,     ///< Time step
+    LBMSolver Solver=NavierStokes);    ///< The solver 
 
     //Methods
     void   SolidPhase(Vec3_t const & XC, double RC);                              ///< Same function as SolidDisk producing a solid sphere
@@ -143,7 +145,7 @@ public:
     void   Initialize(size_t k, iVec3_t idx, double Rho, Vec3_t & Vel);           ///< Initialize each cell with a given density and velocity
     double Feq(size_t k, double Rho, Vec3_t & Vel);                               ///< The equilibrium function
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
-    char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1, LBMSolver Solver=NavierStokes);            ///< Solve the Domain dynamics
+    char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
     
     //Writing Methods
     void WriteXDMF         (char const * FileKey);                                ///< Write the domain data in xdmf file
@@ -160,45 +162,47 @@ public:
     #endif
 
     //Data
-    double ***** F;                           ///< The array containing the individual functions with the order of the lattice, the x,y,z coordinates and the order of the function.
-    double ***** Ftemp;                       ///< A similar array to hold provitional data
-    double ****  Omeis;                       ///< An array for collision detection
-    bool   ****  IsSolid;                     ///< An array of bools with an identifier to see if the cell is a solid cell
-    bool   ***   Inside;                      ///< An array of bools with an identifier to check if the cell is inside a solid
-    Vec3_t ****  Vel;                         ///< The fluid velocities
-    Vec3_t ****  BForce;                      ///< Body Force for each cell
-    double ****  Rho;                         ///< The fluid densities
-    double ***   Gamma;                       ///< Information on the overlapping volume fraction
-    double ***   Gammaf;                      ///< Information on the prescribed overlapping volume fraction
-    double *     Tau;                         ///< The characteristic time of the lattice
-    double *     G;                           ///< The attractive constant for multiphase simulations
-    double *     Gs;                          ///< The attractive constant for solid phase
-    double *     Psi;                         ///< Parameters for the Shan Chen pseudo potential
-    double *     Rhoref;                      ///< Parameters for the Shan Chen pseudo potential
-    double       Gmix;                        ///< The mixing constant for multicomponent simulations
-    size_t const * Op;                        ///< An array containing the indexes of the opposite direction for bounce back conditions
-    double const *  W;                        ///< An array with the direction weights
-    double *     EEk;                         ///< Diadic product of the velocity vectors
-    Vec3_t const *  C;                        ///< The array of lattice velocities
-    Mat_t        M;                           ///< Transformation matrix to momentum space for MRT calculations
-    Mat_t        Minv;                        ///< Inverse Transformation matrix to momentum space for MRT calculations
-    Vec_t        S;                           ///< Vector of relaxation times for MRT
-    size_t       Nneigh;                      ///< Number of Neighbors, depends on the scheme
-    double       dt;                          ///< Time Step
-    double       dx;                          ///< Grid size
-    double       Cs;                          ///< Lattice Velocity
-    bool         IsFirstTime;                 ///< Bool variable checking if it is the first time function Setup is called
-    iVec3_t      Ndim;                        ///< Lattice Dimensions
-    size_t       Ncells;                      ///< Number of cells
-    size_t       Nproc;                       ///< Number of processors for openmp
-    size_t       Nthread;                     ///< Number of CUDA threads
-    size_t       idx_out;                     ///< The discrete time step for output
-    String       FileKey;                     ///< File Key for output files
-    void *       UserData;                    ///< User Data
-    size_t       Step;                        ///< Lenght of averaging cube to save data
-    double       Time;                        ///< Simulation time variable
-    size_t       Nl;                          ///< Number of lattices (fluids)
-    double       Sc;                          ///< Smagorinsky constant
+    LBMSolver     Solver;                      ///< What type of solver is used in LBM
+    double *****  F;                           ///< The array containing the individual functions with the order of the lattice, the x,y,z coordinates and the order of the function.
+    double *****  Ftemp;                       ///< A similar array to hold provitional data
+    double ****   Omeis;                       ///< An array for collision detection
+    bool   ****   IsSolid;                     ///< An array of bools with an identifier to see if the cell is a solid cell
+    bool   ***    Inside;                      ///< An array of bools with an identifier to check if the cell is inside a solid
+    Vec3_t ****   Vel;                         ///< The fluid velocities
+    Vec3_t ****   BForce;                      ///< Body Force for each cell
+    double ****   Rho;                         ///< The fluid densities
+    double ***    Gamma;                       ///< Information on the overlapping volume fraction
+    double ***    Gammaf;                      ///< Information on the prescribed overlapping volume fraction
+    double *      Tau;                         ///< The characteristic time of the lattice
+    double *      G;                           ///< The attractive constant for multiphase simulations
+    double *      Gs;                          ///< The attractive constant for solid phase
+    double *      Psi;                         ///< Parameters for the Shan Chen pseudo potential
+    double *      Rhoref;                      ///< Parameters for the Shan Chen pseudo potential
+    double        Gmix;                        ///< The mixing constant for multicomponent simulations
+    size_t const  * Op;                        ///< An array containing the indexes of the opposite direction for bounce back conditions
+    double const  *  W;                        ///< An array with the direction weights
+    double *      EEk;                         ///< Diadic product of the velocity vectors
+    Vec3_t const  *  C;                        ///< The array of lattice velocities
+    Mat_t         M;                           ///< Transformation matrix to momentum space for MRT calculations
+    Mat_t         Minv;                        ///< Inverse Transformation matrix to momentum space for MRT calculations
+    Vec_t         S;                           ///< Vector of relaxation times for MRT
+    size_t        Nneigh;                      ///< Number of Neighbors, depends on the scheme
+    double        dt;                          ///< Time Step
+    double        dx;                          ///< Grid size
+    double        Cs;                          ///< Lattice Velocity
+    bool          IsFirstTime;                 ///< Bool variable checking if it is the first time function Setup is called
+    iVec3_t       Ndim;                        ///< Lattice Dimensions
+    size_t        Ncells;                      ///< Number of cells
+    size_t        Nproc;                       ///< Number of processors for openmp
+    size_t        Nthread;                     ///< Number of CUDA threads
+    size_t        idx_out;                     ///< The discrete time step for output
+    String        FileKey;                     ///< File Key for output files
+    void *        UserData;                    ///< User Data
+    size_t        Step;                        ///< Lenght of averaging cube to save data
+    double        Time;                        ///< Simulation time variable
+    size_t        Nl;                          ///< Number of lattices (fluids)
+    double        Sc;                          ///< Smagorinsky constant
+    Array<String> Rhonames;                    ///< Array of strings for xdmf files                                          
 
     //Array for pair calculation
     size_t       NCellPairs;                  ///< Number of cell pairs
@@ -224,7 +228,7 @@ public:
     #endif
 };
 
-inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, double Thedx, double Thedt)
+inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, double Thedx, double Thedt, LBMSolver TheSolver)
 {
     Util::Stopwatch stopwatch;
     printf("\n%s--- Initializing LBM Domain --------------------------------------------%s\n",TERM_CLR1,TERM_RST);
@@ -285,7 +289,14 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
     Gamma       = NULL;
     Gammaf      = NULL;
     Omeis       = NULL;
+    Rhonames.Resize(Nl);
+    Solver = TheSolver;
 
+    if (Solver==AdvectionDiffusion)
+    {
+        Rhonames[0].Printf("Density");
+        Rhonames[1].Printf("Concentration");
+    }
 
     Tau    = new double [Nl];
     G      = new double [Nl];
@@ -314,6 +325,8 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
         BForce  [i]    = new Vec3_t **  [Ndim(0)];
         Rho     [i]    = new double **  [Ndim(0)];
         IsSolid [i]    = new bool   **  [Ndim(0)];
+        Rhonames[i].Printf("Density_%d",i);
+
         for (size_t nx=0;nx<Ndim(0);nx++)
         {
             F       [i][nx]    = new double ** [Ndim(1)];
@@ -366,7 +379,7 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
 #endif
 }
 
-inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double Thedx, double Thedt)
+inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double Thedx, double Thedt, LBMSolver TheSolver)
 {
     Array<double> nu(1);
     nu[0] = Thenu;
@@ -377,6 +390,9 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     if (TheNdim(2) >1&&(TheMethod==D2Q9 ||TheMethod==D2Q5 ))  throw new Fatal("LBM::Domain: D2Q9 scheme does not allow for a third dimension, please set Ndim(2)=1 or change to D3Q15");
     if (TheNdim(2)==1&&(TheMethod==D3Q15||TheMethod==D3Q19))  throw new Fatal("LBM::Domain: Ndim(2) is 1. Either change the method to D2Q9 or increase the z-dimension");
    
+    if (Nl==1&&Solver==AdvectionDiffusion) throw new Fatal ("FLBM::Solve: AdvectionDiffusion solver needs two LBM layers");
+
+
     Time        = 0.0;
     dt          = Thedt;
     dx          = Thedx;
@@ -392,6 +408,8 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     Gamma       = NULL;
     Gammaf      = NULL;
     Omeis       = NULL;
+    Rhonames.Resize(Nl);
+    Solver = TheSolver;
 
     if (TheMethod==D2Q5)
     {
@@ -463,6 +481,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
         BForce  [i]    = new Vec3_t **  [Ndim(0)];
         Rho     [i]    = new double **  [Ndim(0)];
         IsSolid [i]    = new bool   **  [Ndim(0)];
+        Rhonames[i].Printf("Density_%d",i);
         for (size_t nx=0;nx<Ndim(0);nx++)
         {
             F       [i][nx]    = new double ** [Ndim(1)];
@@ -564,7 +583,7 @@ inline void Domain::WriteXDMF(char const * FileKey)
         hsize_t dims[1];
         dims[0] = Nx*Ny*Nz;
         String dsname;
-        dsname.Printf("Density_%d",j);
+        dsname = Rhonames[j];
         H5LTmake_dataset_double(file_id,dsname.CStr(),1,dims,Density );
         if (j==0)
         {
@@ -618,9 +637,9 @@ inline void Domain::WriteXDMF(char const * FileKey)
         oss << "     </Geometry>\n";
         for (size_t j=0;j<Nl;j++)
         {
-        oss << "     <Attribute Name=\"Density_" << j << "\" AttributeType=\"Scalar\" Center=\"Node\">\n";
+        oss << "     <Attribute Name=\"" << Rhonames[j] << "\" AttributeType=\"Scalar\" Center=\"Node\">\n";
         oss << "       <DataItem Dimensions=\"" << Ndim(0) << " " << Ndim(1) << " " << Ndim(2) << "\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n";
-        oss << "        " << fn.CStr() <<":/Density_" << j << "\n";
+        oss << "        " << fn.CStr() <<":/" << Rhonames[j] << "\n";
         oss << "       </DataItem>\n";
         oss << "     </Attribute>\n";
         oss << "     <Attribute Name=\"Velocity_" << j << "\" AttributeType=\"Vector\" Center=\"Node\">\n";
@@ -655,9 +674,9 @@ inline void Domain::WriteXDMF(char const * FileKey)
         oss << "     </Geometry>\n";
         for (size_t j=0;j<Nl;j++)
         {
-        oss << "     <Attribute Name=\"Density_" << j << "\" AttributeType=\"Scalar\" Center=\"Node\">\n";
+        oss << "     <Attribute Name=\"" << Rhonames[j] << "\" AttributeType=\"Scalar\" Center=\"Node\">\n";
         oss << "       <DataItem Dimensions=\"" << Nz << " " << Ny << " " << Nx << "\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n";
-        oss << "        " << fn.CStr() <<":/Density_" << j << "\n";
+        oss << "        " << fn.CStr() <<":/" << Rhonames[j] << "\n";
         oss << "       </DataItem>\n";
         oss << "     </Attribute>\n";
         oss << "     <Attribute Name=\"Velocity_" << j << "\" AttributeType=\"Vector\" Center=\"Node\">\n";
@@ -1903,7 +1922,7 @@ inline void Domain::DnLoadDevice(size_t Nc)
 #endif
 
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
-                          char const * TheFileKey, bool RenderVideo, size_t TheNproc, LBMSolver Solver)
+                          char const * TheFileKey, bool RenderVideo, size_t TheNproc)
 {
     idx_out     = 0;
     FileKey.Printf("%s",TheFileKey);
@@ -1929,8 +1948,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         << "  Using GPU:                       =  " << prop.name << TERM_RST << std::endl;
     #endif
 
-    if (Nl==1&&Solver==AdvectionDiffusion) throw new Fatal ("FLBM::Solve: AdvectionDiffusion solver needs two LBM layers");
-   
+
     if (fabs(G[0])>1.0e-12||(fabs(Gs[0])>1.0e-12)||(Nl>1))
     {
         Array<iVec3_t> CPP(0);
@@ -2012,7 +2030,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
             }
             else 
             {
-                if ((fabs(G[0])>1.0e-12)||(fabs(G[1])>1.0e-12))
+                if ((fabs(G[0])>1.0e-12)||(fabs(G[1])>1.0e-12)||(fabs(Gmix)>1.0e-12))
                 {
                     cudaApplyForcesSCMP<<<NCellPairs/Nthread+1,Nthread>>>(pCellPairs,pIsSolid,pBForce,pRho,plbmaux);
                     //cudaDeviceSynchronize();

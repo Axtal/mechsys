@@ -261,26 +261,28 @@ __global__ void cudaCollideMP(bool const * IsSolid, real * F, real * Ftemp, real
             real  VdotV = dotreal3(vel,vel);
             real  tau   = lbmaux[0].Tau[il];
             bool valid = true;
-            real alpha = 1.0;
+            real alphal = 1.0;
+            real alphat = 1.0;
             size_t numit = 0;
-            while (valid&&numit<2)
+            while (valid)
             {
+                numit++;
                 valid = false;
+                alphal = alphat;
                 for (size_t k=0;k<lbmaux[0].Nneigh;k++)
                 {
                     real VdotC = dotreal3(vel,lbmaux[0].C[k]);
                     real Cs    = lbmaux[0].Cs;
                     real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
                     size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
-                    Ftemp[idx] = F[idx] - alpha*(F[idx]-Feq)/tau;
-                    if (Ftemp[idx]<0.0)
+                    Ftemp[idx] = F[idx] - alphal*(F[idx]-Feq)/tau;
+                    if (Ftemp[idx]<0.0&&numit<2)
                     {
-                        real temp = tau*F[idx]/(F[idx]-Feq);
-                        if (temp<alpha) alpha = temp;
+                        real temp = tau*fabs(F[idx]/(F[idx]-Feq));
+                        if (temp<alphat) alphat = temp;
                         valid = true;
                     }
                 }
-                if (valid) numit++;
             }
         }
         else
@@ -367,8 +369,8 @@ __global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real
 
     for (size_t il=0;il<lbmaux[0].Nl;il++)
     {
-        real psic = 0.0;
-        real psin = 0.0;
+        real psic = 1.0;
+        real psin = 1.0;
         real G    = lbmaux[0].G[il];
         if (fabs(G)<1.0e-12) continue;
         if (!IsSolid[ic]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
@@ -453,7 +455,7 @@ __global__ void cudaApplyForcesSCMP(uint3 * pCellPairs, bool const * IsSolid, re
         if (!IsSolid[ic+il*lbmaux[0].Ncells]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
         if (!IsSolid[in+il*lbmaux[0].Ncells]) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
         else              G    = lbmaux[0].Gs[il];
-        
+
         real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
 
         atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].x, bforce.x);

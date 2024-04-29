@@ -32,13 +32,13 @@ int main(int argc, char **argv) try
 {
     Array<double> nu(2);
     nu[0] = 0.1666; // This is the fluid viscosity
-    nu[1] = 0.16666; // This is the diffusion coefficient
+    nu[1] = 0.01666; // This is the diffusion coefficient
 
 
     size_t nx = 400, ny = 400;
     //size_t nx = 80, ny = 80;
 
-    FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,1), 1.0, 1.0);
+    FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,1), 1.0, 1.0, AdvectionDiffusion);
 
     int obsX = nx/2, obsY = ny/2;
 
@@ -52,7 +52,7 @@ int main(int argc, char **argv) try
         Dom.Initialize(1,iVec3_t(i,j,0),con,V);
     }
 
-    Dom.Solve(1.0e5,1.0e3,NULL,NULL,"tclbm06",true,1,AdvectionDiffusion);
+    Dom.Solve(1.0e5,1.0e3,NULL,NULL,"tclbm06",true,1);
 
 
     return 0;
