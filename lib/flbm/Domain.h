@@ -1787,6 +1787,7 @@ inline void Domain::UpLoadDevice(size_t Nc)
     lbmaux.Sc        = Sc;
     lbmaux.dt        = dt;
     lbmaux.dx        = dx;
+    lbmaux.iter      = 0;
     lbmaux.Time      = Time;
 
     for (size_t nn=0;nn<Nneigh;nn++)

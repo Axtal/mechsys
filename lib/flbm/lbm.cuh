@@ -36,6 +36,7 @@ struct lbm_aux
     size_t     Nz;          ///< Integer vector with the dimensions of the LBM domain
     size_t     Ncells;      ///< Integer vector with the dimensions of the LBM domain
     size_t     Op[27];      ///< Array with the opposite directions for bounce back calculation
+    size_t     iter;        ///< counter for the number of iterations
     real3      C[27];       ///< Collection of discrete velocity vectors
     real       EEk[27];     ///< Dyadic product of discrete velocities for LES calculation
     real       W[27];       ///< Collection of discrete weights
@@ -281,6 +282,14 @@ __global__ void cudaCollideMP(bool const * IsSolid, real * F, real * Ftemp, real
                         real temp = tau*fabs(F[idx]/(F[idx]-Feq));
                         if (temp<alphat) alphat = temp;
                         valid = true;
+                    }
+                    if (Ftemp[idx]<0.0&&numit>=2)
+                    {
+                        Ftemp[idx] = 0.0;
+                        //size_t icx = ic%lbmaux[0].Nx;
+                        //size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
+                        //size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+                        //printf("%lu %lu %lu %g %lu %g \n",icx,icy,icz,Ftemp[idx],lbmaux[0].iter,alphal);
                     }
                 }
             }
@@ -532,6 +541,7 @@ __global__ void cudaStream2(bool const * IsSolid, real * F, real * Ftemp, real3 
     if (ic==0)
     {
         lbmaux[0].Time += lbmaux[0].dt;
+        lbmaux[0].iter++;
     }
     //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
     //{
