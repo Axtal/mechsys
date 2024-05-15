@@ -574,7 +574,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 #ifdef USE_CUDA
         //std::cout << "1" << std::endl;
         //Initialize particles
-        Reset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pComInteractons,pdemaux);
+        Reset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux);
         //cudaDeviceSynchronize();
         //Calculate forces
         CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons,pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux);
@@ -2904,6 +2904,8 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         Icu.Gn      = Ci->Gn;
         Icu.Gt      = Ci->Gt;
         Icu.Mu      = Ci->Mu;
+        Icu.Fnf     = make_real3(0.0,0.0,0.0);
+        Icu.Ftf     = make_real3(0.0,0.0,0.0);
         CIcu.I1     = i1;
         CIcu.I2     = i2;
         if (Particles[i1]->Verts.Size()==1 && Particles[i2]->Verts.Size()==1)

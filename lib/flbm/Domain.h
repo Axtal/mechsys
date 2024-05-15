@@ -58,6 +58,7 @@ enum LBMSolver
 {
     NavierStokes,
     AdvectionDiffusion,
+    PhaseFieldIce,
 };
 
 namespace FLBM
@@ -298,12 +299,23 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
         Rhonames[1].Printf("Concentration");
     }
 
+    if (Solver==PhaseFieldIce)
+    {
+        Rhonames[0].Printf("Density");
+        Rhonames[1].Printf("Phase");
+        Rhonames[1].Printf("Enthalpy");
+    }
+
     Tau    = new double [Nl];
-    G      = new double [Nl];
-    Gs     = new double [Nl];
-    Rhoref = new double [Nl];
-    Psi    = new double [Nl];
-    Gmix= 0.0;
+
+    if (Solver==NavierStokes)
+    {
+        G      = new double [Nl];
+        Gs     = new double [Nl];
+        Rhoref = new double [Nl];
+        Psi    = new double [Nl];
+        Gmix= 0.0;
+    }
 
     F       = new double **** [Nl];
     Ftemp   = new double **** [Nl];
@@ -315,17 +327,20 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
     for (size_t i=0;i<Nl;i++)
     {
         Tau     [i]    = 3.0*nu[i]*dt/(dx*dx)+0.5;
-        G       [i]    = 0.0;
-        Gs      [i]    = 0.0;
-        Rhoref  [i]    = 200.0;
-        Psi     [i]    = 4.0;
+        if (Solver==NavierStokes) 
+        {
+            G       [i]    = 0.0;
+            Gs      [i]    = 0.0;
+            Rhoref  [i]    = 200.0;
+            Psi     [i]    = 4.0;
+            Rhonames[i].Printf("Density_%d",i);
+        }
         F       [i]    = new double *** [Ndim(0)];
         Ftemp   [i]    = new double *** [Ndim(0)];
         Vel     [i]    = new Vec3_t **  [Ndim(0)];
         BForce  [i]    = new Vec3_t **  [Ndim(0)];
         Rho     [i]    = new double **  [Ndim(0)];
         IsSolid [i]    = new bool   **  [Ndim(0)];
-        Rhonames[i].Printf("Density_%d",i);
 
         for (size_t nx=0;nx<Ndim(0);nx++)
         {
@@ -2044,6 +2059,10 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         else if (Solver==AdvectionDiffusion)
         {
             cudaCollideAD<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
+        else if (Solver==PhaseFieldIce)
+        {
+            cudaCollidePFI1<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
 
         real * tmp = pF;

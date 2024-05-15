@@ -43,17 +43,26 @@ struct lbm_aux
     real       M[729];      ///< Matrix for MRT
     real       Mi[729];     ///< Inverse matrix for MRT
     real       S[27];       ///< Vector with relaxation times for MRT
-    real       Tau[2];      ///< Collection of characteristic collision times
-    real       G[2];        ///< Collection of cohesive constants for multiphase simulation
-    real       Gs[2];       ///< Collection of cohesive constants for multiphase simulation
-    real       Rhoref[2];   ///< Collection of cohesive constants for multiphase simulation
-    real       Psi[2];      ///< Collection of cohesive constants for multiphase simulation
-    real       Gmix;        ///< Repulsion constant for multicomponent simulation
+    real       Tau[3];      ///< Collection of characteristic collision times
     real       Cs;          ///< Lattice speed
     real       Sc;          ///< Smagorinsky constant
     real       dx;          ///< grid size
     real       dt;          ///< time step
     real     Time;          ///< Time clock
+    //These parameters are for Shan Chen type of simulations
+    real       G[2];        ///< Collection of cohesive constants for multiphase simulation
+    real       Gs[2];       ///< Collection of cohesive constants for multiphase simulation
+    real       Rhoref[2];   ///< Collection of cohesive constants for multiphase simulation
+    real       Psi[2];      ///< Collection of cohesive constants for multiphase simulation
+    real       Gmix;        ///< Repulsion constant for multicomponent simulation
+    //These parameters are for the Phase Field Ice model 0 solid 1 liquid 2 gas
+    real       rho[3];      ///< Density of the phases
+    real       cap[3];      ///< Heat capcity for each phase
+    real       kap[3];      ///< heat conductivity for each phase    
+    real       thick;       ///< thickness of the phase field interfase;
+    real       Ts;          ///< Solidus temperature
+    real       Tl;          ///< Liquidus temperature
+    real       L;           ///< Latent heat
 };
 
 __device__ real FeqFluid(size_t const & k, real const & rho, real3 const & vel, lbm_aux const * lbmaux)
@@ -368,37 +377,6 @@ __global__ void cudaCollideSC_MRT(bool const * IsSolid, real * F, real * Ftemp, 
     }
 }
 
-__global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)
-{
-    size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
-    if (icp>=lbmaux[0].NCPairs) return;
-    size_t ic = pCellPairs[icp].x;
-    size_t in = pCellPairs[icp].y;
-    size_t k  = pCellPairs[icp].z;
-
-    for (size_t il=0;il<lbmaux[0].Nl;il++)
-    {
-        real psic = 1.0;
-        real psin = 1.0;
-        real G    = lbmaux[0].G[il];
-        if (fabs(G)<1.0e-12) continue;
-        if (!IsSolid[ic]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
-        if (!IsSolid[in]) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
-        else              G    = lbmaux[0].Gs[il];
-        
-        real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
-
-        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].x, bforce.x);
-        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].y, bforce.y);
-        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].z, bforce.z);
-        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].x,-bforce.x);
-        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].y,-bforce.y);
-        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].z,-bforce.z);
-    }
-
-    //printf("BForce %d %f %f %f \n",ic,BForce[ic].x,BForce[ic].y,BForce[ic].z);
-}
-
 __global__ void cudaCollideAD(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
@@ -445,6 +423,157 @@ __global__ void cudaCollideAD(bool const * IsSolid, real * F, real * Ftemp, real
             }
         }
     } 
+}
+
+__global__ void cudaCollidePFI1(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+
+    real Cs    = lbmaux[0].Cs;
+    size_t icx = ic%lbmaux[0].Nx;
+    size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
+    size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+    if (!IsSolid[ic])
+    {
+        //Phase field equation
+        size_t   il = 1;
+        real3 vel   = Vel[ic]; // it is ic since only the velocity of the first layer is relavant
+        real  tau   = lbmaux[0].Tau[il];
+        real  phi   = Rho[ic+il*lbmaux[0].Ncells];
+        real3 dFdt  = (phi*vel - Vel[ic+1*lbmaux[0].Ncells])/lbmaux[0].dt; //Here we will use the Vel of lattice one as a temporal variable for the
+                                                                           //phase field flux
+        real lambda = 4.0*phi*(1.0-phi)/lbmaux[0].thick;
+        real3 gradphi = make_real3(0.0,0.0,0.0);
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            size_t inx = (size_t)((int)icx + (int)lbmaux[0].C[k].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
+            size_t iny = (size_t)((int)icy + (int)lbmaux[0].C[k].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
+            size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
+            size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny + il*lbmaux[0].Ncells;
+            gradphi = gradphi + lbmaux[0].W[k]*Rho[in+il*lbmaux[0].Ncells]*lbmaux[0].C[k];
+        }
+        gradphi = (3.0/lbmaux[0].dx)*gradphi;
+        real3 n = (1.0/norm(gradphi))*gradphi;
+        real  divu = 0.0; //this part must be changed later
+    
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+            size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+            real Feq   = lbmaux[0].W[k]*phi*(1.0 + 3.0*VdotC/Cs);
+            real G     = 3.0*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[k],dFdt+lbmaux[0].Cs*lbmaux[0].Cs/3.0*lambda*n)/(lbmaux[0].Cs*lbmaux[0].Cs)
+                         + lbmaux[0].W[k]*phi*divu;
+            Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau + (1.0-0.5/tau)*lbmaux[0].dt*G;
+        }
+
+        // Enthalpy equation
+        il        = 2;
+        tau       = lbmaux[0].Tau[il];
+        real H    = Rho[ic + il*lbmaux[0].Ncells];
+        //real fl   = Vel[ic+2*lbmaux[0].Ncells].x; //For now the x component of this vector will hold the liquid fraction;
+        real Hs   = lbmaux[0].Ts*lbmaux[0].cap[0];
+        real Hl   = lbmaux[0].Tl*lbmaux[0].cap[1]+lbmaux[0].L;
+        real fl   = 0.0;
+        real fs   = 1.0-fl;
+        if      (H>=Hs&&H<=Hl) fl = (H-Hs)/(Hl-Hs);
+        else if (H>Hl)         fl = 1.0;
+        
+        real Cp   = phi*(fs*lbmaux[0].cap[0] + fl*lbmaux[0].cap[1])+fl*(1.0-phi)*lbmaux[0].cap[2];
+        real Temp = H/Cp;
+        if      (H>=Hs&&H<=Hl) Temp = lbmaux[0].Ts + (H-Hs)/(Hl-Hs)*(lbmaux[0].Tl-lbmaux[0].Ts);
+        else if (H>Hl)         Temp = lbmaux[0].Tl + (H-Hl)/Cp;
+
+        real  VdotV = dotreal3(vel,vel);
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+            real Feq   = lbmaux[0].W[k]*Cp*Temp*(1.0 - 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
+            if (k==0)  Feq += H - Cp*Temp;
+            size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+            Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau;
+        }
+    }
+}
+/*
+__global__ void cudaCollidePFI2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+
+    real Cs    = lbmaux[0].Cs;
+    size_t il = 0;
+    if (!IsSolid[ic+il*lbmaux[0].Ncells])
+    {
+        real vel   = Vel[ic + il*lbmaux[0].Ncells];
+        real VdotV = dotreal3(vel,vel);
+        while (valid)
+        {
+            numit++;
+            valid = false;
+            alphal = alphat;
+            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+            {
+                real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+                real s     = lbmaux[0].W[k]*(3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
+                real Feq   = lbmaux[0].W[k]*rho*;
+                size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+                Ftemp[idx] = F[idx] - alphal*(F[idx]-Feq)/tau;
+                if (Ftemp[idx]<0.0&&numit<2)
+                {
+                    real temp = tau*fabs(F[idx]/(F[idx]-Feq));
+                    if (temp<alphat) alphat = temp;
+                    valid = true;
+                }
+                if (Ftemp[idx]<0.0&&numit>=2)
+                {
+                    Ftemp[idx] = 0.0;
+                    //size_t icx = ic%lbmaux[0].Nx;
+                    //size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
+                    //size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+                    //printf("%lu %lu %lu %g %lu %g \n",icx,icy,icz,Ftemp[idx],lbmaux[0].iter,alphal);
+                }
+            }
+        }
+    }
+    else
+    {
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            Ftemp[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+        }
+    }
+}
+*/
+__global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)
+{
+    size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
+    if (icp>=lbmaux[0].NCPairs) return;
+    size_t ic = pCellPairs[icp].x;
+    size_t in = pCellPairs[icp].y;
+    size_t k  = pCellPairs[icp].z;
+
+    for (size_t il=0;il<lbmaux[0].Nl;il++)
+    {
+        real psic = 1.0;
+        real psin = 1.0;
+        real G    = lbmaux[0].G[il];
+        if (fabs(G)<1.0e-12) continue;
+        if (!IsSolid[ic]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
+        if (!IsSolid[in]) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
+        else              G    = lbmaux[0].Gs[il];
+        
+        real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
+
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].x, bforce.x);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].y, bforce.y);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].z, bforce.z);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].x,-bforce.x);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].y,-bforce.y);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].z,-bforce.z);
+    }
+
+    //printf("BForce %d %f %f %f \n",ic,BForce[ic].x,BForce[ic].y,BForce[ic].z);
 }
 
 __global__ void cudaApplyForcesSCMP(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)

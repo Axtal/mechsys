@@ -965,6 +965,8 @@ inline void BInteracton::UpdateParameters ()
 struct InteractonCU
 {
     bool           BothFree;  ///< Are both particles free?
+    real3          Fnf;       ///< Prescribed normal force
+    real3          Ftf;       ///< Prescribed tangential force
     //real           Dmax1;     ///< Circumscribed diameter of particle 1
     //real           Dmax2;     ///< Circumscribed diameter of particle 2
     real           Kn;        ///< Normal stiffness

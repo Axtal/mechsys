@@ -670,7 +670,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 
         cudaReset<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGammaf,pGamma,pOmeis,LBMDOM.plbmaux);
 
-        DEM::Reset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pComInteractons,DEMDOM.pdemaux);
+        DEM::Reset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pInteractons,DEMDOM.pComInteractons,DEMDOM.pdemaux);
         DEM::CalcForceVV<<<DEMDOM.demaux.nvvint/Nthread+1,Nthread>>>(DEMDOM.pInteractons,DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVV, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux);
         DEM::CalcForceEE<<<DEMDOM.demaux.neeint/Nthread+1,Nthread>>>(DEMDOM.pEdgesCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsEE, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux);
         DEM::CalcForceVF<<<DEMDOM.demaux.nvfint/Nthread+1,Nthread>>>(DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVF, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux);

@@ -70,7 +70,7 @@ int main(int argc, char **argv) try
     if (argc>=2) Nproc = atoi(argv[1]);
 
         
-    double nu = 1.0;
+    double nu = 1.6;
     size_t nx = 200;
     size_t ny = 200;
     size_t nz = 200;
@@ -106,7 +106,7 @@ int main(int argc, char **argv) try
     dom.PeriodicY= true;
     dom.PeriodicZ= true;
     
-    double Tf = 1.0e3;
+    double Tf = 2.0e3;
     dom.Solve(Tf,Tf/200,Setup,Report,"tlbmdem_cu_02",true,Nproc);
 }
 MECHSYS_CATCH

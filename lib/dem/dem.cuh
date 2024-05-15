@@ -502,7 +502,7 @@ __global__ void Rotate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DP
     }
 }
 
-__global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, ComInteractonCU * CInt, dem_aux const * demaux)
+__global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, InteractonCU const * Int, ComInteractonCU * CInt, dem_aux const * demaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic<demaux[0].nparts)
@@ -514,8 +514,8 @@ __global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, ComInteractonCU *
     else if (ic<demaux[0].nparts+demaux[0].ncoint)
     {
         size_t id = ic-demaux[0].nparts;
-        CInt[id].Fnnet = make_real3(0.0,0.0,0.0);
-        CInt[id].Ftnet = make_real3(0.0,0.0,0.0);
+        CInt[id].Fnnet = Int[id].Fnf;
+        CInt[id].Ftnet = Int[id].Ftf;
     }
     else return;
 }
