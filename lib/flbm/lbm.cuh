@@ -48,7 +48,7 @@ struct lbm_aux
     real       Sc;          ///< Smagorinsky constant
     real       dx;          ///< grid size
     real       dt;          ///< time step
-    real     Time;          ///< Time clock
+    real       Time;        ///< Time clock
     //These parameters are for Shan Chen type of simulations
     real       G[2];        ///< Collection of cohesive constants for multiphase simulation
     real       Gs[2];       ///< Collection of cohesive constants for multiphase simulation
@@ -60,6 +60,7 @@ struct lbm_aux
     real       cap[3];      ///< Heat capcity for each phase
     real       kap[3];      ///< heat conductivity for each phase    
     real       thick;       ///< thickness of the phase field interfase;
+    real       sigma;       ///< surface tension of the interfase
     real       Ts;          ///< Solidus temperature
     real       Tl;          ///< Liquidus temperature
     real       L;           ///< Latent heat
@@ -425,7 +426,7 @@ __global__ void cudaCollideAD(bool const * IsSolid, real * F, real * Ftemp, real
     } 
 }
 
-__global__ void cudaCollidePFI1(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
+__global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
@@ -434,117 +435,124 @@ __global__ void cudaCollidePFI1(bool const * IsSolid, real * F, real * Ftemp, re
     size_t icx = ic%lbmaux[0].Nx;
     size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
-    if (!IsSolid[ic])
-    {
-        //Phase field equation
-        size_t   il = 1;
-        real3 vel   = Vel[ic]; // it is ic since only the velocity of the first layer is relavant
-        real  tau   = lbmaux[0].Tau[il];
-        real  phi   = Rho[ic+il*lbmaux[0].Ncells];
-        real3 dFdt  = (phi*vel - Vel[ic+1*lbmaux[0].Ncells])/lbmaux[0].dt; //Here we will use the Vel of lattice one as a temporal variable for the
-                                                                           //phase field flux
-        real lambda = 4.0*phi*(1.0-phi)/lbmaux[0].thick;
-        real3 gradphi = make_real3(0.0,0.0,0.0);
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-        {
-            size_t inx = (size_t)((int)icx + (int)lbmaux[0].C[k].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
-            size_t iny = (size_t)((int)icy + (int)lbmaux[0].C[k].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
-            size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
-            size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny + il*lbmaux[0].Ncells;
-            gradphi = gradphi + lbmaux[0].W[k]*Rho[in+il*lbmaux[0].Ncells]*lbmaux[0].C[k];
-        }
-        gradphi = (3.0/lbmaux[0].dx)*gradphi;
-        real3 n = (1.0/norm(gradphi))*gradphi;
-        real  divu = 0.0; //this part must be changed later
+        //Calculation of gradients and temporal derivates of key variables
+
+
+    //Phase field variables
+    real3 vel   = Vel[ic]; // it is ic since only the velocity of the first layer is relavant
+    real  phi   = Rho[ic+1*lbmaux[0].Ncells];
+    real3 dFdt  = (phi*vel - Vel[ic+1*lbmaux[0].Ncells])/lbmaux[0].dt; //Here we will use the Vel of lattice one as a temporal variable for the
+                                                                       //phase field flux
+    real lambda = 4.0*phi*(1.0-phi)/lbmaux[0].thick;
+    real a      = 1.5*lbmaux[0].sigma*lbmaux[0].thick;
+    real b      = 12.0*lbmaux[0].sigma/lbmaux[0].thick;
+
+    // Enthalpy variables
+    real H    = Rho[ic + 2*lbmaux[0].Ncells];
+    real Hs   = lbmaux[0].Ts*lbmaux[0].cap[0];
+    real Hl   = lbmaux[0].Tl*lbmaux[0].cap[1]+lbmaux[0].L;
+    real fl   = Vel[ic+2*lbmaux[0].Ncells].x; //For now the x component of this vector will hold the liquid fraction;
+    real fs   = 1.0-fl;
+    real fla  = Vel[ic+2*lbmaux[0].Ncells].y; //For now the x component of this vector will hold the liquid fraction;
+    real dfdt = -(fl-fla)/lbmaux[0].dt;
+
+    real Cp   = phi*(fs*lbmaux[0].cap[0] + fl*lbmaux[0].cap[1])+fl*(1.0-phi)*lbmaux[0].cap[2];
+    real Temp = H/Cp;
+    if      (H>=Hs&&H<=Hl) Temp = lbmaux[0].Ts + (H-Hs)/(Hl-Hs)*(lbmaux[0].Tl-lbmaux[0].Ts);
+    else if (H>Hl)         Temp = lbmaux[0].Tl + (H-Hl)/Cp;
+
+    //Density variables
+    real rho  = phi*(fs*lbmaux[0].rho[0] + fl*lbmaux[0].rho[1])+fl*(1.0-phi)*lbmaux[0].rho[2];
+    real pre  = Rho[ic];
+    real S    = Vel[ic+2*lbmaux[0].Ncells].z;
     
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    //Gradients
+    real3 gradphi = make_real3(0.0,0.0,0.0);
+    real3 gradrho = make_real3(0.0,0.0,0.0);
+    real3 gradpre = make_real3(0.0,0.0,0.0);
+    real3 gradS   = make_real3(0.0,0.0,0.0);
+    real  delphi  = 0.0;
+
+    for (size_t k=1;k<lbmaux[0].Nneigh;k++)
+    {
+        size_t inx = (size_t)((int)icx + (int)lbmaux[0].C[k].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
+        size_t iny = (size_t)((int)icy + (int)lbmaux[0].C[k].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
+        size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
+        size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny;
+
+        real pren = Rho[in];
+        real phin = Rho[in+1*lbmaux[0].Ncells];
+        real fln  = Vel[in+2*lbmaux[0].Ncells].x;
+        real fsn  = 1.0-fln;
+        real rhon = phin*(fsn*lbmaux[0].rho[0] + fln*lbmaux[0].rho[1])+fln*(1.0-phin)*lbmaux[0].rho[2];
+        real Sn   = Vel[in+2*lbmaux[0].Ncells].z;
+        
+        gradpre  = gradpre + lbmaux[0].W[k]*pren*lbmaux[0].C[k];
+        gradphi  = gradphi + lbmaux[0].W[k]*phin*lbmaux[0].C[k];
+        gradrho  = gradrho + lbmaux[0].W[k]*rhon*lbmaux[0].C[k];
+        gradS    = gradS   + lbmaux[0].W[k]*Sn  *lbmaux[0].C[k];
+        delphi  +=       2.0*lbmaux[0].W[k]*(phin-phi);
+    }
+    gradphi = (3.0/lbmaux[0].dx)*gradphi;
+    gradrho = (3.0/lbmaux[0].dx)*gradrho;
+    gradpre = (3.0/lbmaux[0].dx)*gradpre;
+    gradS   = (3.0/lbmaux[0].dx)*gradS  ;
+    delphi *= 3.0/(lbmaux[0].dx*lbmaux[0].dx);
+
+    real3 n    = (1.0/norm(gradphi))*gradphi;
+    if (norm(gradphi)<1.0e-12) n = make_real3(0.0,0.0,0.0);
+    real  divu = (1.0-lbmaux[0].rho[0]/lbmaux[0].rho[1])*dfdt;
+    
+    real  tau   = lbmaux[0].Tau[0];
+    real  taup  = lbmaux[0].Tau[1];
+    real  kappa = phi*(fs*lbmaux[0].kap[0] + fl*lbmaux[0].kap[1])+fl*(1.0-phi)*lbmaux[0].kap[2];
+    real  tauh  = 3.0*kappa*lbmaux[0].dt/(lbmaux[0].dx*lbmaux[0].dx) + 0.5;
+    real  VdotV                      = dotreal3(vel,vel);
+    real  mu                         = 4.0*b*(phi)*(phi-1.0)*(phi-0.5) - a*delphi;
+    BForce[ic]                       = mu*gradphi;
+    real3 Fm                         = BForce[ic] + Cs*Cs*gradrho/3.0 + Cs*Cs*gradS/3.0 - gradpre;
+    BForce[ic + 1*lbmaux[0].Ncells]  = -rho*fs*(BForce[ic + 1*lbmaux[0].Ncells])/lbmaux[0].dt;
+    real  VdotF = dotreal3(vel,Fm);
+    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    {
+        real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+        real FdotC = dotreal3(Fm ,lbmaux[0].C[k]);
+        //Navier Stokes equation
+        real sk    = 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs);
+        real Feq   = lbmaux[0].W[k]*(3.0*pre/(Cs*Cs) + rho*sk);
+        real Fk    = lbmaux[0].W[k]*(S + 3.0*dotreal3(lbmaux[0].C[k],BForce[ic] + BForce[ic + 1*lbmaux[0].Ncells])/(Cs*Cs) + 4.5*VdotC*FdotC/(Cs*Cs) - 1.5*VdotF/(Cs*Cs));
+        if (k==0)  
         {
-            real VdotC = dotreal3(vel,lbmaux[0].C[k]);
-            size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
-            real Feq   = lbmaux[0].W[k]*phi*(1.0 + 3.0*VdotC/Cs);
-            real G     = 3.0*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[k],dFdt+lbmaux[0].Cs*lbmaux[0].Cs/3.0*lambda*n)/(lbmaux[0].Cs*lbmaux[0].Cs)
-                         + lbmaux[0].W[k]*phi*divu;
-            Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau + (1.0-0.5/tau)*lbmaux[0].dt*G;
+            Feq    += -3.0*pre/(Cs*Cs);
+            BForce[ic + 2*lbmaux[0].Ncells].x = 0.5*lbmaux[0].dt*S + tau*lbmaux[0].dt*Fk + rho*lbmaux[0].W[k]*sk;
         }
+        size_t idx = ic*lbmaux[0].Nneigh + k;
+        Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau + (1.0-0.5/tau)*lbmaux[0].dt*Fk;
+        if (IsSolid[ic]) Ftemp[idx] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+        //if (ic==216*lbmaux[0].Nx+0) printf("%g %g %g %g %g %lu %lu \n",Ftemp[idx],F[idx],Feq,Rho[ic],Fk,ic,k);
+        //if (ic==216*lbmaux[0].Nx+0) printf("%g %g %g %g %g %lu %lu \n",phi,mu,gradphi.x,gradphi.y,Rho[ic],ic,k);
+
+        //Phase field equation
+        idx  = ic*lbmaux[0].Nneigh + 1*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+        Feq   = lbmaux[0].W[k]*phi*(1.0 + 3.0*VdotC/Cs);
+        real G     = 3.0*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[k],dFdt+Cs*Cs/3.0*lambda*n)/(Cs*Cs)
+                     + lbmaux[0].W[k]*phi*divu;
+        if (k==0) BForce[ic + 2*lbmaux[0].Ncells].y = 0.5*lbmaux[0].dt*phi*divu;
+        Ftemp[idx] = F[idx] - (F[idx]-Feq)/taup + (1.0-0.5/taup)*lbmaux[0].dt*G;
 
         // Enthalpy equation
-        il        = 2;
-        tau       = lbmaux[0].Tau[il];
-        real H    = Rho[ic + il*lbmaux[0].Ncells];
-        //real fl   = Vel[ic+2*lbmaux[0].Ncells].x; //For now the x component of this vector will hold the liquid fraction;
-        real Hs   = lbmaux[0].Ts*lbmaux[0].cap[0];
-        real Hl   = lbmaux[0].Tl*lbmaux[0].cap[1]+lbmaux[0].L;
-        real fl   = 0.0;
-        real fs   = 1.0-fl;
-        if      (H>=Hs&&H<=Hl) fl = (H-Hs)/(Hl-Hs);
-        else if (H>Hl)         fl = 1.0;
-        
-        real Cp   = phi*(fs*lbmaux[0].cap[0] + fl*lbmaux[0].cap[1])+fl*(1.0-phi)*lbmaux[0].cap[2];
-        real Temp = H/Cp;
-        if      (H>=Hs&&H<=Hl) Temp = lbmaux[0].Ts + (H-Hs)/(Hl-Hs)*(lbmaux[0].Tl-lbmaux[0].Ts);
-        else if (H>Hl)         Temp = lbmaux[0].Tl + (H-Hl)/Cp;
+        idx   = ic*lbmaux[0].Nneigh + 2*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+        Feq   = lbmaux[0].W[k]*Cp*Temp*(1.0 + sk);
+        if (k==0)  Feq += H - Cp*Temp;
+        Ftemp[idx] = F[idx] - (F[idx]-Feq)/tauh;
+    }
 
-        real  VdotV = dotreal3(vel,vel);
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-        {
-            real VdotC = dotreal3(vel,lbmaux[0].C[k]);
-            real Feq   = lbmaux[0].W[k]*Cp*Temp*(1.0 - 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
-            if (k==0)  Feq += H - Cp*Temp;
-            size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
-            Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau;
-        }
-    }
-}
-/*
-__global__ void cudaCollidePFI2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
-{
-    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
-    if (ic>=lbmaux[0].Ncells) return;
 
-    real Cs    = lbmaux[0].Cs;
-    size_t il = 0;
-    if (!IsSolid[ic+il*lbmaux[0].Ncells])
-    {
-        real vel   = Vel[ic + il*lbmaux[0].Ncells];
-        real VdotV = dotreal3(vel,vel);
-        while (valid)
-        {
-            numit++;
-            valid = false;
-            alphal = alphat;
-            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-            {
-                real VdotC = dotreal3(vel,lbmaux[0].C[k]);
-                real s     = lbmaux[0].W[k]*(3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
-                real Feq   = lbmaux[0].W[k]*rho*;
-                size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
-                Ftemp[idx] = F[idx] - alphal*(F[idx]-Feq)/tau;
-                if (Ftemp[idx]<0.0&&numit<2)
-                {
-                    real temp = tau*fabs(F[idx]/(F[idx]-Feq));
-                    if (temp<alphat) alphat = temp;
-                    valid = true;
-                }
-                if (Ftemp[idx]<0.0&&numit>=2)
-                {
-                    Ftemp[idx] = 0.0;
-                    //size_t icx = ic%lbmaux[0].Nx;
-                    //size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
-                    //size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
-                    //printf("%lu %lu %lu %g %lu %g \n",icx,icy,icz,Ftemp[idx],lbmaux[0].iter,alphal);
-                }
-            }
-        }
-    }
-    else
-    {
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-        {
-            Ftemp[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
-        }
-    }
+    //update for next time step
+    Vel   [ic+1*lbmaux[0].Ncells]   = phi*vel;
+    BForce[ic+2*lbmaux[0].Ncells].z = rho*divu + dotreal3(vel,gradrho);
 }
-*/
+
 __global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)
 {
     size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
@@ -660,6 +668,7 @@ __global__ void cudaStream1(real * F, real * Ftemp, lbm_aux const * lbmaux)
         size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
         size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny + icl*lbmaux[0].Ncells;
         Ftemp[in*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k];
+        //if (ic==lbmaux[0].Ncells/2+lbmaux[0].Nx/2-1) printf("%g %lu %lu \n",F[ic*lbmaux[0].Nneigh + 0*lbmaux[0].Ncells + k],in,k);
     }
 }
 
@@ -689,6 +698,52 @@ __global__ void cudaStream2(bool const * IsSolid, real * F, real * Ftemp, real3 
         }
         Vel[ic] = lbmaux[0].Cs/Rho[ic]*Vel[ic];
     }
+}
+
+__global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+    if (ic==0)
+    {
+        lbmaux[0].Time += lbmaux[0].dt;
+        lbmaux[0].iter++;
+    }
+    Rho   [ic                   ] = BForce[ic+2*lbmaux[0].Ncells].x;
+    Rho   [ic+1*lbmaux[0].Ncells] = BForce[ic+2*lbmaux[0].Ncells].y;
+    Rho   [ic+2*lbmaux[0].Ncells] = 0.0;
+    Vel   [ic] = make_real3(0.0,0.0,0.0);
+    //if (ic==lbmaux[0].Ncells/2+lbmaux[0].Nx/2) printf("%g %g %g %lu \n",Rho[ic],Rho[ic+1*lbmaux[0].Ncells],Rho[ic+2*lbmaux[0].Ncells],lbmaux[0].iter);
+    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    {
+        if (k!=0) Rho[ic                     ] += F[ic*lbmaux[0].Nneigh                                       + k];
+                  Rho[ic + 1*lbmaux[0].Ncells] += F[ic*lbmaux[0].Nneigh + 1*lbmaux[0].Nneigh*lbmaux[0].Ncells + k];
+                  Rho[ic + 2*lbmaux[0].Ncells] += F[ic*lbmaux[0].Nneigh + 2*lbmaux[0].Nneigh*lbmaux[0].Ncells + k];
+        
+        //if (ic==217*lbmaux[0].Nx+0) printf("%g %g %g %lu \n",F[ic*lbmaux[0].Nneigh + 0*lbmaux[0].Ncells + k],Ftemp[ic*lbmaux[0].Nneigh + 0*lbmaux[0].Ncells + k],Rho[ic+0*lbmaux[0].Ncells],k);
+        Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
+    }
+
+    Rho[ic] *= lbmaux[0].Cs*lbmaux[0].Cs/3.0/(1-lbmaux[0].W[0]);
+
+    //if (ic==216*lbmaux[0].Nx+199) printf("%g %g %g %lu \n",Rho[ic],Rho[ic+1*lbmaux[0].Ncells],Rho[ic+2*lbmaux[0].Ncells],lbmaux[0].iter);
+
+    real H    = Rho[ic + 2*lbmaux[0].Ncells];
+    real Hs   = lbmaux[0].Ts*lbmaux[0].cap[0];
+    real Hl   = lbmaux[0].Tl*lbmaux[0].cap[1]+lbmaux[0].L;
+    real fl   = 0.0;
+    if      (H>=Hs&&H<=Hl) fl = (H-Hs)/(Hl-Hs);
+    else if (H>Hl)         fl = 1.0;
+    Vel[ic + 2*lbmaux[0].Ncells].y = Vel[ic + 2*lbmaux[0].Ncells].x;
+    Vel[ic + 2*lbmaux[0].Ncells].x = fl;
+    real fs = 1.0 - fl;
+
+    real phi  = Rho[ic + 1*lbmaux[0].Ncells];
+    real rho  = phi*(fs*lbmaux[0].rho[0] + fl*lbmaux[0].rho[1])+fl*(1.0-phi)*lbmaux[0].rho[2];
+    BForce[ic + 1*lbmaux[0].Ncells] = (lbmaux[0].Cs/rho)*(Vel[ic] + 0.5*lbmaux[0].dt*BForce[ic]);
+    Vel[ic] = (1.0-0.5*fs)*BForce[ic + 1*lbmaux[0].Ncells];
+
+    Vel[ic+2*lbmaux[0].Ncells].z = BForce[ic+2*lbmaux[0].Ncells].z;
 }
 }
 #endif //MECHSYS_LBM_CUH

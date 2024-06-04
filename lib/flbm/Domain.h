@@ -144,6 +144,8 @@ public:
     void   StreamEFS_SRT();                                                       ///< The strean step of LBM EFS
     void   VelDen();                                                              ///< Calculate density and velocity from the functions
     void   Initialize(size_t k, iVec3_t idx, double Rho, Vec3_t & Vel);           ///< Initialize each cell with a given density and velocity
+    void   Initialize(iVec3_t idx, double Pre, double H, double Phi
+            , Vec3_t & Vel);                                                      ///< Same as previous, but for the Phase Field Ice model
     double Feq(size_t k, double Rho, Vec3_t & Vel);                               ///< The equilibrium function
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
@@ -175,11 +177,22 @@ public:
     double ***    Gamma;                       ///< Information on the overlapping volume fraction
     double ***    Gammaf;                      ///< Information on the prescribed overlapping volume fraction
     double *      Tau;                         ///< The characteristic time of the lattice
+    //Shan Chen model parameters
     double *      G;                           ///< The attractive constant for multiphase simulations
     double *      Gs;                          ///< The attractive constant for solid phase
     double *      Psi;                         ///< Parameters for the Shan Chen pseudo potential
     double *      Rhoref;                      ///< Parameters for the Shan Chen pseudo potential
     double        Gmix;                        ///< The mixing constant for multicomponent simulations
+    //Phase Field for Ice parameters 0 solid 1 liquid 2 gas                                             
+    double        rho[3];                      ///< Density of the phases
+    double        cap[3];                      ///< Heat capcity for each phase
+    double        kap[3];                      ///< heat conductivity for each phase    
+    double        thick;                       ///< thickness of the phase field interfase;
+    double        sigma;                       ///< surface tension of the interfase
+    double        Ts;                          ///< Solidus temperature
+    double        Tl;                          ///< Liquidus temperature
+    double        L;                           ///< Latent heat
+    
     size_t const  * Op;                        ///< An array containing the indexes of the opposite direction for bounce back conditions
     double const  *  W;                        ///< An array with the direction weights
     double *      EEk;                         ///< Diadic product of the velocity vectors
@@ -301,9 +314,24 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
 
     if (Solver==PhaseFieldIce)
     {
-        Rhonames[0].Printf("Density");
+        Rhonames[0].Printf("Pressure");
         Rhonames[1].Printf("Phase");
-        Rhonames[1].Printf("Enthalpy");
+        Rhonames[2].Printf("Enthalpy");
+
+        rho[0] = 1.0;
+        rho[1] = 1.0;
+        rho[2] = 1.0;
+        cap[0] = 1.0;
+        cap[1] = 1.0;
+        cap[2] = 1.0;
+        kap[0] = 1.0;
+        kap[1] = 1.0;
+        kap[2] = 1.0;
+        thick  = 4.0;
+        sigma  = 1.0;
+        Ts     = 0.8;
+        Tl     = 1.0;
+        L      = 1.0;
     }
 
     Tau    = new double [Nl];
@@ -323,7 +351,6 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
     BForce  = new Vec3_t ***  [Nl];
     Rho     = new double ***  [Nl];
     IsSolid = new bool   ***  [Nl];
-
     for (size_t i=0;i<Nl;i++)
     {
         Tau     [i]    = 3.0*nu[i]*dt/(dx*dx)+0.5;
@@ -916,6 +943,63 @@ inline void Domain::Initialize(size_t il, iVec3_t idx, double TheRho, Vec3_t & T
         Vel[il][ix][iy][iz] = OrthoSys::O;
         Rho[il][ix][iy][iz] = 0.0;
     }
+}
+
+inline void Domain::Initialize(iVec3_t idx, double ThePre, double TheH, double ThePhi, Vec3_t & TheVel)
+{
+    size_t ix = idx(0);
+    size_t iy = idx(1);
+    size_t iz = idx(2);
+    for (size_t il=0;il<3;il++)
+    {
+        BForce[il][ix][iy][iz] = OrthoSys::O;
+    }
+
+    double Hs = Ts*cap[0];
+    double Hl = Tl*cap[1];
+    double fl = 0.0;
+    if      (TheH>=Hs&&TheH<=Hl) fl = (TheH-Hs)/(Hl-Hs);
+    else if (TheH>Hl)            fl = 1.0;
+    Vel[2][ix][iy][0](0) = fl;
+    Vel[2][ix][iy][0](1) = fl;
+    Vel[2][ix][iy][0](2) = 0.0;
+    double fs   = 1.0-fl;
+
+    double Cp   = ThePhi*(fs*cap[0] + fl*cap[1])+fl*(1.0-ThePhi)*cap[2];
+    double Temp = TheH/Cp;
+    if      (TheH>=Hs&&TheH<=Hl) Temp = Ts + (TheH-Hs)/(Hl-Hs)*(Tl - Ts);
+    else if (TheH>Hl)            Temp = Tl + (TheH-Hl)/Cp;
+
+    double rhof = ThePhi*(fs*rho[0] + fl*rho[1])+fl*(1.0-ThePhi)*rho[2];
+    Rho[0][ix][iy][iz] = 0.0;
+    double VdotV = dot(TheVel,TheVel);
+    for (size_t k=0;k<Nneigh;k++)
+    {
+        // Pressure
+        double VdotC = dot(TheVel,C[k]);
+        double sk    = 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs);
+        F[0][ix][iy][iz][k] = W[k]*(3.0*ThePre/(Cs*Cs) + rhof*sk);
+        if (k==0) F[0][ix][iy][iz][k] += -3.0*ThePre/(Cs*Cs);
+        if (k!=0) Rho[0][ix][iy][iz]  += F[0][ix][iy][iz][k];
+
+        //Phase Field
+        F[1][ix][iy][iz][k] = W[k]*ThePhi*(1.0 + 3.0*VdotC/Cs);
+        Rho[1][ix][iy][iz] += F[1][ix][iy][iz][k];
+
+        //Enthalpy
+        F[2][ix][iy][iz][k] = W[k]*Cp*Temp*(1.0 + sk);
+        if (k==0) F[2][ix][iy][iz][k] += TheH - Cp*Temp;
+        Rho[2][ix][iy][iz] += F[2][ix][iy][iz][k];
+    }
+
+    Rho[0][ix][iy][iz] *= Cs*Cs/3.0/(1.0-W[0]);
+
+
+    Vel[0][ix][iy][iz] = TheVel;
+    Vel[1][ix][iy][iz] = ThePhi*TheVel;
+
+
+
 }
 
 inline void Domain::SolidPhase(Vec3_t const & XC, double RC)
@@ -1804,6 +1888,11 @@ inline void Domain::UpLoadDevice(size_t Nc)
     lbmaux.dx        = dx;
     lbmaux.iter      = 0;
     lbmaux.Time      = Time;
+    lbmaux.thick     = thick;
+    lbmaux.sigma     = sigma;
+    lbmaux.Ts        = Ts;
+    lbmaux.Tl        = Tl;
+    lbmaux.L         = L;
 
     for (size_t nn=0;nn<Nneigh;nn++)
     {
@@ -1822,13 +1911,6 @@ inline void Domain::UpLoadDevice(size_t Nc)
        }
     }
     
-    //bF      .resize(Nl*Ncells*Nneigh);
-    //bFtemp  .resize(Nl*Ncells*Nneigh);
-    //bIsSolid.resize(Nl*Ncells);
-    //bBForce .resize(Nl*Ncells);
-    //bVel    .resize(Nl*Ncells);
-    //bRho    .resize(Nl*Ncells);
-
     thrust::host_vector<real>  hF             (Nl*Ncells*Nneigh);
     thrust::host_vector<real>  hFtemp         (Nl*Ncells*Nneigh);
     thrust::host_vector<bool>  hIsSolid       (Nl*Ncells); 
@@ -1842,10 +1924,19 @@ inline void Domain::UpLoadDevice(size_t Nc)
     for (size_t il=0;il<Nl;il++)
     {
         lbmaux.Tau     [il]    = Tau     [il];
-        lbmaux.G       [il]    = G       [il];
-        lbmaux.Gs      [il]    = Gs      [il];
-        lbmaux.Rhoref  [il]    = Rhoref  [il];
-        lbmaux.Psi     [il]    = Psi     [il];
+        if (Solver==NavierStokes)
+        {
+            lbmaux.G       [il]    = G       [il];
+            lbmaux.Gs      [il]    = Gs      [il];
+            lbmaux.Rhoref  [il]    = Rhoref  [il];
+            lbmaux.Psi     [il]    = Psi     [il];
+        }
+        else if (Solver==PhaseFieldIce)
+        {
+            lbmaux.rho     [il]    = rho     [il];
+            lbmaux.cap     [il]    = cap     [il];
+            lbmaux.kap     [il]    = kap     [il];
+        }
 
         for (size_t nz=0;nz<Ndim(2);nz++)
         {
@@ -1896,7 +1987,7 @@ inline void Domain::UpLoadDevice(size_t Nc)
     pRho       = thrust::raw_pointer_cast(bRho.data());
     pCellPairs = thrust::raw_pointer_cast(bCellPairs.data());
     //plbmaux    = thrust::raw_pointer_cast(blbmaux.data());
-    
+
     cudaMalloc(&plbmaux, sizeof(lbm_aux));
     cudaMemcpy(plbmaux, &lbmaux, sizeof(lbm_aux), cudaMemcpyHostToDevice);
     
@@ -1965,47 +2056,47 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     #endif
 
 
-    if (fabs(G[0])>1.0e-12||(fabs(Gs[0])>1.0e-12)||(Nl>1))
+    if (Solver==NavierStokes)
     {
-        Array<iVec3_t> CPP(0);
-
-        size_t nx = Ndim(0);
-        size_t ny = Ndim(1);
-        size_t nz = Ndim(2);
-
-        for (size_t iz=0;iz<nz;iz++)
-        for (size_t iy=0;iy<ny;iy++)
-        for (size_t ix=0;ix<nx;ix++)
+        if (fabs(G[0])>1.0e-12||(fabs(Gs[0])>1.0e-12)||(Nl>1))
         {
-            size_t nc = Pt2idx(iVec3_t(ix,iy,iz),Ndim);
-            for (size_t k=1;k<Nneigh;k++)
+            Array<iVec3_t> CPP(0);
+
+            size_t nx = Ndim(0);
+            size_t ny = Ndim(1);
+            size_t nz = Ndim(2);
+
+            for (size_t iz=0;iz<nz;iz++)
+            for (size_t iy=0;iy<ny;iy++)
+            for (size_t ix=0;ix<nx;ix++)
             {
-                size_t nix = (size_t)((int)ix + (int)C[k](0) + (int)Ndim(0))%Ndim(0);
-                size_t niy = (size_t)((int)iy + (int)C[k](1) + (int)Ndim(1))%Ndim(1);
-                size_t niz = (size_t)((int)iz + (int)C[k](2) + (int)Ndim(2))%Ndim(2);
-                size_t nb  = Pt2idx(iVec3_t(nix,niy,niz),Ndim);
-                if (nb>nc)
+                size_t nc = Pt2idx(iVec3_t(ix,iy,iz),Ndim);
+                for (size_t k=1;k<Nneigh;k++)
                 {
-                    CPP.Push(iVec3_t(nc,nb,k));
+                    size_t nix = (size_t)((int)ix + (int)C[k](0) + (int)Ndim(0))%Ndim(0);
+                    size_t niy = (size_t)((int)iy + (int)C[k](1) + (int)Ndim(1))%Ndim(1);
+                    size_t niz = (size_t)((int)iz + (int)C[k](2) + (int)Ndim(2))%Ndim(2);
+                    size_t nb  = Pt2idx(iVec3_t(nix,niy,niz),Ndim);
+                    if (nb>nc)
+                    {
+                        CPP.Push(iVec3_t(nc,nb,k));
+                    }
                 }
             }
-        }
 
-        NCellPairs = CPP.Size();
-        CellPairs = new iVec3_t [NCellPairs];
-        for (size_t n=0;n<NCellPairs;n++)
-        {
-            CellPairs[n] = CPP[n];
+            NCellPairs = CPP.Size();
+            CellPairs = new iVec3_t [NCellPairs];
+            for (size_t n=0;n<NCellPairs;n++)
+            {
+                CellPairs[n] = CPP[n];
+            }
         }
     }
 
-    //std::cout << "1" << std::endl;
     #ifdef USE_CUDA
     UpLoadDevice();
     #endif
     
-    //std::cout << "2" << std::endl;
-
     double tout = Time;
     while (Time < Tf)
     {
@@ -2062,7 +2153,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         }
         else if (Solver==PhaseFieldIce)
         {
-            cudaCollidePFI1<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            cudaCollidePFI<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
 
         real * tmp = pF;
@@ -2074,7 +2165,14 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         tmp = pF;
         pF = pFtemp;
         pFtemp = tmp;
-        cudaStream2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        if (Solver==PhaseFieldIce)
+        {
+            cudaStreamPFI2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
+        else
+        {
+            cudaStream2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
         //cudaDeviceSynchronize();
         #else
         if (Nl==1)
