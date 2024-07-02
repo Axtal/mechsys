@@ -529,8 +529,6 @@ __global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, rea
         size_t idx = ic*lbmaux[0].Nneigh + k;
         Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau + (1.0-0.5/tau)*lbmaux[0].dt*Fk;
         if (IsSolid[ic]) Ftemp[idx] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
-        //if (ic==216*lbmaux[0].Nx+0) printf("%g %g %g %g %g %lu %lu \n",Ftemp[idx],F[idx],Feq,Rho[ic],Fk,ic,k);
-        //if (ic==216*lbmaux[0].Nx+0) printf("%g %g %g %g %g %lu %lu \n",phi,mu,gradphi.x,gradphi.y,Rho[ic],ic,k);
 
         //Phase field equation
         idx  = ic*lbmaux[0].Nneigh + 1*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;

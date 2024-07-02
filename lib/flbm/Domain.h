@@ -221,6 +221,11 @@ public:
     //Array for pair calculation
     size_t       NCellPairs;                  ///< Number of cell pairs
     iVec3_t   *  CellPairs;                   ///< Pairs of cells for molecular force calculation
+                                              
+    //Speed up ignoring deep solid boundaries data set
+    #ifdef IGNORESOLID
+    Array<size_t> ValidNodes;
+    #endif
 
     #ifdef USE_CUDA
     thrust::device_vector<real>      bF;                      ///< Buffer with the distribution functions
@@ -1214,10 +1219,21 @@ inline void Domain::CollideSC()
     size_t nz = Ndim(2);
 
     #pragma omp parallel for schedule(static) num_threads(Nproc)
+    #ifdef IGNORESOLID
+    for (size_t nv=0;nv<ValidNodes.Size();nv++)
+    #else
     for (size_t ix=0;ix<nx;ix++)
     for (size_t iy=0;iy<ny;iy++)
     for (size_t iz=0;iz<nz;iz++)
+    #endif
     {
+        #ifdef IGNORESOLID
+        iVec3_t idx;
+        idx2Pt(ValidNodes[nv],idx,Ndim);
+        size_t ix = idx(0);
+        size_t iy = idx(1);
+        size_t iz = idx(2);
+        #endif
         if (!IsSolid[0][ix][iy][iz])
         {
             double NonEq[Nneigh];
@@ -1664,10 +1680,21 @@ inline void Domain::StreamSC()
     size_t nz = Ndim(2);
 
     #pragma omp parallel for schedule(static) num_threads(Nproc)
+    #ifdef IGNORESOLID
+    for (size_t nv=0;nv<ValidNodes.Size();nv++)
+    #else
     for (size_t ix=0;ix<nx;ix++)
     for (size_t iy=0;iy<ny;iy++)
     for (size_t iz=0;iz<nz;iz++)
+    #endif
     {
+        #ifdef IGNORESOLID
+        iVec3_t idx;
+        idx2Pt(ValidNodes[nv],idx,Ndim);
+        size_t ix = idx(0);
+        size_t iy = idx(1);
+        size_t iz = idx(2);
+        #endif
         for (size_t k=0;k<Nneigh;k++)
         {
             size_t nix = (size_t)((int)ix + (int)C[k](0) + (int)Ndim(0))%Ndim(0);
@@ -1682,10 +1709,21 @@ inline void Domain::StreamSC()
     Ftemp = tmp;
 
     #pragma omp parallel for schedule(static) num_threads(Nproc)
+    #ifdef IGNORESOLID
+    for (size_t nv=0;nv<ValidNodes.Size();nv++)
+    #else
     for (size_t ix=0;ix<nx;ix++)
     for (size_t iy=0;iy<ny;iy++)
     for (size_t iz=0;iz<nz;iz++)
+    #endif
     {
+        #ifdef IGNORESOLID
+        iVec3_t idx;
+        idx2Pt(ValidNodes[nv],idx,Ndim);
+        size_t ix = idx(0);
+        size_t iy = idx(1);
+        size_t iz = idx(2);
+        #endif
         BForce[0][ix][iy][iz] = OrthoSys::O;
         Vel   [0][ix][iy][iz] = OrthoSys::O;
         Rho   [0][ix][iy][iz] = 0.0;
@@ -2058,40 +2096,53 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 
     if (Solver==NavierStokes)
     {
-        if (fabs(G[0])>1.0e-12||(fabs(Gs[0])>1.0e-12)||(Nl>1))
+        Array<iVec3_t> CPP(0);
+
+        size_t nx = Ndim(0);
+        size_t ny = Ndim(1);
+        size_t nz = Ndim(2);
+
+        for (size_t iz=0;iz<nz;iz++)
+        for (size_t iy=0;iy<ny;iy++)
+        for (size_t ix=0;ix<nx;ix++)
         {
-            Array<iVec3_t> CPP(0);
-
-            size_t nx = Ndim(0);
-            size_t ny = Ndim(1);
-            size_t nz = Ndim(2);
-
-            for (size_t iz=0;iz<nz;iz++)
-            for (size_t iy=0;iy<ny;iy++)
-            for (size_t ix=0;ix<nx;ix++)
+            size_t nc = Pt2idx(iVec3_t(ix,iy,iz),Ndim);
+            #ifdef IGNORESOLID
+            if (!IsSolid[0][ix][iy][iz]) ValidNodes.Push(nc);
+            bool maybevalid = false;
+            #endif
+            for (size_t k=1;k<Nneigh;k++)
             {
-                size_t nc = Pt2idx(iVec3_t(ix,iy,iz),Ndim);
-                for (size_t k=1;k<Nneigh;k++)
+                size_t nix = (size_t)((int)ix + (int)C[k](0) + (int)Ndim(0))%Ndim(0);
+                size_t niy = (size_t)((int)iy + (int)C[k](1) + (int)Ndim(1))%Ndim(1);
+                size_t niz = (size_t)((int)iz + (int)C[k](2) + (int)Ndim(2))%Ndim(2);
+                size_t nb  = Pt2idx(iVec3_t(nix,niy,niz),Ndim);
+                #ifdef IGNORESOLID
+                if (!IsSolid[0][nix][niy][niz]) maybevalid = true;
+                #endif
+                if ((fabs(G[0])>1.0e-12||(fabs(Gs[0])>1.0e-12)||(Nl>1))&&(nb>nc))
                 {
-                    size_t nix = (size_t)((int)ix + (int)C[k](0) + (int)Ndim(0))%Ndim(0);
-                    size_t niy = (size_t)((int)iy + (int)C[k](1) + (int)Ndim(1))%Ndim(1);
-                    size_t niz = (size_t)((int)iz + (int)C[k](2) + (int)Ndim(2))%Ndim(2);
-                    size_t nb  = Pt2idx(iVec3_t(nix,niy,niz),Ndim);
-                    if (nb>nc)
-                    {
-                        CPP.Push(iVec3_t(nc,nb,k));
-                    }
+                    CPP.Push(iVec3_t(nc,nb,k));
                 }
             }
+            #ifdef IGNORESOLID
+            if (IsSolid[0][ix][iy][iz]&&maybevalid) ValidNodes.Push(nc);
+            #endif
+        }
 
-            NCellPairs = CPP.Size();
-            CellPairs = new iVec3_t [NCellPairs];
-            for (size_t n=0;n<NCellPairs;n++)
-            {
-                CellPairs[n] = CPP[n];
-            }
+        NCellPairs = CPP.Size();
+        CellPairs = new iVec3_t [NCellPairs];
+        for (size_t n=0;n<NCellPairs;n++)
+        {
+            CellPairs[n] = CPP[n];
         }
     }
+
+    #ifdef IGNORESOLID
+    std::cout 
+        << TERM_CLR2 
+        << "  Number of valid nodes            =  " << ValidNodes.Size() << TERM_RST << std::endl;
+    #endif
 
     #ifdef USE_CUDA
     UpLoadDevice();
@@ -2207,6 +2258,8 @@ const size_t Domain::OPPOSITED2Q5  [ 5] = { 0, 3, 4, 1, 2 };                    
 const size_t Domain::OPPOSITED2Q9  [ 9] = { 0, 3, 4, 1, 2, 7, 8, 5, 6 };                                           ///< Opposite directions (D2Q9) 
 const size_t Domain::OPPOSITED3Q15 [15] = { 0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13};                     ///< Opposite directions (D3Q15)
 const size_t Domain::OPPOSITED3Q19 [19] = { 0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15, 18, 17};     ///< Opposite directions (D3Q19)
+
+
 const Vec3_t Domain::LVELOCD2Q5  [ 5] = { {0,0,0}, {1,0,0}, {0,1,0}, {-1,0,0}, {0,-1,0} };
 const Vec3_t Domain::LVELOCD2Q9  [ 9] = { {0,0,0}, {1,0,0}, {0,1,0}, {-1,0,0}, {0,-1,0}, {1,1,0}, {-1,1,0}, {-1,-1,0}, {1,-1,0} };
 const Vec3_t Domain::LVELOCD3Q15 [15] =

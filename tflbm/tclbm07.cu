@@ -47,9 +47,9 @@ int main(int argc, char **argv) try
     Dom.cap[0] = 1.0;
     Dom.cap[1] = 1.0;
     Dom.cap[2] = 1.0;
-    Dom.kap[0] = 1.0;
-    Dom.kap[1] = 1.0;
-    Dom.kap[2] = 1.0;
+    Dom.kap[0] = 0.1666;
+    Dom.kap[1] = 0.1666;
+    Dom.kap[2] = 0.1666;
     Dom.thick  = 5.0;
     Dom.sigma  = 1.0;
     Dom.Ts     = 0.5;
@@ -68,6 +68,7 @@ int main(int argc, char **argv) try
     {
         //double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
         double r     = sqrt(pow((int)(j)-obsY,2.0));
+
         double smear = 0.5*(1.0-tanh(2.0*(r-Rext)/Dom.thick));
         double pre   = 1.0;
         double phi   = smear;

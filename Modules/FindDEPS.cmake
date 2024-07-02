@@ -30,6 +30,7 @@ OPTION(A_MAKE_TERM_NOCOLORS  "Don't use colors when printing to terminal ?"     
 OPTION(A_MAKE_STDVECTOR      "Use std::vector instead of own implemenatation ?"     ON )
 OPTION(A_MAKE_CHECK_OVERLAP  "Check for maximun overlapping in DEM simulations"     ON )
 OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"      ON )
+OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"        OFF)
                                                                                    
 # Options                                                                          
 OPTION(A_USE_OMP            "Use OpenMP  ?"                                        ON )
@@ -95,6 +96,10 @@ ENDIF(A_MAKE_CHECK_OVERLAP)
 IF(A_MAKE_USE_GPU_DOUBLE)
     ADD_DEFINITIONS (-DUSE_GPU_DOUBLE)
 ENDIF(A_MAKE_USE_GPU_DOUBLE)
+
+IF(A_MAKE_IGNORE_SOLID)
+    ADD_DEFINITIONS (-DIGNORESOLID)
+ENDIF(A_MAKE_IGNORE_SOLID)
 
 ### FIND DEPENDENCIES AND SET FLAGS AND LIBRARIES #######################################################
 
