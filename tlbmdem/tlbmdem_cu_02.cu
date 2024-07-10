@@ -82,9 +82,11 @@ int main(int argc, char **argv) try
     dom.UserData = &dat;
     dat.R  = R;
     dat.nu = nu;
-    dat.acc = Vec3_t(1.0e-2,1.0e-2,1.0e-2);
+    //dat.acc = Vec3_t(1.0e-2,1.0e-2,1.0e-2);
+    dat.acc = Vec3_t(1.0e-2,0.0,0.0);
+    dom.DEMDOM.AddSphere(-1,Vec3_t(0.5*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
     
-    dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),R,1.0);
+    //dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),R,1.0);
     //double e = pow(M_PI/6.0,1.0/3.0)*2*R;
     //dom.DEMDOM.AddCube(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),0.05*e,e,1.0);
     dom.DEMDOM.GetParticle(-1)->Ff = dom.DEMDOM.GetParticle(-1)->Props.m*dat.acc;

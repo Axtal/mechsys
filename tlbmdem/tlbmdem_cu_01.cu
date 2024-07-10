@@ -98,12 +98,13 @@ int main(int argc, char **argv) try
 
         
     double nu = 1.0;
-    size_t nx = 241;
-    size_t ny = 61;
-    size_t nz = 61;
+    size_t nx = 301;
+    size_t ny = 121;
+    size_t nz = 121;
     double dx = 0.4;
     double dt = 1.6e-2;
-    double R = 3.6;
+    double R  = 3.6;
+    //double R  = 0.3;
     LBMDEM::Domain dom(D3Q15,nu,iVec3_t(nx,ny,nz),dx,dt);
     UserData dat;
     dom.UserData = &dat;

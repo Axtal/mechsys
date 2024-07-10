@@ -19,18 +19,19 @@
 #####################################################################################
 
 # Flags
-OPTION(A_MAKE_VERBOSE        "Show additional messages during compilation/linking?" ON )
-OPTION(A_MAKE_ALL_WARNINGS   "Make with all warnings (-Wall)"                       OFF)
-OPTION(A_MAKE_DEBUG_SYMBOLS  "Make with debug symbols (-g)"                         OFF)
-OPTION(A_MAKE_PROFILING      "Make with profiling information (-pg)"                OFF)
-OPTION(A_MAKE_OPTIMIZED      "Make optimized (-O3)"                                 ON )
-OPTION(A_MAKE_WXW_MONO       "Use wxWidgets monolithic libraries ?"                 OFF)
-OPTION(A_MAKE_TERM_WHITEBG   "Select colors for terminal with white background ?"   OFF)
-OPTION(A_MAKE_TERM_NOCOLORS  "Don't use colors when printing to terminal ?"         OFF)
-OPTION(A_MAKE_STDVECTOR      "Use std::vector instead of own implemenatation ?"     ON )
-OPTION(A_MAKE_CHECK_OVERLAP  "Check for maximun overlapping in DEM simulations"     ON )
-OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"      ON )
-OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"        OFF)
+OPTION(A_MAKE_VERBOSE        "Show additional messages during compilation/linking?"                         ON )
+OPTION(A_MAKE_ALL_WARNINGS   "Make with all warnings (-Wall)"                                               OFF)
+OPTION(A_MAKE_DEBUG_SYMBOLS  "Make with debug symbols (-g)"                                                 OFF)
+OPTION(A_MAKE_PROFILING      "Make with profiling information (-pg)"                                        OFF)
+OPTION(A_MAKE_OPTIMIZED      "Make optimized (-O3)"                                                         ON )
+OPTION(A_MAKE_WXW_MONO       "Use wxWidgets monolithic libraries ?"                                         OFF)
+OPTION(A_MAKE_TERM_WHITEBG   "Select colors for terminal with white background ?"                           OFF)
+OPTION(A_MAKE_TERM_NOCOLORS  "Don't use colors when printing to terminal ?"                                 OFF)
+OPTION(A_MAKE_STDVECTOR      "Use std::vector instead of own implemenatation ?"                             ON )
+OPTION(A_MAKE_CHECK_OVERLAP  "Check for maximun overlapping in DEM simulations"                             ON )
+OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"                              ON )
+OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"                                OFF)
+OPTION(A_MAKE_USE_IBB        "Use Immersed Bounce Back instead of Gamma Method for DEM-LBM simulations"     OFF)
                                                                                    
 # Options                                                                          
 OPTION(A_USE_OMP            "Use OpenMP  ?"                                        ON )
@@ -100,6 +101,10 @@ ENDIF(A_MAKE_USE_GPU_DOUBLE)
 IF(A_MAKE_IGNORE_SOLID)
     ADD_DEFINITIONS (-DIGNORESOLID)
 ENDIF(A_MAKE_IGNORE_SOLID)
+
+IF(A_MAKE_USE_IBB)
+    ADD_DEFINITIONS (-DUSE_IBB)
+ENDIF(A_MAKE_USE_IBB)
 
 ### FIND DEPENDENCIES AND SET FLAGS AND LIBRARIES #######################################################
 

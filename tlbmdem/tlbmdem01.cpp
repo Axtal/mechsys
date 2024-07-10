@@ -124,7 +124,7 @@ int main(int argc, char **argv) try
     }   
 
     dat.acc = Vec3_t(1.5e-2,0.0,0.0);
-    dom.Alpha = 2.0*dx;
+    dom.Alpha = 4.0*dx;
 
     double Tf = 1.0e4;
     dom.Solve(Tf,Tf/200,Setup,Report,"tlbmdem01",true,Nproc);

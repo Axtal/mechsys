@@ -90,6 +90,7 @@ public:
     String      FileKey;                ///< File Key for output files
     void *     UserData;                ///< User Data
     double         Time;                ///< Simulation time variable
+    double        Fconv;                ///< Force conversion factor
     bool       Finished;                ///< Boolen flag to signal the end of simulation
     bool      PeriodicX;                ///< Flag to signal periodic boundary conditions in X direction
     bool      PeriodicY;                ///< Flag to signal periodic boundary conditions in Y direction
@@ -104,6 +105,7 @@ public:
     thrust::device_vector<real>            bOmeis;            ///< Buffer with the DEM collision information
     thrust::device_vector<real>            bGamma;            ///< Buffer with the volume fraction information
     thrust::device_vector<real>            bGammaf;           ///< Buffer with the volume fraction information
+    thrust::device_vector<int>             bInside;           ///< Array with inside DEM particle information
     thrust::device_vector<ParCellPairCU>   bPaCe;             ///< Buffer with the information of Particle cell pairs
     thrust::device_vector<size_t>          bPaCeF;            ///< Buffer with the geometric features assigned to a Particle cell pair
     thrust::device_vector<size_t>          bPaCeV;            ///< Buffer with the Particle cell pair information for spheres
@@ -111,6 +113,7 @@ public:
     real                                 * pOmeis;            ///< Pointer to Buffer with the DEM collision information
     real                                 * pGamma;            ///< Pointer to Buffer with the volume fraction information
     real                                 * pGammaf;           ///< Pointer to Buffer with the prescribed volume fraction information 
+    int                                  * pInside;           ///< Pointer to array of Inside information
     ParCellPairCU                        * pPaCe;             ///< Pointer to particle cell pair
     size_t                               * pPaCeF;            ///< Pointer to particle cell pair
     size_t                               * pPaCeV;            ///< Pointer to particle cell pair
@@ -141,29 +144,34 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     dx = Thedx;
     Time = 0.0;
     Alpha = 0.05;
+    Fconv = 1.0;
     PeriodicX= false;
     PeriodicY= false;
     PeriodicZ= false;
     LBMDOM = FLBM::Domain(TheMethod, Thenu, TheNdim, Thedx, Thedt);
     DEMDOM = DEM ::Domain();
 
-    LBMDOM.Omeis = new double *** [TheNdim(0)];
-    LBMDOM.Gamma = new double **  [TheNdim(0)];
-    LBMDOM.Gammaf= new double **  [TheNdim(0)];
+    LBMDOM.Omeis    = new double *** [TheNdim(0)];
+    LBMDOM.Gamma    = new double **  [TheNdim(0)];
+    LBMDOM.Gammaf   = new double **  [TheNdim(0)];
+    LBMDOM.DEMInside= new int    **  [TheNdim(0)];
     for (size_t ix=0; ix< TheNdim(0); ix++)
     {
-        LBMDOM.Omeis [ix] = new double ** [TheNdim(1)];
-        LBMDOM.Gamma [ix] = new double *  [TheNdim(1)];
-        LBMDOM.Gammaf[ix] = new double *  [TheNdim(1)];
+        LBMDOM.Omeis    [ix] = new double ** [TheNdim(1)];
+        LBMDOM.Gamma    [ix] = new double *  [TheNdim(1)];
+        LBMDOM.Gammaf   [ix] = new double *  [TheNdim(1)];
+        LBMDOM.DEMInside[ix] = new int    *  [TheNdim(1)];
         for (size_t iy=0; iy< TheNdim(1); iy++)
         {
-            LBMDOM.Omeis [ix][iy] = new double * [TheNdim(2)];
-            LBMDOM.Gamma [ix][iy] = new double   [TheNdim(2)];
-            LBMDOM.Gammaf[ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.Omeis    [ix][iy] = new double * [TheNdim(2)];
+            LBMDOM.Gamma    [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.Gammaf   [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.DEMInside[ix][iy] = new int      [TheNdim(2)];
             for (size_t iz=0; iz< TheNdim(2); iz++)
             {
-                //LBMDOM.Gammaf[ix][iy][iz] = 0.0;
-                LBMDOM.Omeis [ix][iy][iz] = new double [LBMDOM.Nneigh];
+                LBMDOM.Gammaf    [ix][iy][iz] = 0.0;
+                LBMDOM.Omeis     [ix][iy][iz] = new double [LBMDOM.Nneigh];
+                LBMDOM.DEMInside [ix][iy][iz] = -1;
             }
         }
     }
@@ -177,6 +185,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
     dt = Thedt;
     dx = Thedx;
     Time = 0.0;
+    Fconv = 1.0;
     Alpha = 0.05;
     PeriodicX= false;
     PeriodicY= false;
@@ -231,23 +240,27 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
 
     LBMDOM = FLBM::Domain(TheMethod, Thenu, TheNdim, Thedx, Thedt);
 
-    LBMDOM.Omeis = new double *** [TheNdim(0)];
-    LBMDOM.Gamma = new double **  [TheNdim(0)];
-    LBMDOM.Gammaf= new double **  [TheNdim(0)];
+    LBMDOM.Omeis    = new double *** [TheNdim(0)];
+    LBMDOM.Gamma    = new double **  [TheNdim(0)];
+    LBMDOM.Gammaf   = new double **  [TheNdim(0)];
+    LBMDOM.DEMInside= new int    **  [TheNdim(0)];
     for (size_t ix=0; ix< TheNdim(0); ix++)
     {
-        LBMDOM.Omeis [ix] = new double ** [TheNdim(1)];
-        LBMDOM.Gamma [ix] = new double *  [TheNdim(1)];
-        LBMDOM.Gammaf[ix] = new double *  [TheNdim(1)];
+        LBMDOM.Omeis    [ix] = new double ** [TheNdim(1)];
+        LBMDOM.Gamma    [ix] = new double *  [TheNdim(1)];
+        LBMDOM.Gammaf   [ix] = new double *  [TheNdim(1)];
+        LBMDOM.DEMInside[ix] = new int    *  [TheNdim(1)];
         for (size_t iy=0; iy< TheNdim(1); iy++)
         {
-            LBMDOM.Omeis [ix][iy] = new double * [TheNdim(2)];
-            LBMDOM.Gamma [ix][iy] = new double   [TheNdim(2)];
-            LBMDOM.Gammaf[ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.Omeis    [ix][iy] = new double * [TheNdim(2)];
+            LBMDOM.Gamma    [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.Gammaf   [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.DEMInside[ix][iy] = new int      [TheNdim(2)];
             for (size_t iz=0; iz< TheNdim(2); iz++)
             {
-                //LBMDOM.Gammaf[ix][iy][iz] = 0.0;
-                LBMDOM.Omeis [ix][iy][iz] = new double [LBMDOM.Nneigh];
+                LBMDOM.Gammaf    [ix][iy][iz] = 0.0;
+                LBMDOM.Omeis     [ix][iy][iz] = new double [LBMDOM.Nneigh];
+                LBMDOM.DEMInside [ix][iy][iz] = -1;
             }
         }
     }
@@ -683,10 +696,15 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Calculation of forces " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
-
-        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread>>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+#ifndef USE_IBB
+        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+#else
+        cudaCheckOutsideVC  <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+        cudaCheckInsideVC   <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+        cudaRefill          <<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pF,LBMDOM.pRho,LBMDOM.pVel,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+#endif
         cudaImprintLatticeFC<<<lbmdemaux.nfc/Nthread+1,Nthread>>>(pPaCe,pPaCeF,DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();
 
@@ -725,17 +743,22 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Final                " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
+#ifdef USE_IBB
+        cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
+#endif
 
         FLBM::cudaCollideSCDEM<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         real * tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
-        FLBM::cudaStream1<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.plbmaux);
+        FLBM::cudaStream1<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.plbmaux);
         tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
         //FLBM::cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
+#ifndef USE_IBB
         cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
+#endif
 
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();
@@ -828,12 +851,14 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 #ifdef USE_CUDA
 inline void Domain::UpLoadDevice(size_t Nc, bool first)
 {
+    lbmdemaux.Fconv = Fconv;
     if (first)
     {
         
         thrust::host_vector<real>  hOmeis         (LBMDOM.Ncells*LBMDOM.Nneigh);
         thrust::host_vector<real>  hGamma         (LBMDOM.Ncells); 
         thrust::host_vector<real>  hGammaf        (LBMDOM.Ncells); 
+        thrust::host_vector<int >  hInside        (LBMDOM.Ncells); 
     
         for (size_t nz=0;nz<LBMDOM.Ndim(2);nz++)
         {
@@ -843,8 +868,9 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                 for (size_t nx=0;nx<LBMDOM.Ndim(0);nx++)
                 {
                     size_t Nm = nx + ny*LBMDOM.Ndim(0) + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0);
-                    hGamma [Nm]        = LBMDOM.Gamma [nx][ny][nz];
-                    hGammaf[Nm]        = LBMDOM.Gammaf[nx][ny][nz];
+                    hGamma [Nm]        = LBMDOM.Gamma    [nx][ny][nz];
+                    hGammaf[Nm]        = LBMDOM.Gammaf   [nx][ny][nz];
+                    hInside[Nm]        = LBMDOM.DEMInside[nx][ny][nz];
                     for (size_t nn=0;nn<LBMDOM.Nneigh;nn++)
                     {
                         size_t Nn = nn + nx*LBMDOM.Nneigh + ny*LBMDOM.Ndim(0)*LBMDOM.Nneigh + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0)*LBMDOM.Nneigh; 
@@ -857,10 +883,12 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         bOmeis = hOmeis;
         bGamma = hGamma;
         bGammaf= hGammaf;
+        bInside= hInside;
 
         pOmeis = thrust::raw_pointer_cast(bOmeis .data());
         pGamma = thrust::raw_pointer_cast(bGamma .data());
         pGammaf= thrust::raw_pointer_cast(bGammaf.data());
+        pInside= thrust::raw_pointer_cast(bInside.data());
     }
     
     size_t   idvc = 0;
@@ -887,8 +915,8 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         Ifc[2*npc+1] = idfc; 
         Icc[2*npc+1] = icfc; 
     }
-    lbmdemaux.nvc = idvc;
-    lbmdemaux.nfc = idfc;
+    lbmdemaux.nvc   = idvc;
+    lbmdemaux.nfc   = idfc;
     thrust::host_vector<ParCellPairCU>   hPaCe (  lbmdemaux.nfc);
     thrust::host_vector<size_t>          hPaCeF(           icfc);
     thrust::host_vector<size_t>          hPaCeV(2*lbmdemaux.nvc);

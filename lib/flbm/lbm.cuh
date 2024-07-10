@@ -198,10 +198,12 @@ __global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, r
         real  tau   = lbmaux[0].Tau[0];
         real  gamma = Gamma[ic];
         real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
-        
+        //real Bn = gamma;
+
         real  NonEq[27];
         //real  Feq  [27];
         real  Q = 0.0;
+
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
             //real VdotC = dot(vel,lbmaux[0].C[k]);
@@ -223,8 +225,14 @@ __global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, r
             for (size_t k=0;k<lbmaux[0].Nneigh;k++)
             {
                 real Ome   = Omeis[ic*lbmaux[0].Nneigh + k];
+                #ifndef USE_IBB
                 real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
+                #else
+                //real noneq = (1.0 - gamma)*NonEq[k]/tau;
+                real noneq = NonEq[k]/tau;
+                #endif
                 Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);
+                //if((ic==555||ic==556||ic==557||ic==558)&&(k==1)) printf("ic %lu Ftk %g Fk %g iter %lu \n",ic,Ftemp[ic*lbmaux[0].Nneigh + k],F[ic*lbmaux[0].Nneigh + k],lbmaux[0].iter); 
                 if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
                 {
                     //real temp = F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]/tau - Fk);
@@ -650,10 +658,18 @@ __global__ void cudaApplyForcesSCMP(uint3 * pCellPairs, bool const * IsSolid, re
     
 }
 
-__global__ void cudaStream1(real * F, real * Ftemp, lbm_aux const * lbmaux)
+__global__ void cudaStream1(real * F, real * Ftemp, real3 * BForce, lbm_aux * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
+#ifdef USE_IBB
+    if (ic==0)
+    {
+        lbmaux[0].Time += lbmaux[0].dt;
+        lbmaux[0].iter++;
+    }
+    BForce[ic] = make_real3(0.0,0.0,0.0);
+#endif
     size_t icx = ic%lbmaux[0].Nx;
     size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
@@ -679,13 +695,13 @@ __global__ void cudaStream2(bool const * IsSolid, real * F, real * Ftemp, real3 
         lbmaux[0].Time += lbmaux[0].dt;
         lbmaux[0].iter++;
     }
+    BForce[ic] = make_real3(0.0,0.0,0.0);
     //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
     //{
         //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k];
     //}
     Rho   [ic] = 0.0;
     Vel   [ic] = make_real3(0.0,0.0,0.0);
-    BForce[ic] = make_real3(0.0,0.0,0.0);
     if (!IsSolid[ic])
     {
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)

@@ -171,6 +171,7 @@ public:
     double ****   Omeis;                       ///< An array for collision detection
     bool   ****   IsSolid;                     ///< An array of bools with an identifier to see if the cell is a solid cell
     bool   ***    Inside;                      ///< An array of bools with an identifier to check if the cell is inside a solid
+    int    ***    DEMInside;                   ///< An array of indexes of DEM particles signalign if the cell is inside a particle or not
     Vec3_t ****   Vel;                         ///< The fluid velocities
     Vec3_t ****   BForce;                      ///< Body Force for each cell
     double ****   Rho;                         ///< The fluid densities
@@ -779,10 +780,11 @@ inline void Domain::WriteXDMF_DEM(char const * FileKey)
             for (size_t li=0;li<Step;li++)
             for (size_t mi=0;mi<Step;mi++)
             {
-                rho    += (1.0-Gamma[n+ni][l+li][m+mi])*Rho    [j][n+ni][l+li][m+mi];
+                //rho    += (1.0-Gamma[n+ni][l+li][m+mi])*Rho    [j][n+ni][l+li][m+mi];
+                rho    += Rho    [j][n+ni][l+li][m+mi];
                 gamma  += Gamma[n+ni][l+li][m+mi];
-                vel    += (1.0-Gamma[n+ni][l+li][m+mi])*Vel    [j][n+ni][l+li][m+mi];
-                //vel    += Vel    [j][n+ni][l+li][m+mi];
+                //vel    += (1.0-Gamma[n+ni][l+li][m+mi])*Vel    [j][n+ni][l+li][m+mi];
+                vel    += Vel    [j][n+ni][l+li][m+mi];
             }
             rho  /= Step*Step*Step;
             gamma/= Step*Step*Step;
@@ -2210,7 +2212,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         real * tmp = pF;
         pF = pFtemp;
         pFtemp = tmp;
-        cudaStream1<<<Nl*Ncells/Nthread+1,Nthread>>>(pF,pFtemp,plbmaux);
+        cudaStream1<<<Nl*Ncells/Nthread+1,Nthread>>>(pF,pFtemp,pBForce,plbmaux);
         //cudaDeviceSynchronize();
 
         tmp = pF;
