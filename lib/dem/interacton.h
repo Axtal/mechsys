@@ -184,8 +184,21 @@ inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2)
     //double r2       = pow(P2->Props.V,1.0/3.0);
     //Kn              = (r1+r2)*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
     //Kt              = (r1+r2)*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+#ifdef USE_HERTZ
+    if (Pt1->Verts.Size()==1)
+    {
+        Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
+        Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
+    } 
+    else
+    {
+        Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+        Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+    }
+#else
     Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
     Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+#endif
     double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
     Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
     Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
@@ -498,11 +511,12 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     I1 = P1->Index;
     I2 = P2->Index;
     if (I1==I2) throw new Fatal("CInteractonSphere indexes of the particles are the same");
-    Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-    Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
     double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
     Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
     Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
+#ifndef USE_HERTZ
+    Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+    Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
     if (Gn < 0.0)
     {
         if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
@@ -511,6 +525,24 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     }
     Gn *= me;
     Gt *= me;
+#else
+    double Re  = ReducedValue(Pt1->Props.R,Pt2->Props.R);
+    double nu1 = 0.5*Pt1->Props.Kn/Pt1->Props.Kt-1.0;
+    double nu2 = 0.5*Pt2->Props.Kn/Pt2->Props.Kt-1.0;
+    double Ye  = 1.0/((1.0-nu1*nu1)/Pt1->Props.Kn + (1.0-nu2*nu2)/Pt2->Props.Kn);
+    double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/Pt1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/Pt2->Props.Kn);
+    Kn  = 4.0/3.0*sqrt(Re)*Ye;
+    Kt  = 8.0*sqrt(Re)*Ge;
+
+    if (Gn < 0.0)
+    {
+        double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
+        Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
+        Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+    }
+
+#endif
+
     //Mu   = 2*ReducedValue(Pt1->Props.Mu,Pt2->Props.Mu);
     if (Pt1->Props.Mu>1.0e-12&&Pt2->Props.Mu>1.0e-12)
     {
@@ -653,36 +685,7 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
         x2 = x2c- xf;
         Vec3_t vrel = -((P2->v-P1->v)+cross(t2,x2)-cross(t1,x1));
         Vec3_t vt = vrel - dot(n,vrel)*n;
-        
-        //Cohesion law
-        //if (cohesion)
-        //{
-            //if (delta>eps)
-            //{
-                //Fn  = Kn*delta*n;
-                //eps = delta;
-            //}
-            //else
-            //{
-                //double delta0 = (1.0-Kn/Bn)*eps;
-                //double deltam = (Bn-Kn)*eps/(Bn+Bt);
-                //if (delta>deltam)
-                //{
-                    //Fn  = Bn*(delta-delta0)*n;
-                //}
-                //else 
-                //{
-                    //deltam = delta;
-                    //eps    = (Bn+Bt)*delta/(Bn-Kn);
-                    //Fn     = -Bt*delta*n;
-                //}
-            //}
-        //}
-        //else 
-        //{
-            //Fn  = Kn*delta*n;
-        //}
-
+#ifndef USE_HERTZ 
         Fn  = Kn*delta*n;
         
         Fnet += Fn;
@@ -698,7 +701,7 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             dEfric += Kt*dot(Fdvv,vt)*dt;
         }
         Ftnet += Kt*Fdvv;
-        
+
         //Calculating the rolling resistance torque
         double Kr = beta*Kt;
         Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
@@ -716,10 +719,47 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
         Vec3_t Ft = -Fdr;
         
         Vec3_t F = Fn + Kt*Fdvv + Gn*dot(n,vrel)*n + Gt*vt;
+        dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
+#else
+        Fn  = Kn*sqrt(delta)*delta*n;
+
+        Fnet += Fn;
+        Fdvv += vt*dt;
+        Fdvv -= dot(Fdvv,n)*n;
+        Vec3_t tan = Fdvv;
+        if (norm(tan)>0.0) tan/=norm(tan);
+        if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
+        {
+             //Count a sliding contact
+            Nsc++;
+            Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
+            dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
+        }
+        Ftnet += Kt*sqrt(delta)*Fdvv;
+
+        //Calculating the rolling resistance torque
+        double Kr = beta*Kt*sqrt(delta);
+        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
+        Fdr += Kr*Vr*dt;
+        Fdr -= dot(Fdr,n)*n;
+        
+        tan = Fdr;
+        if (norm(tan)>0.0) tan/=norm(tan);
+        if (norm(Fdr)>eta*Mu*norm(Fn))
+        {
+            Fdr = eta*Mu*norm(Fn)*tan;
+            Nr++;
+        }
+
+        Vec3_t Ft = -Fdr;
+        
+        Vec3_t F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
+        dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
+#endif
+        
 
         F1   += -F;
         F2   +=  F;
-        dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
         //torque
         Vec3_t T, Tt;
         Tt = cross (x1,F) - P1->Props.R*cross(n,Ft);

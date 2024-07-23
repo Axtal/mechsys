@@ -780,11 +780,11 @@ inline void Domain::WriteXDMF_DEM(char const * FileKey)
             for (size_t li=0;li<Step;li++)
             for (size_t mi=0;mi<Step;mi++)
             {
-                //rho    += (1.0-Gamma[n+ni][l+li][m+mi])*Rho    [j][n+ni][l+li][m+mi];
-                rho    += Rho    [j][n+ni][l+li][m+mi];
+                rho    += (1.0-Gamma[n+ni][l+li][m+mi])*Rho    [j][n+ni][l+li][m+mi];
+                //rho    += Rho    [j][n+ni][l+li][m+mi];
                 gamma  += Gamma[n+ni][l+li][m+mi];
-                //vel    += (1.0-Gamma[n+ni][l+li][m+mi])*Vel    [j][n+ni][l+li][m+mi];
-                vel    += Vel    [j][n+ni][l+li][m+mi];
+                vel    += (1.0-Gamma[n+ni][l+li][m+mi])*Vel    [j][n+ni][l+li][m+mi];
+                //vel    += Vel    [j][n+ni][l+li][m+mi];
             }
             rho  /= Step*Step*Step;
             gamma/= Step*Step*Step;

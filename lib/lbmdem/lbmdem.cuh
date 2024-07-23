@@ -161,6 +161,8 @@ __global__ void cudaCheckOutsideVC(size_t const * PaCeV, DEM::ParticleCU * Par, 
     if (norm(B)>Par[ip].Dmax&&Inside[ice]==ip)
     {
         Inside[ice] = -ip-2;
+        //if (icx<100&&icy==100&&icz==100) printf("ice %lu iter %lu \n",ice,lbmaux[0].iter);
+        //printf("ice %lu iter %lu \n",ice,lbmaux[0].iter);
     }
 }
 
@@ -191,7 +193,7 @@ __global__ void cudaCheckInsideVC(size_t const * PaCeV, DEM::ParticleCU * Par, D
     }
 }
 
-__global__ void cudaRefill(real * F, real * Rho, real3 * Vel, int * Inside, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
+__global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real * F, real * Rho, real3 * Vel, int * Inside, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
 {
     size_t ice = threadIdx.x + blockIdx.x * blockDim.x;
     if (ice>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
@@ -203,47 +205,82 @@ __global__ void cudaRefill(real * F, real * Rho, real3 * Vel, int * Inside, DEM:
 
     if (Inside[ice]<=-2)
     {
-        Inside[ice] = -1;
         for (size_t k = 0; k < lbmaux[0].Nneigh ; k++)
         {
             F[ice*lbmaux[0].Nneigh + k] = 0.0;
         }
         size_t naem = 0;
-        for (size_t k = 0; k < lbmaux[0].Nneigh ; k++)
+        for (size_t k = 1; k < lbmaux[0].Nneigh ; k++)
         {
-            size_t inx = (size_t)((int)icx +     (int)lbmaux[0].C[k ].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
-            size_t iny = (size_t)((int)icy +     (int)lbmaux[0].C[k ].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
-            size_t inz = (size_t)((int)icz +     (int)lbmaux[0].C[k ].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
-            size_t imx = (size_t)((int)icx + 2.0*(int)lbmaux[0].C[k ].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
-            size_t imy = (size_t)((int)icy + 2.0*(int)lbmaux[0].C[k ].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
-            size_t imz = (size_t)((int)icz + 2.0*(int)lbmaux[0].C[k ].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
+            size_t inx = (size_t)((int)icx +   (int)lbmaux[0].C[k ].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
+            size_t iny = (size_t)((int)icy +   (int)lbmaux[0].C[k ].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
+            size_t inz = (size_t)((int)icz +   (int)lbmaux[0].C[k ].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
+            size_t imx = (size_t)((int)icx + 2*(int)lbmaux[0].C[k ].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
+            size_t imy = (size_t)((int)icy + 2*(int)lbmaux[0].C[k ].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
+            size_t imz = (size_t)((int)icz + 2*(int)lbmaux[0].C[k ].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
             size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny;
             size_t im  = imx + imy*lbmaux[0].Nx + imz*lbmaux[0].Nx*lbmaux[0].Ny;
 
-            if (Inside[in]>=0) continue;
-            if (Inside[im]>=0) im = in;
-
+            if (Inside[in]>=0||Inside[in]<=-2) continue;
+            if (Inside[im]>=0||Inside[im]<=-2) im = in;
+            real rhon = 0.0;
+            real rhom = 0.0;
             for (size_t kt = 0; kt < lbmaux[0].Nneigh ; kt++)
             {
                 F[ice*lbmaux[0].Nneigh + kt] += 2.0*F[in*lbmaux[0].Nneigh + kt] - F[im*lbmaux[0].Nneigh + kt];
+                rhon += F[in*lbmaux[0].Nneigh + kt];
+                rhom += F[im*lbmaux[0].Nneigh + kt];
             }
             naem++;
+            //if (ice==3740896&&lbmaux[0].iter==1)
+            //{
+                //printf("Rho %g %g in %lu im %lu k %lu \n",rhon,rhom,in,im,k);
+            //}
         }
+        if (naem==0)
+        {
+            int ip = -2-Inside[ice];
+            real3  C = lbmaux[0].dx*make_real3(real(icx),real(icy),real(icz));
+            real3  B;
+            real3  Pert = demaux[0].Per;
+            bool isfree = ((!Par[ip].vxf&&!Par[ip].vyf&&!Par[ip].vzf&&!Par[ip].wxf&&!Par[ip].wyf&&!Par[ip].wzf)||Par[ip].FixFree);
+            if (!isfree) Pert = make_real3(0.0,0.0,0.0);
+            DEM::BranchVec(DPar[ip].x,C,B,Pert);
+            real rho = Rho[ice];
+            real3 tmp;
+            Rotation(DPar[ip].w,DPar[ip].Q,tmp);
+            real3 VelP   = DPar[ip].v + cross(tmp,B);
+            for (size_t k = 1; k < lbmaux[0].Nneigh ; k++)
+            {
+                F[ice*lbmaux[0].Nneigh + k] = FeqFluid(k,rho,VelP,lbmaux);
+            }
+            naem = 1;
+        }
+
+        //if (ice==3740896&&lbmaux[0].iter==1)
+        //{
+            //printf("naem %lu \n",naem);
+        //}
+
         Rho[ice] = 0.0;
         Vel[ice] = make_real3(0.0,0.0,0.0);
         for (size_t k = 0; k < lbmaux[0].Nneigh ; k++)
         {
-            F[ice*lbmaux[0].Nneigh + k] = F[ice*lbmaux[0].Nneigh + k]/naem;
+            F[ice*lbmaux[0].Nneigh + k] = fabs(F[ice*lbmaux[0].Nneigh + k])/naem;
             Rho[ice] += F[ice*lbmaux[0].Nneigh + k];
             Vel[ice] = Vel[ice] + F[ice*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
         }
         Vel[ice] = lbmaux[0].Cs/Rho[ice]*Vel[ice];
-        //if (isnan(Rho[ice])) printf("ice %lu iter %lu \n",ice,lbmaux[0].iter);
+        //if (ice==3740896&&lbmaux[0].iter==1)
+        //{
+            //printf("Rho %g \n",Rho[ice]);
+        //}
+
     }
 }
 
 __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real const * Rho, real * Gamma, real * Omeis, real *
-        F, int const * Inside, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
+        F, int * Inside, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmdemaux[0].nvc) return;
@@ -262,7 +299,23 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     if (!isfree) Pert = make_real3(0.0,0.0,0.0);
     DEM::BranchVec(DPar[ip].x,C,B,Pert);
     Xs  = C-B;
-    if (norm(B)>Par[ip].Dmax+1.74*lbmaux[0].dx||Inside[ice]==ip) return;
+    if (norm(B)>Par[ip].Dmax+2.0*lbmaux[0].dx||Inside[ice]==ip) return;
+    if (Inside[ice]<=-2) Inside[ice] = -1;
+    //if (Inside[ice]==ip)
+    //{
+        //real3 tmp;
+        //Rotation(DPar[ip].w,DPar[ip].Q,tmp);
+        //real rho = Rho[ice];
+        //real3 VelP   = DPar[ip].v + cross(tmp,B);
+        //for (size_t k = 1; k < lbmaux[0].Nneigh ; k++)
+        //{
+            //real Fvpp    = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
+            //real Fvp     = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
+            //real Omega   = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
+            //Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
+        //}
+        //return;
+    //}
    
     real ld = lbmaux[0].dx;
     real Cs = lbmaux[0].Cs;
@@ -277,7 +330,6 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
         size_t iny = (size_t)((int)icy + (int)lbmaux[0].C[k ].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
         size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k ].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
         size_t ine = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny;
-        //if (ine==555) printf("ice %lu ine %lu k %lu ko %lu iter %lu \n",ice,ine,k,lbmaux[0].Op[k],lbmaux[0].iter);
         if(Inside[ine]!=ip) continue;
         real3   Cn = ld*make_real3(real(inx),real(iny),real(inz));
         real3   dC;
@@ -310,23 +362,15 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
         real3 Xw     = C + r*(dC) - Xs;
         real3 VelP   = DPar[ip].v + cross(tmp,Xw);
         
+        //MPM IBB
         F[ice*lbmaux[0].Nneigh + ko] = (r*F[ife*lbmaux[0].Nneigh + ko] + (1.0-r)*F[ice*lbmaux[0].Nneigh + k] 
                 + r*F[ine*lbmaux[0].Nneigh + k] + 6.0*rho*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[ko],VelP)/Cs)/(1.0+r);
 
-        //F[ine*lbmaux[0].Nneigh + ko] = (r*F[ife*lbmaux[0].Nneigh + ko] + (1.0-r)*F[ice*lbmaux[0].Nneigh + k] 
-                //+ r*F[ine*lbmaux[0].Nneigh + k] + 6.0*rho*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[ko],VelP)/Cs)/(1.0+r);
 
         //F[ine*lbmaux[0].Nneigh + k]  = F[ice*lbmaux[0].Nneigh + k];
 
         Flbm = Flbm + ld*ld*Cs*(F[ine*lbmaux[0].Nneigh + k]*(Cs*lbmaux[0].C[k]-VelP) - F[ice*lbmaux[0].Nneigh + ko]*(Cs*lbmaux[0].C[ko]-VelP));
-
-        //Flbm = Flbm + ld*ld*Cs*(F[ine*lbmaux[0].Nneigh + k]*(Cs*lbmaux[0].C[k]-VelP) - F[ine*lbmaux[0].Nneigh + ko]*(Cs*lbmaux[0].C[ko]-VelP));
-        //if (ice==4018299&&lbmaux[0].iter==0) printf("Fk %g r %g k %lu \n ix %lu iy %lu iz %lu \n Inside %i \n a %g b %g c %g \n ",F[ice*lbmaux[0].Nneigh +
-                //ko],r,k,icx,icy,icz,Inside[ice],a,b,c);
-
-        //if (icy==30&&icz==30&&icx>150&&lbmaux[0].iter==0) printf("ice %lu \n",ice);
-        //if (ice==560020&&lbmaux[0].iter==1) printf("Flbm %g %g %g k %lu \n Fs %g Fko %g \n",Flbm.x,Flbm.y,Flbm.z,k
-                //,F[ine*lbmaux[0].Nneigh + k],F[ice*lbmaux[0].Nneigh + ko]);
+        //Flbm = Flbm + ld*ld*Cs*(F[ine*lbmaux[0].Nneigh + k]*(Cs*lbmaux[0].C[k]) - F[ice*lbmaux[0].Nneigh + ko]*(Cs*lbmaux[0].C[ko]));
     }
 
     real3 Tlbm,Tt;
@@ -378,8 +422,11 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     Rotation(DPar[ip].w,DPar[ip].Q,tmp);
     real3 VelP   = DPar[ip].v + cross(tmp,B);
     real rho = Rho[ice];
+#ifndef USE_LADD
     real Bn  = (gamma*(Tau-0.5))/((1.0-gamma)+(Tau-0.5));
-    //real Bn  = gamma;
+#else
+    real Bn  = floor(gamma);
+#endif
     size_t ncells = lbmaux[0].Nneigh;
     real3 Flbm = make_real3(0.0,0.0,0.0);
     for (size_t k=0;k<ncells;k++)

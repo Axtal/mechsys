@@ -32,6 +32,8 @@ OPTION(A_MAKE_CHECK_OVERLAP  "Check for maximun overlapping in DEM simulations" 
 OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"                              ON )
 OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"                                OFF)
 OPTION(A_MAKE_USE_IBB        "Use Immersed Bounce Back instead of Gamma Method for DEM-LBM simulations"     OFF)
+OPTION(A_MAKE_USE_LADD       "Use Ladd instead of Gamma Method for DEM-LBM simulations"                     OFF)
+OPTION(A_MAKE_USE_HERTZ      "Use Hertz law instead of linear dashpot for DEM simulations"                  OFF)
                                                                                    
 # Options                                                                          
 OPTION(A_USE_OMP            "Use OpenMP  ?"                                        ON )
@@ -105,6 +107,14 @@ ENDIF(A_MAKE_IGNORE_SOLID)
 IF(A_MAKE_USE_IBB)
     ADD_DEFINITIONS (-DUSE_IBB)
 ENDIF(A_MAKE_USE_IBB)
+
+IF(A_MAKE_USE_LADD)
+    ADD_DEFINITIONS (-DUSE_LADD)
+ENDIF(A_MAKE_USE_LADD)
+
+IF(A_MAKE_USE_HERTZ)
+    ADD_DEFINITIONS (-DUSE_HERTZ)
+ENDIF(A_MAKE_USE_HERTZ)
 
 ### FIND DEPENDENCIES AND SET FLAGS AND LIBRARIES #######################################################
 

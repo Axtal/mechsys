@@ -1,9 +1,9 @@
-Lx = 4.2;
-Ly = 4.2;
+Lx = 6.2;
+Ly = 6.2;
 R  = 0.1*0.018;
-totparvol = 50.9372;
+totparvol = 128.455;
 
-df = dir("*tper_b_0*.h5");
+df = dir("*tper_hertz_b_0*.h5");
 filename = df(end).name;
 P = h5read(filename,'/Position');
 Px= P(1:3:end);
@@ -18,7 +18,7 @@ figure(1);
 plot(Vx,Pz,'o');
 hold on;
  
-db = dir("*tper_b_bf_0*.h5");
+db = dir("*tper_hertz_b_bf_0*.h5");
 Mu = [];
 P  = [];
 Phi= [];

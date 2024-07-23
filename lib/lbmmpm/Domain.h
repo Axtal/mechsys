@@ -369,7 +369,7 @@ void Domain::ImprintLattice()
                         throw new Fatal("Domain::Imprintlattice ibb gave negative value");
                     }
 
-                    LBMDOM.F[0][nxs][nys][nzs][k] = LBMDOM.F[0][nx][ny][nz][k];
+                    //LBMDOM.F[0][nxs][nys][nzs][k] = LBMDOM.F[0][nx][ny][nz][k];
 
                     Vec3_t F = ld*ld*Cs*((Cs*LBMDOM.C[k]-vw)*LBMDOM.F[0][nxs][nys][nzs][k]-(Cs*LBMDOM.C[ko]-vw)*LBMDOM.F[0][nx][ny][nz][ko]-2.0*rho*LBMDOM.W[k]*Cs*LBMDOM.C[k]);
                     //Vec3_t F = ld*ld*Cs*((Cs*LBMDOM.C[k]-vw)*LBMDOM.F[0][nxs][nys][nzs][k]-(Cs*LBMDOM.C[ko]-vw)*LBMDOM.F[0][nx][ny][nz][ko]);

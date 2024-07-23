@@ -462,7 +462,11 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             if (Particles[i]->Dmax     > MaxDmax) MaxDmax = Particles[i]->Dmax;
             if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
             if (Particles[i]->Dmax     < MinDmax||(MinDmax<0.0)) MinDmax = Particles[i]->Dmax;
+#ifndef USE_HERTZ
             if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m;
+#else
+            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
+#endif
             FreePar.Push(i);
         }
         else NoFreePar.Push(i);
@@ -2546,6 +2550,7 @@ inline double Domain::CalcEnergy (double & Ekin, double & Epot)
 
 inline double Domain::CriticalDt ()
 {
+#ifndef USE_HERTZ
     double MaxKn   =  0.0;
     double MaxBn   =  0.0;
     double MinMass = -1.0;
@@ -2564,6 +2569,20 @@ inline double Domain::CriticalDt ()
     }
 
     return 0.1*sqrt(MinMass/(MaxKn+MaxBn));
+#else
+    double MaxKn   =  0.0;
+    double MinMass = -1.0;
+    for (size_t i=0; i<Particles.Size(); i++) 
+    { 
+        if (Particles[i]->IsFree())
+        {
+            if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
+            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
+        }
+    }
+
+    return 0.1*sqrt(MinMass/MaxKn);
+#endif
 }
 
 inline void Domain::EnergyOutput (size_t IdxOut, std::ostream & OF)

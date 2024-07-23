@@ -2,7 +2,6 @@
  * MechSys - Open Library for Mechanical Systems                        *
  * Copyright (C) 2020 Sergio Galindo                                    *
  * Copyright (C) 2020 Pei Zhang
- * Copyright (C) 2020 Siqi Sun                                         *
  *                                                                      *
  * This program is free software: you can redistribute it and/or modify *
  * it under the terms of the GNU General Public License as published by *
@@ -96,24 +95,25 @@ void Report (LBMMPM::Domain & dom, void * UD)
             force = force + dom.MPMDOM.Corners[ip]->h(0);
         }
         double CD = force/(0.5*dat.rhof*vel*vel*dat.Ly*dat.Lz*1.2090);
-        dat.oss_ss1 << Util::_10_6 << dom.Time << Util::_8s << Re << Util::_8s << CD << Util::_8s << CD1 << "\n";
+        dat.oss_ss1 << Util::_10_6 << dom.Time << Util::_8s << Re << Util::_8s << CD << Util::_8s << CD1 << std::endl;
     }
 }
 
 int main(int argc, char **argv) try
 {
     //Number of cores
-    if (argc<2) throw new Fatal("This program must be called with one argument: the name of the data input file without the '.inp' suffix.\nExample:\t %s filekey\n",argv[0]);
+    //if (argc<2) throw new Fatal("This program must be called with one argument: the name of the data input file without the '.inp' suffix.\nExample:\t %s filekey\n",argv[0]);
     size_t Nproc = 1; 
-    if (argc>=3) Nproc=atoi(argv[2]);
-    String filekey  (argv[1]);
-    String filename (filekey+".inp");
-    if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
-    ifstream infile(filename.CStr());
-    double bforce;
-    {
-        infile >> bforce;           infile.ignore(200,'\n');
-    }
+    if (argc>=2) Nproc=atoi(argv[1]);
+    //String filekey  (argv[1]);
+    //String filename (filekey+".inp");
+    //if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
+    //ifstream infile(filename.CStr());
+    //double bforce;
+    //{
+        //infile >> bforce;           infile.ignore(200,'\n');
+    //}
+    double bforce = 2.5e-1;
     size_t nx = 241;
     size_t ny = 61;
     size_t nz = 61;

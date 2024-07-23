@@ -2,7 +2,6 @@
  * MechSys - Open Library for Mechanical Systems                        *
  * Copyright (C) 2020 Sergio Galindo                                    *
  * Copyright (C) 2020 Pei Zhang
- * Copyright (C) 2020 Siqi Sun                                         *
  *                                                                      *
  * This program is free software: you can redistribute it and/or modify *
  * it under the terms of the GNU General Public License as published by *
@@ -138,12 +137,12 @@ void Report (LBMMPM::Domain & dom, void * UD)
         String fs1;
         fs1.Printf("tlbmmpm01position.res");
         dat.oss_ss1.open(fs1.CStr());
-        dat.oss_ss1 << Util::_10_6 << "X-position" << Util::_8s << "Z-position" << "\n";
+        dat.oss_ss1 << Util::_10_6 << "X-position" << Util::_8s << "Z-position" << std::endl;
 
         String fs2;
         fs2.Printf("tlbmmpm01time.res");
         dat.oss_ss2.open(fs2.CStr());
-        dat.oss_ss2 << Util::_10_6 << "Time" << Util::_8s << "Re" << Util::_8s << "CD" << Util::_8s << "deflection-x"<< Util::_8s << "deflection-z"<< "\n";
+        dat.oss_ss2 << Util::_10_6 << "Time" << Util::_8s << "Re" << Util::_8s << "CD" << Util::_8s << "deflection-x"<< Util::_8s << "deflection-z" << std::endl;
     }
 
     if (dom.idx_out==99)
@@ -153,7 +152,7 @@ void Report (LBMMPM::Domain & dom, void * UD)
         {
             x1 = (dat.middlePar[ip]->x(0)-0.15)/dat.Lz;
             z1 = dat.middlePar[ip]->x(2)/dat.Lz;
-            dat.oss_ss1 << Util::_10_6 << x1 << Util::_8s << z1 << "\n";
+            dat.oss_ss1 << Util::_10_6 << x1 << Util::_8s << z1 << std::endl;
         } 
     }
 
@@ -186,7 +185,7 @@ void Report (LBMMPM::Domain & dom, void * UD)
         z /= dat.EndBeamPar.Size();
         xf = x/dat.Lz;
         zf = z/dat.Lz;
-        dat.oss_ss2 << Util::_10_6 << dom.Time << Util::_8s << Re << Util::_8s << CD << Util::_8s << xf << Util::_8s << zf << "\n";
+        dat.oss_ss2 << Util::_10_6 << dom.Time << Util::_8s << Re << Util::_8s << CD << Util::_8s << xf << Util::_8s << zf << std::endl;
     }           
 }
 

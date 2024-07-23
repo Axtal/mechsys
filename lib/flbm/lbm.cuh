@@ -197,8 +197,12 @@ __global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, r
         real  rho   = Rho[ic];
         real  tau   = lbmaux[0].Tau[0];
         real  gamma = Gamma[ic];
+#ifndef USE_LADD
         real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
         //real Bn = gamma;
+#else
+        real Bn = floor(gamma);
+#endif
 
         real  NonEq[27];
         //real  Feq  [27];
@@ -228,7 +232,6 @@ __global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, r
                 #ifndef USE_IBB
                 real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
                 #else
-                //real noneq = (1.0 - gamma)*NonEq[k]/tau;
                 real noneq = NonEq[k]/tau;
                 #endif
                 Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);

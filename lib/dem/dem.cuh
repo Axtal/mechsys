@@ -89,6 +89,7 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
         real3 vrel = (DPar[i1].v+cross(t1,x1))-(DPar[i2].v+cross(t2,x2));
         real3 vt   = vrel - dotreal3(n,vrel)*n;
 
+#ifndef USE_HERTZ
         DIntVV[ic].Fn  = Int[id].Kn*delta*n;
         DIntVV[ic].Ft  = DIntVV[ic].Ft + (Int[id].Kt*demaux[0].dt)*vt;
         DIntVV[ic].Ft  = DIntVV[ic].Ft - dotreal3(DIntVV[ic].Ft,n)*n;
@@ -112,6 +113,32 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
         }
         
         DIntVV[ic].F = DIntVV[ic].Fn + DIntVV[ic].Ft + Int[id].Gn*dotreal3(n,vrel)*n + Int[id].Gt*vt;
+#else
+        real sqrtdelta = sqrt(delta);
+        DIntVV[ic].Fn  = Int[id].Kn*sqrtdelta*delta*n;
+        DIntVV[ic].Ft  = DIntVV[ic].Ft + (Int[id].Kt*sqrtdelta*demaux[0].dt)*vt;
+        DIntVV[ic].Ft  = DIntVV[ic].Ft - dotreal3(DIntVV[ic].Ft,n)*n;
+
+        real3 tan = DIntVV[ic].Ft;
+        if (norm(tan)>0.0) tan = tan/norm(tan);
+        if (norm(DIntVV[ic].Ft)>Int[id].Mu*norm(DIntVV[ic].Fn))
+        {
+            DIntVV[ic].Ft = Int[id].Mu*norm(DIntVV[ic].Fn)*tan;
+        }
+
+        real3 vr = r1*r2*cross((t1 - t2),n)/(r1+r2);
+        DIntVV[ic].Fr  = DIntVV[ic].Fr + (Int[id].Beta*Int[id].Kt*sqrtdelta*demaux[0].dt)*vr;
+        DIntVV[ic].Fr  = DIntVV[ic].Fr - dotreal3(DIntVV[ic].Fr,n)*n;
+
+        tan = DIntVV[ic].Fr;
+        if (norm(tan)>0.0) tan = tan/norm(tan);
+        if (norm(DIntVV[ic].Fr)>Int[id].Eta*Int[id].Mu*norm(DIntVV[ic].Fn))
+        {
+            DIntVV[ic].Fr = Int[id].Eta*Int[id].Mu*norm(DIntVV[ic].Fn)*tan;
+        }
+        
+        DIntVV[ic].F = DIntVV[ic].Fn + DIntVV[ic].Ft + Int[id].Gn*sqrt(sqrtdelta)*dotreal3(n,vrel)*n + Int[id].Gt*sqrt(sqrtdelta)*vt;
+#endif
 
         real3 T1,T2,T, Tt;
         Tt = cross (x1,DIntVV[ic].F) + r1*cross(n,DIntVV[ic].Fr);

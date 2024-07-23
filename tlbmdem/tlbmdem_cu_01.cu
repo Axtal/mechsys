@@ -99,8 +99,8 @@ int main(int argc, char **argv) try
         
     double nu = 1.0;
     size_t nx = 301;
-    size_t ny = 121;
-    size_t nz = 121;
+    size_t ny = 61;
+    size_t nz = 61;
     double dx = 0.4;
     double dt = 1.6e-2;
     double R  = 3.6;
@@ -125,7 +125,7 @@ int main(int argc, char **argv) try
         dom.LBMDOM.Initialize(0,idx,1.0/*rho*/,v);
     }   
 
-    real3 acc = make_real3(1.5e-2,0.0,0.0);
+    real3 acc = make_real3(3.0e-2,0.0,0.0);
     cudaMalloc(&dat.pacc, sizeof(real3));
     cudaMemcpy(dat.pacc, &acc, sizeof(real3), cudaMemcpyHostToDevice);
 

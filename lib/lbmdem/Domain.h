@@ -701,7 +701,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 #else
         cudaCheckOutsideVC  <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
         cudaCheckInsideVC   <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-        cudaRefill          <<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pF,LBMDOM.pRho,LBMDOM.pVel,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
+        cudaRefill          <<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pF,LBMDOM.pRho,LBMDOM.pVel,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
         cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
 #endif
         cudaImprintLatticeFC<<<lbmdemaux.nfc/Nthread+1,Nthread>>>(pPaCe,pPaCeF,DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);

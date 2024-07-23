@@ -16,8 +16,8 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>  #
 ########################################################################
 
+CMAKE_MINIMUM_REQUIRED (VERSION 3.5)
 PROJECT                (MECHSYS)
-CMAKE_MINIMUM_REQUIRED (VERSION 3.2)
 ENABLE_TESTING         ()
 
 # Features                                                                         
