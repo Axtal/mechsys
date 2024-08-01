@@ -535,7 +535,7 @@ __global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, InteractonCU cons
     if (ic<demaux[0].nparts)
     {
         DPar[ic].F    = Par[ic].Ff;
-        DPar[ic].Flbm = make_real3(0.0,0.0,0.0);
+        DPar[ic].Flbm = Par[ic].Flbmf;
         Par [ic].T    = Par[ic].Tf;
     }
     else if (ic<demaux[0].nparts+demaux[0].ncoint)

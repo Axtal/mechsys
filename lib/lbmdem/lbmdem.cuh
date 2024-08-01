@@ -132,10 +132,10 @@ __global__ void cudaReset(bool const * IsSolid, real * Gammaf, real * Gamma, rea
     //if (ic==484) printf("Gamma %g Gammaf %g iter %lu \n",Gamma[ic],Gammaf[ic], lbmaux[0].iter);
     if (IsSolid[ic])  Gamma[ic] = 1.0;
     else              Gamma[ic] = Gammaf[ic];
-    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-    {
-        Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
-    }
+    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    //{
+        //Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
+    //}
 }
 
 #ifdef USE_IBB
@@ -573,6 +573,7 @@ __global__ void cudaStream2(bool const * IsSolid, real * Gamma, real * Omeis, re
     {
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
+            Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
             Rho[ic] += F[ic*lbmaux[0].Nneigh + k];
             Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
         }

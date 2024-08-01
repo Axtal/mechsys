@@ -131,6 +131,7 @@ public:
     Vec3_t          F;               ///< Force over the particle
     Vec3_t          Flbm;            ///< Force over the particle by the lbm fluid (hydraulic force)
     Vec3_t          Ff;              ///< Fixed Force over the particle
+    Vec3_t          Flbmf;           ///< Force over the particle by the lbm fluid fixed
     Vec3_t          T;               ///< Torque over the particle
     Vec3_t          Tf;              ///< Fixed Torque over the particle
     Vec3_t          I;               ///< Vector containing the principal components of the inertia tensor
@@ -270,6 +271,7 @@ inline void Particle::init_default_values(int tag, double r, double rho)
     Flbm   = 0.0,0.0,0.0;
     T      = 0.0,0.0,0.0;
     Ff     = 0.0,0.0,0.0;
+    Flbmf  = 0.0,0.0,0.0;
     Tf     = 0.0,0.0,0.0;
 }
 
@@ -1198,6 +1200,7 @@ struct ParticleCU
     real           m;                                               ///< Mass of particle
     real           Dmax;                                            ///< Maximun Diameter
     real3          Ff;                                              ///< Fixed Force over the particle
+    real3          Flbmf;                                           ///< Fixed Force over the particle by lbm fluid
     real3          T;                                               ///< Torque over the particle
     real3          Tf;                                              ///< Fixed Torque over the particle
     real3          I;                                               ///< Vector containing the principal components of the inertia tensor
@@ -1242,6 +1245,9 @@ __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM
     Pcu.Ff.x            = Par.Ff(0);
     Pcu.Ff.y            = Par.Ff(1);
     Pcu.Ff.z            = Par.Ff(2);
+    Pcu.Flbmf.x         = Par.Flbmf(0);
+    Pcu.Flbmf.y         = Par.Flbmf(1);
+    Pcu.Flbmf.z         = Par.Flbmf(2);
     Pcu.T.x             = Par.T(0);
     Pcu.T.y             = Par.T(1);
     Pcu.T.z             = Par.T(2);
