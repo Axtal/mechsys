@@ -41,7 +41,7 @@ int main(int argc, char **argv) try
 
     FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,1), 1.0, 1.0, PhaseFieldIce);
 
-    Dom.rho[0] = 0.8;
+    Dom.rho[0] = 0.5;
     Dom.rho[1] = 1.0;
     Dom.rho[2] = 1.0;
     Dom.cap[0] = 1.0;
@@ -51,26 +51,28 @@ int main(int argc, char **argv) try
     Dom.kap[1] = 0.1666;
     Dom.kap[2] = 0.1666;
     Dom.thick  = 5.0;
-    Dom.sigma  = 1.0;
+    Dom.sigma  = 0.1;
     Dom.Ts     = 0.5;
     Dom.Tl     = 1.5;
     Dom.L      = 1.0;
 
     double obsX = nx/2, obsY = ny/2;
     double Rext = nx/10;
-    double Rint = nx/20;
+    double Rint = nx/10;
     double Hi   = 0.3;
+    //double Hi   = 3.0;
     double Hl   = 3.0;
 
 
 	for (size_t i=0; i<nx; ++i)
 	for (size_t j=0; j<ny; ++j)
     {
-        //double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
-        double r     = sqrt(pow((int)(j)-obsY,2.0));
+        double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
+        //double r     = sqrt(pow((int)(j)-obsY,2.0));
 
         double smear = 0.5*(1.0-tanh(2.0*(r-Rext)/Dom.thick));
-        double pre   = 1.0;
+        //double pre   = 1.0;
+        double pre   = 1.0*smear + (1.0-Dom.sigma/Rext)*(1.0-smear);
         double phi   = smear;
         smear        = 0.5*(1.0-tanh(2.0*(r-Rint)/Dom.thick));
         double H     = smear*Hi + (1.0-smear)*Hl;
@@ -79,7 +81,7 @@ int main(int argc, char **argv) try
 
     //Dom.WriteXDMF("tclbm07");        
 
-    Dom.Solve(1.0e4,1.0e2,NULL,NULL,"tclbm07",true,1);
+    Dom.Solve(1.0e5,1.0e3,NULL,NULL,"tclbm07",true,1);
 
 
     return 0;
