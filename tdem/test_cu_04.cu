@@ -254,6 +254,18 @@ int main(int argc, char **argv) try
     if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
     ifstream infile(filename.CStr());
     
+    //-----------
+    // select contact model for `CInteracton`
+    DEM::CInteracton_PointerToContactFunction = &DEM::CInteracton_UseLinearContact;
+    DEM::CInteractonSphere_PointerToContactFunction = &DEM::CInteractonSphere_UseLinearContact;
+    DEM::CInteracton_CalcForce_PointerToContactFunction = &DEM::CInteractonSphere_CalcForce_UseLinearContact;
+    cudaMemcpyFromSymbol(&DEM::deviceFunction_inside_CalcForceVV, DEM::devFuncPtrLinearContact, sizeof(DEM::Device_CalcForceVV_ContactPointer));
+
+    // DEM::CInteracton_PointerToContactFunction = &DEM::CInteracton_UseHertzContact;
+    // DEM::CInteractonSphere_PointerToContactFunction = &DEM::CInteractonSphere_UseHertzContact;
+    // DEM::CInteracton_CalcForce_PointerToContactFunction = &DEM::CInteractonSphere_CalcForce_UseHertzContact;
+    // cudaMemcpyFromSymbol(&DEM::deviceFunction_inside_CalcForceVV, DEM::devFuncPtrHertzContact, sizeof(DEM::Device_CalcForceVV_ContactPointer));
+
     double verlet;      // Verlet distance for optimization
     String ptype;       // Particle type 
     String test;        // Particle type 

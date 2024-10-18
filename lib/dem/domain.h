@@ -581,7 +581,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         Reset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux);
         //cudaDeviceSynchronize();
         //Calculate forces
-        CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons,pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux);
+        CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons,pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, deviceFunction_inside_CalcForceVV);
         //std::cout << "2" << std::endl;
         //cudaDeviceSynchronize();
         CalcForceEE<<<demaux.neeint/Nthread+1,Nthread>>>(pEdgesCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux);

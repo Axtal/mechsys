@@ -213,7 +213,16 @@ int main(int argc, char **argv) try
     String filename (filekey+".inp");
     if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
     ifstream infile(filename.CStr());
-    
+
+    // select contact model for `CInteracton`
+    DEM::CInteracton_PointerToContactFunction = &DEM::CInteracton_UseLinearContact;
+    DEM::CInteractonSphere_PointerToContactFunction = &DEM::CInteractonSphere_UseLinearContact;
+    DEM::CInteracton_CalcForce_PointerToContactFunction = &DEM::CInteractonSphere_CalcForce_UseLinearContact;
+
+    // DEM::CInteracton_PointerToContactFunction = &DEM::CInteracton_UseHertzContact;
+    // DEM::CInteractonSphere_PointerToContactFunction = &DEM::CInteractonSphere_UseHertzContact;
+    // DEM::CInteracton_CalcForce_PointerToContactFunction = &DEM::CInteractonSphere_CalcForce_UseHertzContact;
+
     double verlet;      // Verlet distance for optimization
     String ptype;       // Particle type 
     String test;        // Particle type 

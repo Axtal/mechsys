@@ -136,6 +136,7 @@ public:
 
 };
 
+
 class BInteracton: public Interacton // Interacton for cohesion
 {
 public:
@@ -168,6 +169,75 @@ public:
 
 };
 
+
+//--------------------------
+//--------------------------
+//--------------------------
+//-------------pointer to CInteracton contact
+inline std::pair<double, double> CInteracton_UseHertzContact(Particle *Pt1, Particle *Pt2)
+{
+    if (Pt1->Verts.Size() == 1)
+        return std::make_pair(ReducedValue(Pt1->Props.Kn, Pt2->Props.Kn) * Pt1->Props.R, ReducedValue(Pt1->Props.Kt, Pt2->Props.Kt) * Pt1->Props.R);
+    else
+        return std::make_pair(ReducedValue(Pt1->Props.Kn, Pt2->Props.Kn),
+                              ReducedValue(Pt1->Props.Kt, Pt2->Props.Kt));
+};
+inline std::pair<double, double> CInteracton_UseLinearContact(Particle *Pt1, Particle *Pt2)
+{
+    return std::make_pair(ReducedValue(Pt1->Props.Kn, Pt2->Props.Kn),
+                          ReducedValue(Pt1->Props.Kt, Pt2->Props.Kt));
+}
+std::pair<double, double> (*CInteracton_PointerToContactFunction)(Particle *Pt1, Particle *Pt2) = nullptr;
+
+//-------------pointer to CInteractonSphere contact
+inline std::pair<std::pair<double, double>, std::pair<double, double>> CInteractonSphere_UseHertzContact(Particle *Pt1, Particle *Pt2)
+{
+    double me = ReducedValue(Pt1->Props.m, Pt2->Props.m);
+    double Gn = 2 * ReducedValue(Pt1->Props.Gn, Pt2->Props.Gn);
+    double Gt = 2 * ReducedValue(Pt1->Props.Gt, Pt2->Props.Gt);
+
+    double Re = ReducedValue(Pt1->Props.R, Pt2->Props.R);
+    double nu1 = 0.5 * Pt1->Props.Kn / Pt1->Props.Kt - 1.0;
+    double nu2 = 0.5 * Pt2->Props.Kn / Pt2->Props.Kt - 1.0;
+    double Ye = 1.0 / ((1.0 - nu1 * nu1) / Pt1->Props.Kn + (1.0 - nu2 * nu2) / Pt2->Props.Kn);
+    double Ge = 1.0 / (2.0 * (2.0 - nu1) * (1.0 + nu1) / Pt1->Props.Kn + 2.0 * (2.0 - nu2) * (1.0 + nu2) / Pt2->Props.Kn);
+    double Kn = 4.0 / 3.0 * sqrt(Re) * Ye;
+    double Kt = 8.0 * sqrt(Re) * Ge;
+
+    if (Gn < 0.0)
+    {
+        double b = sqrt(pow(log(-Gn), 2.0) / (M_PI * M_PI + pow(log(-Gn), 2.0)));
+        Gn = 2.0 * sqrt(5.0 / 6.0) * b * sqrt(me * 2.0 * Ye * sqrt(Re));
+        Gt = 2.0 * sqrt(5.0 / 6.0) * b * sqrt(me * 8.0 * Ge * sqrt(Re));
+    }
+
+    return std::make_pair(std::make_pair(Kn, Kt), std::make_pair(Gn, Gt));
+}
+inline std::pair<std::pair<double, double>, std::pair<double, double>> CInteractonSphere_UseLinearContact(Particle *Pt1, Particle *Pt2)
+{
+    double me = ReducedValue(Pt1->Props.m, Pt2->Props.m);
+    double Gn = 2 * ReducedValue(Pt1->Props.Gn, Pt2->Props.Gn);
+    double Gt = 2 * ReducedValue(Pt1->Props.Gt, Pt2->Props.Gt);
+
+    double Kn = 2 * ReducedValue(Pt1->Props.Kn, Pt2->Props.Kn);
+    double Kt = 2 * ReducedValue(Pt1->Props.Kt, Pt2->Props.Kt);
+    if (Gn < 0.0)
+    {
+        if (fabs(Gn) > 1.0)
+            throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
+        Gn = 2.0 * sqrt((pow(log(-Gn), 2.0) * (Kn / me)) / (M_PI * M_PI + pow(log(-Gn), 2.0)));
+        Gt = 0.0;
+    }
+    Gn *= me;
+    Gt *= me;
+    return std::make_pair(std::make_pair(Kn, Kt), std::make_pair(Gn, Gt));
+};
+std::pair<std::pair<double, double>, std::pair<double, double>> (*CInteractonSphere_PointerToContactFunction)(Particle *Pt1, Particle *Pt2) = nullptr;
+
+//-----------------------
+//-----------------------
+//-----------------------
+
 /////////////////////////////////////////////////////////////////////////////////////////// Implementation /////
 
 // Collision interacton
@@ -184,21 +254,31 @@ inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2)
     //double r2       = pow(P2->Props.V,1.0/3.0);
     //Kn              = (r1+r2)*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
     //Kt              = (r1+r2)*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-#ifdef USE_HERTZ
-    if (Pt1->Verts.Size()==1)
+    // {
+    // #ifdef USE_HERTZ
+    //     if (Pt1->Verts.Size()==1)
+    //     {
+    //         Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
+    //         Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
+    //     } 
+    //     else
+    //     {
+    //         Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+    //         Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+    //     }
+    // #else
+    //     Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+    //     Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+    // #endif
+    // }
+    if (CInteracton_PointerToContactFunction)
     {
-        Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
-        Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
-    } 
-    else
-    {
-        Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-        Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+        std::pair<double, double> tmpKnKt = (*CInteracton_PointerToContactFunction)(Pt1, Pt2);
+        this->Kn = tmpKnKt.first, this->Kt = tmpKnKt.second;
     }
-#else
-    Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-    Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-#endif
+    else
+        throw new Fatal("The global pointer `CInteracton_PointerToContactFunction` is not specified");
+
     double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
     Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
     Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
@@ -511,37 +591,46 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     I1 = P1->Index;
     I2 = P2->Index;
     if (I1==I2) throw new Fatal("CInteractonSphere indexes of the particles are the same");
-    double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
-    Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
-    Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
-#ifndef USE_HERTZ
-    Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-    Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-    if (Gn < 0.0)
-    {
-        if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
-        Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-        Gt = 0.0;
-    }
-    Gn *= me;
-    Gt *= me;
-#else
-    double Re  = ReducedValue(Pt1->Props.R,Pt2->Props.R);
-    double nu1 = 0.5*Pt1->Props.Kn/Pt1->Props.Kt-1.0;
-    double nu2 = 0.5*Pt2->Props.Kn/Pt2->Props.Kt-1.0;
-    double Ye  = 1.0/((1.0-nu1*nu1)/Pt1->Props.Kn + (1.0-nu2*nu2)/Pt2->Props.Kn);
-    double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/Pt1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/Pt2->Props.Kn);
-    Kn  = 4.0/3.0*sqrt(Re)*Ye;
-    Kt  = 8.0*sqrt(Re)*Ge;
 
-    if (Gn < 0.0)
+    if (CInteractonSphere_PointerToContactFunction)
     {
-        double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
-        Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
-        Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+        std::pair<std::pair<double, double>, std::pair<double, double>> tmpKnKt = (*CInteractonSphere_PointerToContactFunction)(Pt1, Pt2);
+        this->Kn = tmpKnKt.first.first, this->Kt = tmpKnKt.first.second;
+        this->Gn = tmpKnKt.second.first, this->Gt = tmpKnKt.second.second;
     }
+    else
+        throw new Fatal("The global pointer `CInteractonSphere_PointerToContactFunction` is not specified");
 
-#endif
+    // double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
+    // Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
+    // Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
+    // #ifndef USE_HERTZ
+    //     Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+    //     Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+    //     if (Gn < 0.0)
+    //     {
+    //         if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
+    //         Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
+    //         Gt = 0.0;
+    //     }
+    //     Gn *= me;
+    //     Gt *= me;
+    // #else
+    //     double Re  = ReducedValue(Pt1->Props.R,Pt2->Props.R);
+    //     double nu1 = 0.5*Pt1->Props.Kn/Pt1->Props.Kt-1.0;
+    //     double nu2 = 0.5*Pt2->Props.Kn/Pt2->Props.Kt-1.0;
+    //     double Ye  = 1.0/((1.0-nu1*nu1)/Pt1->Props.Kn + (1.0-nu2*nu2)/Pt2->Props.Kn);
+    //     double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/Pt1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/Pt2->Props.Kn);
+    //     Kn  = 4.0/3.0*sqrt(Re)*Ye;
+    //     Kt  = 8.0*sqrt(Re)*Ge;
+    // 
+    //     if (Gn < 0.0)
+    //     {
+    //         double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
+    //         Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
+    //         Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+    //     }
+    //#endif
 
     //Mu   = 2*ReducedValue(Pt1->Props.Mu,Pt2->Props.Mu);
     if (Pt1->Props.Mu>1.0e-12&&Pt2->Props.Mu>1.0e-12)
@@ -584,207 +673,479 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     CalcForce(0.0);
 }
 
-inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t const iter)
+//-------------pointer to CInteractonSphere_CalcForce contact
+inline bool CInteractonSphere_CalcForce_UseLinearContact(CInteractonSphere *obj,
+                                                         double dt,
+                                                         Vec3_t const &Per,
+                                                         size_t const iter)
 {
-    Epot   = 0.0;
-    dEvis  = 0.0;
-    dEfric = 0.0;
-    Nc     = 0;
-    Nsc    = 0;
-    Nr     = 0;
-    Fnet   = OrthoSys::O;
-    Ftnet  = OrthoSys::O;
-    //Xc     = OrthoSys::O;
-    F1     = OrthoSys::O;
-    F2     = OrthoSys::O;
-    T1     = OrthoSys::O;
-    T2     = OrthoSys::O;
+    obj->Epot = 0.0;
+    obj->dEvis = 0.0;
+    obj->dEfric = 0.0;
+    obj->Nc = 0;
+    obj->Nsc = 0;
+    obj->Nr = 0;
+    obj->Fnet = OrthoSys::O;
+    obj->Ftnet = OrthoSys::O;
+    // Xc     = OrthoSys::O;
+    obj->F1 = OrthoSys::O;
+    obj->F2 = OrthoSys::O;
+    obj->T1 = OrthoSys::O;
+    obj->T2 = OrthoSys::O;
 
+    Vec3_t xi = obj->P1->x;
+    Vec3_t xf = obj->P2->x;
+    if (obj->BothFree)
+        BranchVec(xf, xi, obj->Branch, Per);
+    else
+        obj->Branch = xi - xf;
 
-    Vec3_t xi = P1->x;
-    Vec3_t xf = P2->x;
-    if (BothFree) BranchVec(xf,xi,Branch,Per);
-    else Branch = xi-xf;
-
-    double dist = norm(Branch);
-    double delta = P1->Props.R + P2->Props.R - dist;
-    //if (First&&delta>0.0)
+    double dist = norm(obj->Branch);
+    double delta = obj->P1->Props.R + obj->P2->Props.R - dist;
+    // if (First&&delta>0.0)
     //{
-        //std::cout << "Initial overlapping detected "  << std::endl;
-        //std::cout << "overlap between         " << I1                << " and " << I2        <<  std::endl; 
-        //std::cout << "Overlap                 " << delta             <<  std::endl; 
-        //std::cout << "Particle's tags         " << P1->Tag           << " and " << P2->Tag   <<  std::endl; 
-        //std::cout << "Memory address          " << P1                << " and " << P2        <<  std::endl; 
-        //std::cout << "Memory address pair     " << this              << std::endl; 
-        //std::cout << "Per Position particle 1 " << xi                << std::endl;
-        //std::cout << "Per Position particle 2 " << xf                << std::endl;
-        //std::cout << "Position particle 1     " << P1->x             << std::endl;
-        //std::cout << "Position particle 2     " << P2->x             << std::endl;
-        //std::cout << "Velocity particle 1     " << P1->v             << std::endl;
-        //std::cout << "Velocity particle 2     " << P2->v             << std::endl;
-        //std::cout << "Ang Velocity particle 1 " << P1->w             << std::endl;
-        //std::cout << "Ang Velocity particle 2 " << P2->w             << std::endl;
-        //std::cout << "Mass particle 1         " << P1->Props.m       << std::endl;
-        //std::cout << "Mass particle 2         " << P2->Props.m       << std::endl;
-        //std::cout << "Diameter particle 1     " << P1->Dmax          << std::endl;
-        //std::cout << "Diameter particle 2     " << P2->Dmax          << std::endl;
-        //std::cout << "Sradius particle 1      " << P1->Props.R       << std::endl;
-        //std::cout << "Sradius particle 2      " << P2->Props.R       << std::endl;
-        //std::cout << "Number of faces  1      " << P1->Faces.Size()  << std::endl;
-        //std::cout << "Number of faces  2      " << P2->Faces.Size()  << std::endl;
-        //return true;
+    // std::cout << "Initial overlapping detected "  << std::endl;
+    // std::cout << "overlap between         " << I1                << " and " << I2        <<  std::endl;
+    // std::cout << "Overlap                 " << delta             <<  std::endl;
+    // std::cout << "Particle's tags         " << P1->Tag           << " and " << P2->Tag   <<  std::endl;
+    // std::cout << "Memory address          " << P1                << " and " << P2        <<  std::endl;
+    // std::cout << "Memory address pair     " << this              << std::endl;
+    // std::cout << "Per Position particle 1 " << xi                << std::endl;
+    // std::cout << "Per Position particle 2 " << xf                << std::endl;
+    // std::cout << "Position particle 1     " << P1->x             << std::endl;
+    // std::cout << "Position particle 2     " << P2->x             << std::endl;
+    // std::cout << "Velocity particle 1     " << P1->v             << std::endl;
+    // std::cout << "Velocity particle 2     " << P2->v             << std::endl;
+    // std::cout << "Ang Velocity particle 1 " << P1->w             << std::endl;
+    // std::cout << "Ang Velocity particle 2 " << P2->w             << std::endl;
+    // std::cout << "Mass particle 1         " << P1->Props.m       << std::endl;
+    // std::cout << "Mass particle 2         " << P2->Props.m       << std::endl;
+    // std::cout << "Diameter particle 1     " << P1->Dmax          << std::endl;
+    // std::cout << "Diameter particle 2     " << P2->Dmax          << std::endl;
+    // std::cout << "Sradius particle 1      " << P1->Props.R       << std::endl;
+    // std::cout << "Sradius particle 2      " << P2->Props.R       << std::endl;
+    // std::cout << "Number of faces  1      " << P1->Faces.Size()  << std::endl;
+    // std::cout << "Number of faces  2      " << P2->Faces.Size()  << std::endl;
+    // return true;
     //}
 
-    First = false;
-    if (delta>0.0)
+    obj->First = false;
+    if (delta > 0.0)
     {
 #ifdef USE_CHECK_OVERLAP
-        if (delta > 0.4*(P1->Props.R+P2->Props.R))
+        if (delta > 0.4 * (obj->P1->Props.R + obj->P2->Props.R))
         {
-            std::cout << std::endl; 
-            std::cout << "Maximun overlap between " << I1                << " and " << I2        <<  std::endl; 
-            std::cout << "Is the first collision? " << First             << std::endl; 
-            std::cout << "Overlap                 " << delta             <<  std::endl; 
-            std::cout << "Particle's tags         " << P1->Tag           << " and " << P2->Tag   <<  std::endl; 
-            std::cout << "Memory address          " << P1                << " and " << P2        <<  std::endl; 
-            std::cout << "Memory address pair     " << this              << std::endl; 
-            std::cout << "Per Position particle 1 " << xi                << std::endl;
-            std::cout << "Per Position particle 2 " << xf                << std::endl;
-            std::cout << "Position particle 1     " << P1->x             << std::endl;
-            std::cout << "Position particle 2     " << P2->x             << std::endl;
-            std::cout << "Velocity particle 1     " << P1->v             << std::endl;
-            std::cout << "Velocity particle 2     " << P2->v             << std::endl;
-            std::cout << "Ang Velocity particle 1 " << P1->w             << std::endl;
-            std::cout << "Ang Velocity particle 2 " << P2->w             << std::endl;
-            std::cout << "Mass particle 1         " << P1->Props.m       << std::endl;
-            std::cout << "Mass particle 2         " << P2->Props.m       << std::endl;
-            std::cout << "Diameter particle 1     " << P1->Dmax          << std::endl;
-            std::cout << "Diameter particle 2     " << P2->Dmax          << std::endl;
-            std::cout << "Sradius particle 1      " << P1->Props.R       << std::endl;
-            std::cout << "Sradius particle 2      " << P2->Props.R       << std::endl;
-            std::cout << "Number of faces  1      " << P1->Faces.Size()  << std::endl;
-            std::cout << "Number of faces  2      " << P2->Faces.Size()  << std::endl;
-            P1->Tag = 10000;
-            P2->Tag = 20000;
+            std::cout << std::endl;
+            std::cout << "Maximun overlap between " << obj->I1 << " and " << obj->I2 << std::endl;
+            std::cout << "Is the first collision? " << obj->First << std::endl;
+            std::cout << "Overlap                 " << delta << std::endl;
+            std::cout << "Particle's tags         " << obj->P1->Tag << " and " << obj->P2->Tag << std::endl;
+            std::cout << "Memory address          " << obj->P1 << " and " << obj->P2 << std::endl;
+            std::cout << "Memory address pair     " << obj << std::endl;
+            std::cout << "Per Position particle 1 " << xi << std::endl;
+            std::cout << "Per Position particle 2 " << xf << std::endl;
+            std::cout << "Position particle 1     " << obj->P1->x << std::endl;
+            std::cout << "Position particle 2     " << obj->P2->x << std::endl;
+            std::cout << "Velocity particle 1     " << obj->P1->v << std::endl;
+            std::cout << "Velocity particle 2     " << obj->P2->v << std::endl;
+            std::cout << "Ang Velocity particle 1 " << obj->P1->w << std::endl;
+            std::cout << "Ang Velocity particle 2 " << obj->P2->w << std::endl;
+            std::cout << "Mass particle 1         " << obj->P1->Props.m << std::endl;
+            std::cout << "Mass particle 2         " << obj->P2->Props.m << std::endl;
+            std::cout << "Diameter particle 1     " << obj->P1->Dmax << std::endl;
+            std::cout << "Diameter particle 2     " << obj->P2->Dmax << std::endl;
+            std::cout << "Sradius particle 1      " << obj->P1->Props.R << std::endl;
+            std::cout << "Sradius particle 2      " << obj->P2->Props.R << std::endl;
+            std::cout << "Number of faces  1      " << obj->P1->Faces.Size() << std::endl;
+            std::cout << "Number of faces  2      " << obj->P2->Faces.Size() << std::endl;
+            obj->P1->Tag = 10000;
+            obj->P2->Tag = 20000;
             return true;
         }
 #endif
-        //Count a contact
-        Nc++;
+        // Count a contact
+        obj->Nc++;
 
-        //update force
-        Vec3_t n = -Branch/dist;
-        double d = (P1->Props.R*P1->Props.R-P2->Props.R*P2->Props.R+dist*dist)/(2*dist);
-        Vec3_t x1c = xi+n*d;
-        Vec3_t x2c = xf-n*(dist-d);
-        //Xc += x;
-        Vec3_t t1,t2,x1,x2;
-        Rotation(P1->w,P1->Q,t1);
-        Rotation(P2->w,P2->Q,t2);
-        x1 = x1c- xi;
-        x2 = x2c- xf;
-        Vec3_t vrel = -((P2->v-P1->v)+cross(t2,x2)-cross(t1,x1));
-        Vec3_t vt = vrel - dot(n,vrel)*n;
-#ifndef USE_HERTZ 
-        Fn  = Kn*delta*n;
-        
-        Fnet += Fn;
-        Fdvv += vt*dt;
-        Fdvv -= dot(Fdvv,n)*n;
-        Vec3_t tan = Fdvv;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdvv)>Mu*norm(Fn)/Kt)
+        // update force
+        Vec3_t n = -obj->Branch / dist;
+        double d = (obj->P1->Props.R * obj->P1->Props.R - obj->P2->Props.R * obj->P2->Props.R + dist * dist) / (2 * dist);
+        Vec3_t x1c = xi + n * d;
+        Vec3_t x2c = xf - n * (dist - d);
+        // Xc += x;
+        Vec3_t t1, t2, x1, x2;
+        Rotation(obj->P1->w, obj->P1->Q, t1);
+        Rotation(obj->P2->w, obj->P2->Q, t2);
+        x1 = x1c - xi;
+        x2 = x2c - xf;
+        Vec3_t vrel = -((obj->P2->v - obj->P1->v) + cross(t2, x2) - cross(t1, x1));
+        Vec3_t vt = vrel - dot(n, vrel) * n;
+
+        // Vec3_t Ft, F;
+        // if (CInteracton_CalcForce_PointerToContactFunction)
+        //     (*CInteracton_CalcForce_PointerToContactFunction)(Ft, F,
+        //                                                       *this,
+        //                                                       delta,
+        //                                                       n,
+        //                                                       vrel,
+        //                                                       vt,
+        //                                                       dt,
+        //                                                       t1,
+        //                                                       t2);
+        // else
+        //     std::cout << "The global pointer `CInteracton_CalcForce_PointerToContactFunction` is not specified\n",
+        //         throw new Fatal("The global pointer `CInteracton_CalcForce_PointerToContactFunction` is not specified");
+        // #ifndef USE_HERTZ
+        // need ::::::
+        // double this->Kn
+        // double delta
+        // Vec3_t n
+        // Vec3_t vt
+
+        // output ::::::
+        // Vec3_t Ft
+        // Vec3_t F
+        obj->Fn = obj->Kn * delta * n;
+
+        obj->Fnet += obj->Fn;
+        obj->Fdvv += vt * dt;
+        obj->Fdvv -= dot(obj->Fdvv, n) * n;
+        Vec3_t tan = obj->Fdvv;
+        if (norm(tan) > 0.0)
+            tan /= norm(tan);
+        if (norm(obj->Fdvv) > obj->Mu * norm(obj->Fn) / obj->Kt)
         {
-             //Count a sliding contact
-            Nsc++;
-            Fdvv = Mu*norm(Fn)/Kt*tan;
-            dEfric += Kt*dot(Fdvv,vt)*dt;
+            // Count a sliding contact
+            obj->Nsc++;
+            obj->Fdvv = obj->Mu * norm(obj->Fn) / obj->Kt * tan;
+            obj->dEfric += obj->Kt * dot(obj->Fdvv, vt) * dt;
         }
-        Ftnet += Kt*Fdvv;
+        obj->Ftnet += obj->Kt * obj->Fdvv;
 
-        //Calculating the rolling resistance torque
-        double Kr = beta*Kt;
-        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
-        Fdr += Kr*Vr*dt;
-        Fdr -= dot(Fdr,n)*n;
-        
-        tan = Fdr;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdr)>eta*Mu*norm(Fn))
+        // Calculating the rolling resistance torque
+        double Kr = obj->beta * obj->Kt;
+        Vec3_t Vr = obj->P1->Props.R * obj->P2->Props.R * cross(Vec3_t(t1 - t2), n) / (obj->P1->Props.R + obj->P2->Props.R);
+        obj->Fdr += Kr * Vr * dt;
+        obj->Fdr -= dot(obj->Fdr, n) * n;
+
+        tan = obj->Fdr;
+        if (norm(tan) > 0.0)
+            tan /= norm(tan);
+        if (norm(obj->Fdr) > obj->eta * obj->Mu * norm(obj->Fn))
         {
-            Fdr = eta*Mu*norm(Fn)*tan;
-            Nr++;
-        }
-
-        Vec3_t Ft = -Fdr;
-        
-        Vec3_t F = Fn + Kt*Fdvv + Gn*dot(n,vrel)*n + Gt*vt;
-        dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
-#else
-        Fn  = Kn*sqrt(delta)*delta*n;
-
-        Fnet += Fn;
-        Fdvv += vt*dt;
-        Fdvv -= dot(Fdvv,n)*n;
-        Vec3_t tan = Fdvv;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
-        {
-             //Count a sliding contact
-            Nsc++;
-            Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
-            dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
-        }
-        Ftnet += Kt*sqrt(delta)*Fdvv;
-
-        //Calculating the rolling resistance torque
-        double Kr = beta*Kt*sqrt(delta);
-        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
-        Fdr += Kr*Vr*dt;
-        Fdr -= dot(Fdr,n)*n;
-        
-        tan = Fdr;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdr)>eta*Mu*norm(Fn))
-        {
-            Fdr = eta*Mu*norm(Fn)*tan;
-            Nr++;
+            obj->Fdr = obj->eta * obj->Mu * norm(obj->Fn) * tan;
+            obj->Nr++;
         }
 
-        Vec3_t Ft = -Fdr;
-        
-        Vec3_t F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
-        dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
-#endif
-        
+        Vec3_t Ft = -obj->Fdr;
 
-        F1   += -F;
-        F2   +=  F;
-        //torque
+        Vec3_t F = obj->Fn + obj->Kt * obj->Fdvv + obj->Gn * dot(n, vrel) * n + obj->Gt * vt;
+        obj->dEvis += (obj->Gn * dot(vrel - vt, vrel - vt) + obj->Gt * dot(vt, vt)) * dt;
+        // #else
+        //         Fn  = Kn*sqrt(delta)*delta*n;
+        //
+        //        Fnet += Fn;
+        //        Fdvv += vt*dt;
+        //        Fdvv -= dot(Fdvv,n)*n;
+        //        Vec3_t tan = Fdvv;
+        //        if (norm(tan)>0.0) tan/=norm(tan);
+        //        if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
+        //        {
+        //             //Count a sliding contact
+        //            Nsc++;
+        //            Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
+        //            dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
+        //        }
+        //        Ftnet += Kt*sqrt(delta)*Fdvv;
+        //
+        //        //Calculating the rolling resistance torque
+        //        double Kr = beta*Kt*sqrt(delta);
+        //        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
+        //        Fdr += Kr*Vr*dt;
+        //        Fdr -= dot(Fdr,n)*n;
+        //
+        //        tan = Fdr;
+        //        if (norm(tan)>0.0) tan/=norm(tan);
+        //        if (norm(Fdr)>eta*Mu*norm(Fn))
+        //        {
+        //            Fdr = eta*Mu*norm(Fn)*tan;
+        //            Nr++;
+        //        }
+        //
+        //        Vec3_t Ft = -Fdr;
+        //
+        //        Vec3_t F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
+        //        dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
+        // #endif
+
+        obj->F1 += -F;
+        obj->F2 += F;
+        // torque
         Vec3_t T, Tt;
-        Tt = cross (x1,F) - P1->Props.R*cross(n,Ft);
+        Tt = cross(x1, F) - obj->P1->Props.R * cross(n, Ft);
         Quaternion_t q;
-        Conjugate (P1->Q,q);
-        Rotation  (Tt,q,T);
-        T1 -= T;
-        Tt = cross (x2,F) - P2->Props.R*cross(n,Ft);
-        Conjugate (P2->Q,q);
-        Rotation  (Tt,q,T);
-        T2 += T;
+        Conjugate(obj->P1->Q, q);
+        Rotation(Tt, q, T);
+        obj->T1 -= T;
+        Tt = cross(x2, F) - obj->P2->Props.R * cross(n, Ft);
+        Conjugate(obj->P2->Q, q);
+        Rotation(Tt, q, T);
+        obj->T2 += T;
 
-        Fn        = Fdr;
+        obj->Fn = obj->Fdr;
     }
 
-    //If there is at least a contact, increase the coordination number of the particles
-    //if (Nc>0) 
+    // If there is at least a contact, increase the coordination number of the particles
+    // if (Nc>0)
     //{
-        //P1->Cn++;
-        //P2->Cn++;
-        //if (!P1->IsFree()) P2->Bdry = true;
-        //if (!P2->IsFree()) P1->Bdry = true;
+    // P1->Cn++;
+    // P2->Cn++;
+    // if (!P1->IsFree()) P2->Bdry = true;
+    // if (!P2->IsFree()) P1->Bdry = true;
     //}
-    //return overlap;
+    // return overlap;
     return false;
+};
+
+inline bool CInteractonSphere_CalcForce_UseHertzContact(CInteractonSphere *obj,
+                                                        double dt,
+                                                        Vec3_t const &Per,
+                                                        size_t const iter) 
+{
+    obj->Epot = 0.0;
+    obj->dEvis = 0.0;
+    obj->dEfric = 0.0;
+    obj->Nc = 0;
+    obj->Nsc = 0;
+    obj->Nr = 0;
+    obj->Fnet = OrthoSys::O;
+    obj->Ftnet = OrthoSys::O;
+    // Xc     = OrthoSys::O;
+    obj->F1 = OrthoSys::O;
+    obj->F2 = OrthoSys::O;
+    obj->T1 = OrthoSys::O;
+    obj->T2 = OrthoSys::O;
+
+    Vec3_t xi = obj->P1->x;
+    Vec3_t xf = obj->P2->x;
+    if (obj->BothFree)
+        BranchVec(xf, xi, obj->Branch, Per);
+    else
+        obj->Branch = xi - xf;
+
+    double dist = norm(obj->Branch);
+    double delta = obj->P1->Props.R + obj->P2->Props.R - dist;
+    // if (First&&delta>0.0)
+    //{
+    // std::cout << "Initial overlapping detected "  << std::endl;
+    // std::cout << "overlap between         " << I1                << " and " << I2        <<  std::endl;
+    // std::cout << "Overlap                 " << delta             <<  std::endl;
+    // std::cout << "Particle's tags         " << P1->Tag           << " and " << P2->Tag   <<  std::endl;
+    // std::cout << "Memory address          " << P1                << " and " << P2        <<  std::endl;
+    // std::cout << "Memory address pair     " << this              << std::endl;
+    // std::cout << "Per Position particle 1 " << xi                << std::endl;
+    // std::cout << "Per Position particle 2 " << xf                << std::endl;
+    // std::cout << "Position particle 1     " << P1->x             << std::endl;
+    // std::cout << "Position particle 2     " << P2->x             << std::endl;
+    // std::cout << "Velocity particle 1     " << P1->v             << std::endl;
+    // std::cout << "Velocity particle 2     " << P2->v             << std::endl;
+    // std::cout << "Ang Velocity particle 1 " << P1->w             << std::endl;
+    // std::cout << "Ang Velocity particle 2 " << P2->w             << std::endl;
+    // std::cout << "Mass particle 1         " << P1->Props.m       << std::endl;
+    // std::cout << "Mass particle 2         " << P2->Props.m       << std::endl;
+    // std::cout << "Diameter particle 1     " << P1->Dmax          << std::endl;
+    // std::cout << "Diameter particle 2     " << P2->Dmax          << std::endl;
+    // std::cout << "Sradius particle 1      " << P1->Props.R       << std::endl;
+    // std::cout << "Sradius particle 2      " << P2->Props.R       << std::endl;
+    // std::cout << "Number of faces  1      " << P1->Faces.Size()  << std::endl;
+    // std::cout << "Number of faces  2      " << P2->Faces.Size()  << std::endl;
+    // return true;
+    //}
+
+    obj->First = false;
+    if (delta > 0.0)
+    {
+#ifdef USE_CHECK_OVERLAP
+        if (delta > 0.4 * (obj->P1->Props.R + obj->P2->Props.R))
+        {
+            std::cout << std::endl;
+            std::cout << "Maximun overlap between " << obj->I1 << " and " << obj->I2 << std::endl;
+            std::cout << "Is the first collision? " << obj->First << std::endl;
+            std::cout << "Overlap                 " << delta << std::endl;
+            std::cout << "Particle's tags         " << obj->P1->Tag << " and " << obj->P2->Tag << std::endl;
+            std::cout << "Memory address          " << obj->P1 << " and " << obj->P2 << std::endl;
+            std::cout << "Memory address pair     " << obj << std::endl;
+            std::cout << "Per Position particle 1 " << xi << std::endl;
+            std::cout << "Per Position particle 2 " << xf << std::endl;
+            std::cout << "Position particle 1     " << obj->P1->x << std::endl;
+            std::cout << "Position particle 2     " << obj->P2->x << std::endl;
+            std::cout << "Velocity particle 1     " << obj->P1->v << std::endl;
+            std::cout << "Velocity particle 2     " << obj->P2->v << std::endl;
+            std::cout << "Ang Velocity particle 1 " << obj->P1->w << std::endl;
+            std::cout << "Ang Velocity particle 2 " << obj->P2->w << std::endl;
+            std::cout << "Mass particle 1         " << obj->P1->Props.m << std::endl;
+            std::cout << "Mass particle 2         " << obj->P2->Props.m << std::endl;
+            std::cout << "Diameter particle 1     " << obj->P1->Dmax << std::endl;
+            std::cout << "Diameter particle 2     " << obj->P2->Dmax << std::endl;
+            std::cout << "Sradius particle 1      " << obj->P1->Props.R << std::endl;
+            std::cout << "Sradius particle 2      " << obj->P2->Props.R << std::endl;
+            std::cout << "Number of faces  1      " << obj->P1->Faces.Size() << std::endl;
+            std::cout << "Number of faces  2      " << obj->P2->Faces.Size() << std::endl;
+            obj->P1->Tag = 10000;
+            obj->P2->Tag = 20000;
+            return true;
+        }
+#endif
+        // Count a contact
+        obj->Nc++;
+
+        // update force
+        Vec3_t n = -obj->Branch / dist;
+        double d = (obj->P1->Props.R * obj->P1->Props.R - obj->P2->Props.R * obj->P2->Props.R + dist * dist) / (2 * dist);
+        Vec3_t x1c = xi + n * d;
+        Vec3_t x2c = xf - n * (dist - d);
+        // Xc += x;
+        Vec3_t t1, t2, x1, x2;
+        Rotation(obj->P1->w, obj->P1->Q, t1);
+        Rotation(obj->P2->w, obj->P2->Q, t2);
+        x1 = x1c - xi;
+        x2 = x2c - xf;
+        Vec3_t vrel = -((obj->P2->v - obj->P1->v) + cross(t2, x2) - cross(t1, x1));
+        Vec3_t vt = vrel - dot(n, vrel) * n;
+
+        // Vec3_t Ft, F;
+        // if (CInteracton_CalcForce_PointerToContactFunction)
+        //     (*CInteracton_CalcForce_PointerToContactFunction)(Ft, F,
+        //                                                       *this,
+        //                                                       delta,
+        //                                                       n,
+        //                                                       vrel,
+        //                                                       vt,
+        //                                                       dt,
+        //                                                       t1,
+        //                                                       t2);
+        // else
+        //     std::cout << "The global pointer `CInteracton_CalcForce_PointerToContactFunction` is not specified\n",
+        //         throw new Fatal("The global pointer `CInteracton_CalcForce_PointerToContactFunction` is not specified");
+        // #ifndef USE_HERTZ
+        // need ::::::
+        // double this->Kn
+        // double delta
+        // Vec3_t n
+        // Vec3_t vt
+
+        // output ::::::
+        // Vec3_t Ft
+        // Vec3_t F
+        // obj->Fn = obj->Kn * delta * n;
+        // obj->Fnet += obj->Fn;
+        // obj->Fdvv += vt * dt;
+        // obj->Fdvv -= dot(obj->Fdvv, n) * n;
+        // Vec3_t tan = obj->Fdvv;
+        // if (norm(tan) > 0.0)
+        //     tan /= norm(tan);
+        // if (norm(obj->Fdvv) > obj->Mu * norm(obj->Fn) / obj->Kt)
+        // {
+        //     // Count a sliding contact
+        //     obj->Nsc++;
+        //     obj->Fdvv = obj->Mu * norm(obj->Fn) / obj->Kt * tan;
+        //     obj->dEfric += obj->Kt * dot(obj->Fdvv, vt) * dt;
+        // }
+        // obj->Ftnet += obj->Kt * obj->Fdvv;
+        // // Calculating the rolling resistance torque
+        // double Kr = obj->beta * obj->Kt;
+        // Vec3_t Vr = obj->P1->Props.R * obj->P2->Props.R * cross(Vec3_t(t1 - t2), n) / (obj->P1->Props.R + obj->P2->Props.R);
+        // obj->Fdr += Kr * Vr * dt;
+        // obj->Fdr -= dot(obj->Fdr, n) * n;
+        // tan = obj->Fdr;
+        // if (norm(tan) > 0.0)
+        //     tan /= norm(tan);
+        // if (norm(obj->Fdr) > obj->eta * obj->Mu * norm(obj->Fn))
+        // {
+        //     obj->Fdr = obj->eta * obj->Mu * norm(obj->Fn) * tan;
+        //     obj->Nr++;
+        // }
+        // Vec3_t Ft = -obj->Fdr;
+        // Vec3_t F = obj->Fn + obj->Kt * obj->Fdvv + obj->Gn * dot(n, vrel) * n + obj->Gt * vt;
+        // obj->dEvis += (obj->Gn * dot(vrel - vt, vrel - vt) + obj->Gt * dot(vt, vt)) * dt;
+        // #else
+        obj->Fn = obj->Kn * sqrt(delta) * delta * n;
+
+        obj->Fnet += obj->Fn;
+        obj->Fdvv += vt * dt;
+        obj->Fdvv -= dot(obj->Fdvv, n) * n;
+        Vec3_t tan = obj->Fdvv;
+        if (norm(tan) > 0.0)
+            tan /= norm(tan);
+        if (norm(obj->Fdvv) > obj->Mu * norm(obj->Fn) / (obj->Kt * sqrt(delta)))
+        {
+            // Count a sliding contact
+            obj->Nsc++;
+            obj->Fdvv = obj->Mu * norm(obj->Fn) / (obj->Kt * sqrt(delta)) * tan;
+            obj->dEfric += obj->Kt * sqrt(delta) * dot(obj->Fdvv, vt) * dt;
+        }
+        obj->Ftnet += obj->Kt * sqrt(delta) * obj->Fdvv;
+
+        // Calculating the rolling resistance torque
+        double Kr = obj->beta * obj->Kt * sqrt(delta);
+        Vec3_t Vr = obj->P1->Props.R * obj->P2->Props.R * cross(Vec3_t(t1 - t2), n) / (obj->P1->Props.R + obj->P2->Props.R);
+        obj->Fdr += Kr * Vr * dt;
+        obj->Fdr -= dot(obj->Fdr, n) * n;
+
+        tan = obj->Fdr;
+        if (norm(tan) > 0.0)
+            tan /= norm(tan);
+        if (norm(obj->Fdr) > obj->eta * obj->Mu * norm(obj->Fn))
+        {
+            obj->Fdr = obj->eta * obj->Mu * norm(obj->Fn) * tan;
+            obj->Nr++;
+        }
+
+        Vec3_t Ft = -obj->Fdr;
+
+        Vec3_t F = obj->Fn + obj->Kt * sqrt(delta) * obj->Fdvv + obj->Gn * sqrt(sqrt(delta)) * dot(n, vrel) * n + obj->Gt * sqrt(sqrt(delta)) * vt;
+        obj->dEvis += (obj->Gn * sqrt(sqrt(delta)) * dot(vrel - vt, vrel - vt) + obj->Gt * sqrt(sqrt(delta)) * dot(vt, vt)) * dt;
+        // #endif
+
+        obj->F1 += -F;
+        obj->F2 += F;
+        // torque
+        Vec3_t T, Tt;
+        Tt = cross(x1, F) - obj->P1->Props.R * cross(n, Ft);
+        Quaternion_t q;
+        Conjugate(obj->P1->Q, q);
+        Rotation(Tt, q, T);
+        obj->T1 -= T;
+        Tt = cross(x2, F) - obj->P2->Props.R * cross(n, Ft);
+        Conjugate(obj->P2->Q, q);
+        Rotation(Tt, q, T);
+        obj->T2 += T;
+
+        obj->Fn = obj->Fdr;
+    }
+
+    // If there is at least a contact, increase the coordination number of the particles
+    // if (Nc>0)
+    //{
+    // P1->Cn++;
+    // P2->Cn++;
+    // if (!P1->IsFree()) P2->Bdry = true;
+    // if (!P2->IsFree()) P1->Bdry = true;
+    //}
+    // return overlap;
+    return false;
+};
+
+bool (*CInteracton_CalcForce_PointerToContactFunction)(CInteractonSphere *obj,
+                                                       double dt,
+                                                       Vec3_t const &Per,
+                                                       size_t const iter) = nullptr;
+
+inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t const iter)
+{
+    if (CInteracton_CalcForce_PointerToContactFunction)
+        return CInteracton_CalcForce_PointerToContactFunction(this, dt, Per, iter);
+    else
+        throw new Fatal("The global pointer `CInteracton_CalcForce_PointerToContactFunction` is not specified");
 }
 
 inline bool CInteractonSphere::UpdateContacts (double alpha, Vec3_t const & Per, size_t const iter)
