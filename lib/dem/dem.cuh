@@ -54,6 +54,8 @@ namespace DEM
     };
 
     //----------------------------------------
+    __host__ __device__ double delta_cutoff = 0.0;
+
     typedef bool (*Device_CalcForceVV_ContactPointer)(InteractonCU const *Int,
                                                       ComInteractonCU *CInt,
                                                       DynInteractonCU *DIntVV,
@@ -146,7 +148,6 @@ namespace DEM
         }
         else
         {
-            double delta_cutoff = -0.05;
             if (delta > delta_cutoff)
             {
                 real3 n = -1.0 * Branch / dist;
@@ -185,7 +186,7 @@ namespace DEM
                 // should I only chang this ????????????????
                 // should I only chang this ????????????????
                 // should I only chang this ????????????????
-                (*DIntVV).F = (*Int).Kn * delta * (delta - delta_cutoff) * n;//(*DIntVV).Fn + (*DIntVV).Ft + (*Int).Gn * dotreal3(n, vrel) * n + (*Int).Gt * vt;
+                (*DIntVV).F = (*Int).Kn / (-delta_cutoff) * delta * (delta - delta_cutoff) * n; //(*DIntVV).Fn + (*DIntVV).Ft + (*Int).Gn * dotreal3(n, vrel) * n + (*Int).Gt * vt;
 
                 //-----------------------------------------
                 real3 T, Tt;
@@ -282,6 +283,67 @@ namespace DEM
             Rotation(Tt, q, T);
             (*T2) = T;
             return true;
+        }
+        else
+        {
+            if (delta > delta_cutoff)
+            {
+                real3 n = -1.0 * Branch / dist;
+                real d = (r1 * r1 - r2 * r2 + dist * dist) / (2.0 * dist);
+                real3 x1c = xi + d * n;
+                real3 x2c = xf - (dist - d) * n;
+
+                real3 t1, t2, x1, x2;
+                Rotation((*DPar1).w, (*DPar1).Q, t1);
+                Rotation((*DPar2).w, (*DPar2).Q, t2);
+                x1 = x1c - xi;
+                x2 = x2c - xf;
+                real3 vrel = ((*DPar1).v + cross(t1, x1)) - ((*DPar2).v + cross(t2, x2));
+                real3 vt = vrel - dotreal3(n, vrel) * n;
+                // Hertz -------------------
+                real sqrtdelta = sqrt(delta);
+                (*DIntVV).Fn = (*Int).Kn * sqrtdelta * delta * n;
+                (*DIntVV).Ft = (*DIntVV).Ft + ((*Int).Kt * sqrtdelta * demaux[0].dt) * vt;
+                (*DIntVV).Ft = (*DIntVV).Ft - dotreal3((*DIntVV).Ft, n) * n;
+
+                real3 tan = (*DIntVV).Ft;
+                if (norm(tan) > 0.0)
+                    tan = tan / norm(tan);
+                if (norm((*DIntVV).Ft) > (*Int).Mu * norm((*DIntVV).Fn))
+                {
+                    (*DIntVV).Ft = (*Int).Mu * norm((*DIntVV).Fn) * tan;
+                }
+
+                real3 vr = r1 * r2 * cross((t1 - t2), n) / (r1 + r2);
+                (*DIntVV).Fr = (*DIntVV).Fr + ((*Int).Beta * (*Int).Kt * sqrtdelta * demaux[0].dt) * vr;
+                (*DIntVV).Fr = (*DIntVV).Fr - dotreal3((*DIntVV).Fr, n) * n;
+
+                tan = (*DIntVV).Fr;
+                if (norm(tan) > 0.0)
+                    tan = tan / norm(tan);
+                if (norm((*DIntVV).Fr) > (*Int).Eta * (*Int).Mu * norm((*DIntVV).Fn))
+                {
+                    (*DIntVV).Fr = (*Int).Eta * (*Int).Mu * norm((*DIntVV).Fn) * tan;
+                }
+                // should I only chang this ????????????????
+                // should I only chang this ????????????????
+                // should I only chang this ????????????????
+                (*DIntVV).F = (*Int).Kn / (-delta_cutoff) * delta * (delta - delta_cutoff) * n; //(*DIntVV).Fn + (*DIntVV).Ft + (*Int).Gn * dotreal3(n, vrel) * n + (*Int).Gt * vt;
+                //(*DIntVV).F = (*DIntVV).Fn + (*DIntVV).Ft + (*Int).Gn * sqrt(sqrtdelta) * dotreal3(n, vrel) * n + (*Int).Gt * sqrt(sqrtdelta) * vt;
+
+                //-----------------------------------------
+                real3 T, Tt;
+                Tt = cross(x1, (*DIntVV).F) + r1 * cross(n, (*DIntVV).Fr);
+                real4 q;
+                Conjugate((*DPar1).Q, q);
+                Rotation(Tt, q, T);
+                (*T1) = -1.0 * T;
+                Tt = cross(x2, (*DIntVV).F) + r2 * cross(n, (*DIntVV).Fr);
+                Conjugate((*DPar2).Q, q);
+                Rotation(Tt, q, T);
+                (*T2) = T;
+                return true;
+            }
         }
         return false;
     }
