@@ -59,6 +59,7 @@ enum LBMSolver
     NavierStokes,
     AdvectionDiffusion,
     PhaseFieldIce,
+    PhaseField,
 };
 
 namespace FLBM
@@ -146,6 +147,8 @@ public:
     void   Initialize(size_t k, iVec3_t idx, double Rho, Vec3_t & Vel);           ///< Initialize each cell with a given density and velocity
     void   Initialize(iVec3_t idx, double Pre, double H, double Phi
             , Vec3_t & Vel);                                                      ///< Same as previous, but for the Phase Field Ice model
+    void   Initialize(iVec3_t idx, double Pre, double Phi
+            , Vec3_t & Vel);                                                      ///< Same as previous, but for the Phase Field model
     double Feq(size_t k, double Rho, Vec3_t & Vel);                               ///< The equilibrium function
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
@@ -316,6 +319,16 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
     {
         Rhonames[0].Printf("Density");
         Rhonames[1].Printf("Concentration");
+    }
+
+    if (Solver==PhaseField)
+    {
+        Rhonames[0].Printf("Pressure");
+        Rhonames[1].Printf("Phase");
+        rho[0] = 1.0;
+        rho[1] = 1.0;
+        thick  = 4.0;
+        sigma  = 1.0;
     }
 
     if (Solver==PhaseFieldIce)
@@ -1005,6 +1018,43 @@ inline void Domain::Initialize(iVec3_t idx, double ThePre, double TheH, double T
     Vel[0][ix][iy][iz] = TheVel;
     Vel[1][ix][iy][iz] = ThePhi*TheVel;
 
+
+
+}
+
+inline void Domain::Initialize(iVec3_t idx, double ThePre, double ThePhi, Vec3_t & TheVel)
+{
+    size_t ix = idx(0);
+    size_t iy = idx(1);
+    size_t iz = idx(2);
+    for (size_t il=0;il<2;il++)
+    {
+        BForce[il][ix][iy][iz] = OrthoSys::O;
+    }
+
+    double rhof = ThePhi*rho[0]+(1.0-ThePhi)*rho[1];
+    Rho[0][ix][iy][iz] = 0.0;
+    double VdotV = dot(TheVel,TheVel);
+    for (size_t k=0;k<Nneigh;k++)
+    {
+        // Pressure
+        double VdotC = dot(TheVel,C[k]);
+        double sk    = 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs);
+        F[0][ix][iy][iz][k] = W[k]*(3.0*ThePre/(Cs*Cs) + rhof*sk);
+        if (k==0) F[0][ix][iy][iz][k] += -3.0*ThePre/(Cs*Cs);
+        if (k!=0) Rho[0][ix][iy][iz]  += F[0][ix][iy][iz][k];
+
+        //Phase Field
+        F[1][ix][iy][iz][k] = W[k]*ThePhi*(1.0 + 3.0*VdotC/Cs);
+        Rho[1][ix][iy][iz] += F[1][ix][iy][iz][k];
+
+    }
+
+    Rho[0][ix][iy][iz] *= Cs*Cs/3.0/(1.0-W[0]);
+
+
+    Vel[0][ix][iy][iz] = TheVel;
+    Vel[1][ix][iy][iz] = ThePhi*TheVel;
 
 
 }
@@ -1971,6 +2021,10 @@ inline void Domain::UpLoadDevice(size_t Nc)
             lbmaux.Rhoref  [il]    = Rhoref  [il];
             lbmaux.Psi     [il]    = Psi     [il];
         }
+        else if (Solver==PhaseField)
+        {
+            lbmaux.rho     [il]    = rho     [il];
+        }
         else if (Solver==PhaseFieldIce)
         {
             lbmaux.rho     [il]    = rho     [il];
@@ -2208,6 +2262,10 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         {
             cudaCollidePFI<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
+        else if (Solver==PhaseField)
+        {
+            cudaCollidePF<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
 
         real * tmp = pF;
         pF = pFtemp;
@@ -2221,6 +2279,10 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         if (Solver==PhaseFieldIce)
         {
             cudaStreamPFI2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
+        else if (Solver==PhaseField)
+        {
+            cudaStreamPF2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
         else
         {

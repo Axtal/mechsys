@@ -3679,7 +3679,8 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
             Cell * nb = Lat[0].Cells[c->Neighs[j]];
             if (nb->ID>c->ID) 
             {
-                if (!c->IsSolid||!nb->IsSolid) CellPairs.Push(iVec3_t(i,nb->ID,j));
+                //if (!c->IsSolid||!nb->IsSolid) CellPairs.Push(iVec3_t(i,nb->ID,j));
+                CellPairs.Push(iVec3_t(i,nb->ID,j));
             }
         }
     }

@@ -446,7 +446,6 @@ __global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, rea
     size_t icx = ic%lbmaux[0].Nx;
     size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
-        //Calculation of gradients and temporal derivates of key variables
 
 
     //Phase field variables
@@ -520,7 +519,7 @@ __global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, rea
     real  tauh  = 3.0*kappa*lbmaux[0].dt/(lbmaux[0].dx*lbmaux[0].dx) + 0.5;
     real  VdotV                      = dotreal3(vel,vel);
     real  mu                         = 4.0*b*(phi)*(phi-1.0)*(phi-0.5) - a*delphi;
-    BForce[ic]                       = mu*gradphi;
+    BForce[ic]                       = BForce[ic] + mu*gradphi;
     real3 Fm                         = BForce[ic] + Cs*Cs*gradrho/3.0 + Cs*Cs*gradS/3.0 - gradpre;
     BForce[ic + 1*lbmaux[0].Ncells]  = -rho*fs*(BForce[ic + 1*lbmaux[0].Ncells])/lbmaux[0].dt;
     real  VdotF = dotreal3(vel,Fm);
@@ -531,7 +530,7 @@ __global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, rea
         //Navier Stokes equation
         real sk    = 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs);
         real Feq   = lbmaux[0].W[k]*(3.0*pre/(Cs*Cs) + rho*sk);
-        real Fk    = lbmaux[0].W[k]*(S + 3.0*dotreal3(lbmaux[0].C[k],BForce[ic] + BForce[ic + 1*lbmaux[0].Ncells])/(Cs*Cs) + 4.5*VdotC*FdotC/(Cs*Cs) - 1.5*VdotF/(Cs*Cs));
+        real Fk    = lbmaux[0].W[k]*(S + 3.0*dotreal3(lbmaux[0].C[k],BForce[ic] + BForce[ic + 1*lbmaux[0].Ncells])/Cs + 4.5*VdotC*FdotC/(Cs*Cs) - 1.5*VdotF/(Cs*Cs));
         if (k==0)  
         {
             Feq    += -3.0*pre/(Cs*Cs);
@@ -557,9 +556,105 @@ __global__ void cudaCollidePFI(bool const * IsSolid, real * F, real * Ftemp, rea
     }
 
 
-    //update for next time step
+    //update for next time step. Care must be taken if vel is not zero at the beginning
     Vel   [ic+1*lbmaux[0].Ncells]   = phi*vel;
     BForce[ic+2*lbmaux[0].Ncells].z = rho*divu + dotreal3(vel,gradrho);
+}
+
+__global__ void cudaCollidePF(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+
+    real Cs    = lbmaux[0].Cs;
+    size_t icx = ic%lbmaux[0].Nx;
+    size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
+    size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+
+    //Phase field variables
+    real3 vel   = Vel[ic]; // it is ic since only the velocity of the first layer is relavant
+    real  phi   = Rho[ic+1*lbmaux[0].Ncells];
+    real3 dFdt  = (phi*vel - Vel[ic+1*lbmaux[0].Ncells])/lbmaux[0].dt; //Here we will use the Vel of lattice one as a temporal variable for the
+                                                                       //phase field flux
+    real lambda = 4.0*phi*(1.0-phi)/lbmaux[0].thick;
+    real a      = 1.5*lbmaux[0].sigma*lbmaux[0].thick;
+    real b      = 12.0*lbmaux[0].sigma/lbmaux[0].thick;
+
+
+    //Density variables
+    real rho  = phi*lbmaux[0].rho[0] + (1.0-phi)*lbmaux[0].rho[1];
+    real pre  = Rho[ic];
+    real S    = BForce[ic+1*lbmaux[0].Ncells].x;
+    
+    //Gradients
+    real3 gradphi = make_real3(0.0,0.0,0.0);
+    real3 gradrho = make_real3(0.0,0.0,0.0);
+    real3 gradpre = make_real3(0.0,0.0,0.0);
+    real3 gradS   = make_real3(0.0,0.0,0.0);
+    real  delphi  = 0.0;
+
+    for (size_t k=1;k<lbmaux[0].Nneigh;k++)
+    {
+        size_t inx = (size_t)((int)icx + (int)lbmaux[0].C[k].x + (int)lbmaux[0].Nx)%lbmaux[0].Nx;
+        size_t iny = (size_t)((int)icy + (int)lbmaux[0].C[k].y + (int)lbmaux[0].Ny)%lbmaux[0].Ny;
+        size_t inz = (size_t)((int)icz + (int)lbmaux[0].C[k].z + (int)lbmaux[0].Nz)%lbmaux[0].Nz;
+        size_t in  = inx + iny*lbmaux[0].Nx + inz*lbmaux[0].Nx*lbmaux[0].Ny;
+
+        real pren = Rho[in];
+        real phin = Rho[in+1*lbmaux[0].Ncells];
+        real rhon = phin*lbmaux[0].rho[0]+(1.0-phin)*lbmaux[0].rho[1];
+        real Sn   = BForce[in+1*lbmaux[0].Ncells].x;
+        
+        gradpre  = gradpre + lbmaux[0].W[k]*pren*lbmaux[0].C[k];
+        gradphi  = gradphi + lbmaux[0].W[k]*phin*lbmaux[0].C[k];
+        gradrho  = gradrho + lbmaux[0].W[k]*rhon*lbmaux[0].C[k];
+        gradS    = gradS   + lbmaux[0].W[k]*Sn  *lbmaux[0].C[k];
+        delphi  +=       2.0*lbmaux[0].W[k]*(phin-phi);
+    }
+    gradphi = (3.0/lbmaux[0].dx)*gradphi;
+    gradrho = (3.0/lbmaux[0].dx)*gradrho;
+    gradpre = (3.0/lbmaux[0].dx)*gradpre;
+    gradS   = (3.0/lbmaux[0].dx)*gradS  ;
+    delphi *= 3.0/(lbmaux[0].dx*lbmaux[0].dx);
+
+    real3 n    = (1.0/norm(gradphi))*gradphi;
+    if (norm(gradphi)<1.0e-12) n = make_real3(0.0,0.0,0.0);
+    
+    real  tau   = lbmaux[0].Tau[0];
+    real  taup  = lbmaux[0].Tau[1];
+    real  VdotV                      = dotreal3(vel,vel);
+    real  mu                         = 4.0*b*(phi)*(phi-1.0)*(phi-0.5) - a*delphi;
+    BForce[ic]                       = BForce[ic] + mu*gradphi;
+    real3 Fm                         = BForce[ic] + Cs*Cs*gradrho/3.0 + Cs*Cs*gradS/3.0 - gradpre;
+    real  VdotF = dotreal3(vel,Fm);
+    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    {
+        real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+        real FdotC = dotreal3(Fm ,lbmaux[0].C[k]);
+        //Navier Stokes equation
+        real sk    = 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs);
+        real Feq   = lbmaux[0].W[k]*(3.0*pre/(Cs*Cs) + rho*sk);
+        real Fk    = lbmaux[0].W[k]*(S + 3.0*dotreal3(lbmaux[0].C[k],BForce[ic])/Cs + 4.5*VdotC*FdotC/(Cs*Cs) - 1.5*VdotF/(Cs*Cs));
+        if (k==0)  
+        {
+            Feq    += -3.0*pre/(Cs*Cs);
+            BForce[ic + 1*lbmaux[0].Ncells].z = 0.5*lbmaux[0].dt*S + tau*lbmaux[0].dt*Fk + rho*lbmaux[0].W[k]*sk;
+        }
+        size_t idx = ic*lbmaux[0].Nneigh + k;
+        Ftemp[idx] = F[idx] - (F[idx]-Feq)/tau + (1.0-0.5/tau)*lbmaux[0].dt*Fk;
+        if (IsSolid[ic]) Ftemp[idx] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+
+        //Phase field equation
+        idx  = ic*lbmaux[0].Nneigh + 1*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+        Feq   = lbmaux[0].W[k]*phi*(1.0 + 3.0*VdotC/Cs);
+        real G     = 3.0*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[k],dFdt+Cs*Cs/3.0*lambda*n)/(Cs*Cs);
+        Ftemp[idx] = F[idx] - (F[idx]-Feq)/taup + (1.0-0.5/taup)*lbmaux[0].dt*G;
+    }
+
+
+    //update for next time step
+    Vel   [ic+1*lbmaux[0].Ncells]   = phi*vel;
+    BForce[ic+1*lbmaux[0].Ncells].y = dotreal3(vel,gradrho);
 }
 
 __global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)
@@ -717,6 +812,37 @@ __global__ void cudaStream2(bool const * IsSolid, real * F, real * Ftemp, real3 
     }
 }
 
+__global__ void cudaStreamPF2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+    if (ic==0)
+    {
+        lbmaux[0].Time += lbmaux[0].dt;
+        lbmaux[0].iter++;
+    }
+    Rho   [ic                   ] = BForce[ic+1*lbmaux[0].Ncells].z;
+    Rho   [ic+1*lbmaux[0].Ncells] = 0.0;
+    Vel   [ic] = make_real3(0.0,0.0,0.0);
+    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    {
+        if (k!=0) Rho[ic                     ] += F[ic*lbmaux[0].Nneigh                                       + k];
+                  Rho[ic + 1*lbmaux[0].Ncells] += F[ic*lbmaux[0].Nneigh + 1*lbmaux[0].Nneigh*lbmaux[0].Ncells + k];
+        
+        //if (ic==217*lbmaux[0].Nx+0) printf("%g %g %g %lu \n",F[ic*lbmaux[0].Nneigh + 0*lbmaux[0].Ncells + k],Ftemp[ic*lbmaux[0].Nneigh + 0*lbmaux[0].Ncells + k],Rho[ic+0*lbmaux[0].Ncells],k);
+        Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
+    }
+    Rho[ic] *= lbmaux[0].Cs*lbmaux[0].Cs/3.0/(1.0-lbmaux[0].W[0]);
+
+
+    real phi  = Rho[ic + 1*lbmaux[0].Ncells];
+    real rho  = phi*lbmaux[0].rho[0] + (1.0-phi)*lbmaux[0].rho[1];
+    Vel[ic]   = (lbmaux[0].Cs/rho)*(Vel[ic]+0.5*lbmaux[0].dt*BForce[ic]);
+
+    BForce[ic+1*lbmaux[0].Ncells].x = BForce[ic+1*lbmaux[0].Ncells].y;
+    BForce[ic] = make_real3(0.0,0.0,0.0);
+}
+
 __global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
@@ -741,7 +867,7 @@ __global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, rea
         Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
     }
 
-    Rho[ic] *= lbmaux[0].Cs*lbmaux[0].Cs/3.0/(1-lbmaux[0].W[0]);
+    Rho[ic] *= lbmaux[0].Cs*lbmaux[0].Cs/3.0/(1.0-lbmaux[0].W[0]);
 
     //if (ic==216*lbmaux[0].Nx+199) printf("%g %g %g %lu \n",Rho[ic],Rho[ic+1*lbmaux[0].Ncells],Rho[ic+2*lbmaux[0].Ncells],lbmaux[0].iter);
 
@@ -761,6 +887,7 @@ __global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, rea
     Vel[ic] = (1.0-0.5*fs)*BForce[ic + 1*lbmaux[0].Ncells];
 
     Vel[ic+2*lbmaux[0].Ncells].z = BForce[ic+2*lbmaux[0].Ncells].z;
+    BForce[ic] = make_real3(0.0,0.0,0.0);
 }
 }
 #endif //MECHSYS_LBM_CUH
