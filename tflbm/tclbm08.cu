@@ -52,8 +52,9 @@ int main(int argc, char **argv) try
 	for (size_t i=0; i<nx; ++i)
 	for (size_t j=0; j<ny; ++j)
     {
-        double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
+        //double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
         //double r     = sqrt(pow((int)(j)-obsY,2.0));
+        double r     = std::max(fabs((int)(i)-obsX),fabs((int)(j)-obsY));
 
         double smear = 0.5*(1.0-tanh(2.0*(r-Rext)/Dom.thick));
         //double pre   = 1.0;

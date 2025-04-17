@@ -2090,32 +2090,32 @@ typedef float4 real4;
 #define make_real4 make_float4
 #endif
 
-__host__ __device__ inline real dotreal3(real3 const & a, real3 const & b)
+__host__ __device__ __inline__ real dotreal3(real3 const & a, real3 const & b)
 {
     return a.x*b.x+a.y*b.y+a.z*b.z;
 }
 
-__host__ __device__ inline real3 operator * (real const & a, real3 const & b)
+__host__ __device__ __inline__ real3 operator * (real const & a, real3 const & b)
 {
     return make_real3(a*b.x,a*b.y,a*b.z);
 }
 
-__host__ __device__ inline real3 operator / (real3 const & b, real const & a)
+__host__ __device__ __inline__ real3 operator / (real3 const & b, real const & a)
 {
     return make_real3(b.x/a,b.y/a,b.z/a);
 }
 
-__host__ __device__ inline real3 operator + (real3 const & a, real3 const & b)
+__host__ __device__ __inline__ real3 operator + (real3 const & a, real3 const & b)
 {
     return make_real3(a.x+b.x,a.y+b.y,a.z+b.z);
 }
 
-__host__ __device__ inline real3 operator - (real3 const & a, real3 const & b)
+__host__ __device__ __inline__ real3 operator - (real3 const & a, real3 const & b)
 {
     return make_real3(a.x-b.x,a.y-b.y,a.z-b.z);
 }
 
-__host__ __device__ inline void MtVecMul(const real * A, const real * x, real * y, size_t rows, size_t cols)
+__host__ __device__ __inline__ void MtVecMul(const real * A, const real * x, real * y, size_t rows, size_t cols)
 {
     for (size_t nn=0;nn<rows;nn++)
     {
@@ -2127,12 +2127,12 @@ __host__ __device__ inline void MtVecMul(const real * A, const real * x, real * 
     }
 }
 
-__host__ __device__ inline real norm(real3 const & a)
+__host__ __device__ __inline__ real norm(real3 const & a)
 {
     return sqrt(a.x*a.x+a.y*a.y+a.z*a.z);
 }
 
-__host__ __device__ inline real3 cross(real3 const & a, real3 const & b)
+__host__ __device__ __inline__ real3 cross(real3 const & a, real3 const & b)
 {
     return make_real3(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x);
 }

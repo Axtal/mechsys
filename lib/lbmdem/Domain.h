@@ -118,6 +118,7 @@ public:
     size_t                               * pPaCeF;            ///< Pointer to particle cell pair
     size_t                               * pPaCeV;            ///< Pointer to particle cell pair
     lbmdem_aux                           * plbmdemaux;        ///< pointer to auxiliary data
+    FLBM::FuncBn_ptr                       pfBn;              ///< pointer to the fluid overlapping function                                                            
                                                         
 #endif
 };
@@ -175,6 +176,10 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
             }
         }
     }
+#ifdef USE_CUDA
+    //Pointer to overlapping function
+    cudaMemcpyFromSymbol(&pfBn,FLBM::d_fBnSmooth,sizeof(FLBM::FuncBn_ptr));
+#endif
 }
 
 inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, double Thedx, double Thedt, Vec3_t xmin, Vec3_t xmax)
@@ -265,6 +270,10 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
         }
     }
 
+#ifdef USE_CUDA
+    //Pointer to overlapping function
+    cudaMemcpyFromSymbol(&pfBn,FLBM::d_fBnSmooth,sizeof(FLBM::FuncBn_ptr));
+#endif
 }
 
 void Domain::ImprintLattice()
@@ -696,14 +705,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Calculation of forces " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
-#ifndef USE_IBB
-        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-#else
-        cudaCheckOutsideVC  <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-        cudaCheckInsideVC   <<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,pGamma,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-        cudaRefill          <<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pF,LBMDOM.pRho,LBMDOM.pVel,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread          >>>(pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,pInside,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-#endif
+        cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread>>>(pfBn,pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
         cudaImprintLatticeFC<<<lbmdemaux.nfc/Nthread+1,Nthread>>>(pPaCe,pPaCeF,DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();
@@ -743,11 +745,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Final                " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
-#ifdef USE_IBB
-        cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
-#endif
-
-        FLBM::cudaCollideSCDEM<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
+        FLBM::cudaCollideSCDEM<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         real * tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
@@ -756,9 +754,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
         //FLBM::cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
-#ifndef USE_IBB
         cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
-#endif
 
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();

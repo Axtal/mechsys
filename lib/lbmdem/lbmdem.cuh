@@ -137,8 +137,8 @@ __global__ void cudaReset(bool const * IsSolid, real * Gammaf, real * Gamma, rea
         //Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
     //}
 }
-
-#ifdef USE_IBB
+/*
+//#ifdef USE_IBB
 __global__ void cudaCheckOutsideVC(size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real * Gamma, 
         int * Inside, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
 {
@@ -389,8 +389,10 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     atomicAdd(& Par[ip].T.y   ,Tlbm.y);
     atomicAdd(& Par[ip].T.z   ,Tlbm.z);
 }
-#else
-__global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real const * Rho, real * Gamma, real * Omeis, real const *
+//#else
+*/
+template <typename FuncBn>
+__global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real const * Rho, real * Gamma, real * Omeis, real const *
         F, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
@@ -422,11 +424,12 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     Rotation(DPar[ip].w,DPar[ip].Q,tmp);
     real3 VelP   = DPar[ip].v + cross(tmp,B);
     real rho = Rho[ice];
-#ifndef USE_LADD
-    real Bn  = (gamma*(Tau-0.5))/((1.0-gamma)+(Tau-0.5));
-#else
-    real Bn  = floor(gamma);
-#endif
+    real Bn = fBn(gamma,Tau);
+//#ifndef USE_LADD
+    //real Bn  = (gamma*(Tau-0.5))/((1.0-gamma)+(Tau-0.5));
+//#else
+    //real Bn  = floor(gamma);
+//#endif
     size_t ncells = lbmaux[0].Nneigh;
     real3 Flbm = make_real3(0.0,0.0,0.0);
     for (size_t k=0;k<ncells;k++)
@@ -453,7 +456,7 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     atomicAdd(& Par[ip].T.y   ,Tlbm.y);
     atomicAdd(& Par[ip].T.z   ,Tlbm.z);
 }
-#endif
+//#endif
 
 __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * PaCeF, size_t const * Faces, size_t const * Facid, real3 const * Verts, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar
         , real const * Rho, real * Gamma, real * Omeis, real const * F, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)

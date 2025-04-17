@@ -66,13 +66,30 @@ struct lbm_aux
     real       L;           ///< Latent heat
 };
 
-__device__ real FeqFluid(size_t const & k, real const & rho, real3 const & vel, lbm_aux const * lbmaux)
+__device__ __inline__ real FeqFluid(size_t const & k, real const & rho, real3 const & vel, lbm_aux const * lbmaux)
 {
     real VdotV = dotreal3(vel,vel);
     real VdotC = dotreal3(vel,lbmaux[0].C[k]);
     real Cs    = lbmaux[0].Cs;
     return lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
 }
+
+//Functions for the smoothing function of LBM DEM interaction
+typedef real (*FuncBn_ptr)(real,real);
+ 
+__device__ __inline__ real BnSmooth(real gamma, real tau)
+{
+    return (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
+}
+
+__device__ __inline__ real BnLadd(real gamma, real tau)
+{
+    return floor(gamma);
+}
+
+__device__ FuncBn_ptr d_fBnSmooth = BnSmooth;
+
+__device__ FuncBn_ptr d_fBnLadd   = BnLadd;
 
 __global__ void cudaCheckUpLoad (lbm_aux const * lbmaux)
 {
@@ -186,7 +203,9 @@ __global__ void cudaCollideSC(bool const * IsSolid, real * F, real * Ftemp, real
     //}
 }
 
-__global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real * Omeis, lbm_aux const * lbmaux)
+template <typename FuncBn>
+__global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real * Omeis,
+        lbm_aux const * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
@@ -197,12 +216,15 @@ __global__ void cudaCollideSCDEM(bool const * IsSolid, real * F, real * Ftemp, r
         real  rho   = Rho[ic];
         real  tau   = lbmaux[0].Tau[0];
         real  gamma = Gamma[ic];
-#ifndef USE_LADD
-        real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
+        real Bn = fBn(gamma,tau);
+        //real Bn = BnSmooth(gamma,tau);
+        //if (ic==0) printf("Bn = %g \n",Bn);
+//#ifndef USE_LADD
+        //real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
         //real Bn = gamma;
-#else
-        real Bn = floor(gamma);
-#endif
+//#else
+        //real Bn = floor(gamma);
+//#endif
 
         real  NonEq[27];
         //real  Feq  [27];
