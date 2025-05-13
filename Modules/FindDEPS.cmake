@@ -33,7 +33,7 @@ OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"  
 OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"                                OFF)
 #OPTION(A_MAKE_USE_IBB        "Use Immersed Bounce Back instead of Gamma Method for DEM-LBM simulations"     OFF)
 #OPTION(A_MAKE_USE_LADD       "Use Ladd instead of Gamma Method for DEM-LBM simulations"                     OFF)
-OPTION(A_MAKE_USE_HERTZ      "Use Hertz law instead of linear dashpot for DEM simulations"                  OFF)
+#OPTION(A_MAKE_USE_HERTZ      "Use Hertz law instead of linear dashpot for DEM simulations"                  OFF)
                                                                                    
 # Options                                                                          
 OPTION(A_USE_OMP            "Use OpenMP  ?"                                        ON )
@@ -42,7 +42,7 @@ OPTION(A_USE_HDF5           "Use HDF5 ?"                                        
 
 #ADD_DEFINITIONS(-fmessage-length=0) # Each error message will appear on a single line; no line-wrapping will be done.
 #ADD_DEFINITIONS(-std=gnu++11)                   # New C++ standard
-#ADD_DEFINITIONS(-std=c++17)                      # New C++ standard
+#ADD_DEFINITIONS(-std=c++23)                      # New C++ standard
 #ADD_DEFINITIONS(-fpermissive)                    # New C++ standard
 ADD_DEFINITIONS(-Wno-deprecated-declarations)    # Remove depracated warnings
 #INCLUDE_DIRECTORIES (${INCLUDE_DIRECTORIES} $ENV{HOME}/pkg/boost_1_59_0)

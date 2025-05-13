@@ -246,7 +246,7 @@ int main(int argc, char **argv) try
     size_t Nproc = 1; 
     double dthoot= 4.0;     
     double qin   = 0.0;
-    if (argc>=3) Nproc=atoi(argv[2]);
+    if (argc>=3) Nproc =atoi(argv[2]);
     if (argc>=4) dthoot=atof(argv[3]);
     if (argc>=5) qin   =atof(argv[4]);
     String filekey  (argv[1]);
@@ -257,6 +257,7 @@ int main(int argc, char **argv) try
     double verlet;      // Verlet distance for optimization
     String ptype;       // Particle type 
     String test;        // Particle type 
+    String contactlaw;  // Particle type 
     size_t  RenderVideo;// Decide is video should be render
     bool   Cohesion;    // Decide if coheison is going to be simulated
     double fraction;    // Fraction of particles to be generated
@@ -291,6 +292,7 @@ int main(int argc, char **argv) try
         infile >> verlet;       infile.ignore(200,'\n');
         infile >> ptype;        infile.ignore(200,'\n');
         infile >> test;         infile.ignore(200,'\n');
+        infile >> contactlaw;   infile.ignore(200,'\n');
         infile >> RenderVideo;  infile.ignore(200,'\n');
         infile >> Cohesion;     infile.ignore(200,'\n');
         infile >> fraction;     infile.ignore(200,'\n');
@@ -358,6 +360,7 @@ int main(int argc, char **argv) try
     
     Vec3_t Xmin,Xmax;
     dom.BoundingBox(Xmin,Xmax);
+    if (contactlaw=="hertz") dom.ContactLaw=1;
     double a = 0.1;
     double maxd = dom.MaxDim();
     if (test=="normal")

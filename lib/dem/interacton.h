@@ -65,7 +65,7 @@ class CInteracton: public Interacton // Interacton for collision
 {
 public:
     // Constructor
-    CInteracton (Particle * Pt1, Particle * Pt2); ///< Constructor requires pointers to both particles
+    CInteracton (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     CInteracton () {};
 
     // Methods
@@ -117,9 +117,9 @@ class CInteractonSphere: public CInteracton // Collision interacton for spheres
 {
 public:
     // Methods 
-    CInteractonSphere (Particle * Pt1, Particle * Pt2); ///< Constructor requires pointers to both particles
+    CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                 ///< Update contacts by verlet algorithm
-    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                   ///< Calculates the contact force between particles
+    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contaclaw=0);    ///< Calculates the contact force between particles
     void UpdateParameters ();                           ///< Update the parameters
 
     // Data
@@ -172,7 +172,7 @@ public:
 
 // Collision interacton
 
-inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2)
+inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2, size_t contaclaw)
 {
     First           = true;
     BothFree        = Pt1->IsFree()&&Pt2->IsFree();
@@ -184,21 +184,24 @@ inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2)
     //double r2       = pow(P2->Props.V,1.0/3.0);
     //Kn              = (r1+r2)*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
     //Kt              = (r1+r2)*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-#ifdef USE_HERTZ
-    if (Pt1->Verts.Size()==1)
-    {
-        Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
-        Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
-    } 
-    else
+    if (contaclaw==0)
     {
         Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
         Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
     }
-#else
-    Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-    Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-#endif
+    else if(contaclaw==1)
+    {
+        if (Pt1->Verts.Size()==1)
+        {
+            Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
+            Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
+        } 
+        else
+        {
+            Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+            Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+        }
+    }
     double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
     Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
     Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
@@ -292,10 +295,10 @@ inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const 
     if (_update_disp_calc_force (P1->Edges     ,P2->Edges     ,Fdee,Lee,dt,Pert,iter)) overlap = true;
     if (_update_disp_calc_force (P1->Verts     ,P2->Faces     ,Fdvf,Lvf,dt,Pert,iter)) overlap = true;
     if (_update_disp_calc_force (P1->Faces     ,P2->Verts     ,Fdfv,Lfv,dt,Pert,iter)) overlap = true;
-    //if (_update_disp_calc_force (P1->Verts     ,P2->Tori      ,Fdvt,Lvt,dt,Per)) overlap = true;
-    //if (_update_disp_calc_force (P1->Tori      ,P2->Verts     ,Fdtv,Ltv,dt,Per)) overlap = true;
-    //if (_update_disp_calc_force (P1->Verts     ,P2->Cylinders ,Fdvc,Lvc,dt,Per)) overlap = true;
-    //if (_update_disp_calc_force (P1->Cylinders ,P2->Verts     ,Fdcv,Lcv,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Verts     ,P2->Tori      ,Fdvt,Lvt,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Tori      ,P2->Verts     ,Fdtv,Ltv,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Verts     ,P2->Cylinders ,Fdvc,Lvc,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Cylinders ,P2->Verts     ,Fdcv,Lcv,dt,Per)) overlap = true;
     //
     return overlap;
 }
@@ -502,7 +505,7 @@ inline void CInteracton::_update_contacts (FeatureA_T & A, FeatureB_T & B, ListC
 
 //Collision interacton for spheres
 
-inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
+inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contactlaw)
 {
     First           = true;
     BothFree        = Pt1->IsFree()&&Pt2->IsFree();
@@ -514,34 +517,37 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     double me       = ReducedValue(Pt1->Props.m ,Pt2->Props.m );
     Gn              = 2*ReducedValue(Pt1->Props.Gn,Pt2->Props.Gn);
     Gt              = 2*ReducedValue(Pt1->Props.Gt,Pt2->Props.Gt);
-#ifndef USE_HERTZ
-    Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
-    Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
-    if (Gn < 0.0)
+    if (contactlaw==0) 
     {
-        if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
-        Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-        Gt = 0.0;
-    }
-    Gn *= me;
-    Gt *= me;
-#else
-    double Re  = ReducedValue(Pt1->Props.R,Pt2->Props.R);
-    double nu1 = 0.5*Pt1->Props.Kn/Pt1->Props.Kt-1.0;
-    double nu2 = 0.5*Pt2->Props.Kn/Pt2->Props.Kt-1.0;
-    double Ye  = 1.0/((1.0-nu1*nu1)/Pt1->Props.Kn + (1.0-nu2*nu2)/Pt2->Props.Kn);
-    double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/Pt1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/Pt2->Props.Kn);
-    Kn  = 4.0/3.0*sqrt(Re)*Ye;
-    Kt  = 8.0*sqrt(Re)*Ge;
-
-    if (Gn < 0.0)
-    {
-        double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
-        Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
-        Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+        Kn   = 2*ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);
+        Kt   = 2*ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt);
+        if (Gn < 0.0)
+        {
+            if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
+            Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
+            Gt = 0.0;
+        }
+        Gn *= me;
+        Gt *= me;
     }
 
-#endif
+    else if (contactlaw==1)
+    {
+        double Re  = ReducedValue(Pt1->Props.R,Pt2->Props.R);
+        double nu1 = 0.5*Pt1->Props.Kn/Pt1->Props.Kt-1.0;
+        double nu2 = 0.5*Pt2->Props.Kn/Pt2->Props.Kt-1.0;
+        double Ye  = 1.0/((1.0-nu1*nu1)/Pt1->Props.Kn + (1.0-nu2*nu2)/Pt2->Props.Kn);
+        double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/Pt1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/Pt2->Props.Kn);
+        Kn  = 4.0/3.0*sqrt(Re)*Ye;
+        Kt  = 8.0*sqrt(Re)*Ge;
+
+        if (Gn < 0.0)
+        {
+            double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
+            Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
+            Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+        }
+    }
 
     //Mu   = 2*ReducedValue(Pt1->Props.Mu,Pt2->Props.Mu);
     if (Pt1->Props.Mu>1.0e-12&&Pt2->Props.Mu>1.0e-12)
@@ -584,7 +590,7 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2)
     CalcForce(0.0);
 }
 
-inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t const iter)
+inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t const iter, size_t contactlaw)
 {
     Epot   = 0.0;
     dEvis  = 0.0;
@@ -685,77 +691,82 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
         x2 = x2c- xf;
         Vec3_t vrel = -((P2->v-P1->v)+cross(t2,x2)-cross(t1,x1));
         Vec3_t vt = vrel - dot(n,vrel)*n;
-#ifndef USE_HERTZ 
-        Fn  = Kn*delta*n;
-        
-        Fnet += Fn;
-        Fdvv += vt*dt;
-        Fdvv -= dot(Fdvv,n)*n;
-        Vec3_t tan = Fdvv;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdvv)>Mu*norm(Fn)/Kt)
+        Vec3_t F  = OrthoSys::O;
+        Vec3_t Ft = OrthoSys::O;
+        if (contactlaw==0)
         {
-             //Count a sliding contact
-            Nsc++;
-            Fdvv = Mu*norm(Fn)/Kt*tan;
-            dEfric += Kt*dot(Fdvv,vt)*dt;
-        }
-        Ftnet += Kt*Fdvv;
+            Fn  = Kn*delta*n;
+            
+            Fnet += Fn;
+            Fdvv += vt*dt;
+            Fdvv -= dot(Fdvv,n)*n;
+            Vec3_t tan = Fdvv;
+            if (norm(tan)>0.0) tan/=norm(tan);
+            if (norm(Fdvv)>Mu*norm(Fn)/Kt)
+            {
+                 //Count a sliding contact
+                Nsc++;
+                Fdvv = Mu*norm(Fn)/Kt*tan;
+                dEfric += Kt*dot(Fdvv,vt)*dt;
+            }
+            Ftnet += Kt*Fdvv;
 
-        //Calculating the rolling resistance torque
-        double Kr = beta*Kt;
-        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
-        Fdr += Kr*Vr*dt;
-        Fdr -= dot(Fdr,n)*n;
-        
-        tan = Fdr;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdr)>eta*Mu*norm(Fn))
+            //Calculating the rolling resistance torque
+            double Kr = beta*Kt;
+            Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
+            Fdr += Kr*Vr*dt;
+            Fdr -= dot(Fdr,n)*n;
+            
+            tan = Fdr;
+            if (norm(tan)>0.0) tan/=norm(tan);
+            if (norm(Fdr)>eta*Mu*norm(Fn))
+            {
+                Fdr = eta*Mu*norm(Fn)*tan;
+                Nr++;
+            }
+
+            Ft = -Fdr;
+            
+            F = Fn + Kt*Fdvv + Gn*dot(n,vrel)*n + Gt*vt;
+            dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
+        }
+        else if (contactlaw==1)
         {
-            Fdr = eta*Mu*norm(Fn)*tan;
-            Nr++;
+            Fn  = Kn*sqrt(delta)*delta*n;
+
+            Fnet += Fn;
+            Fdvv += vt*dt;
+            Fdvv -= dot(Fdvv,n)*n;
+            Vec3_t tan = Fdvv;
+            if (norm(tan)>0.0) tan/=norm(tan);
+            if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
+            {
+                 //Count a sliding contact
+                Nsc++;
+                Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
+                dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
+            }
+            Ftnet += Kt*sqrt(delta)*Fdvv;
+
+            //Calculating the rolling resistance torque
+            double Kr = beta*Kt*sqrt(delta);
+            Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
+            Fdr += Kr*Vr*dt;
+            Fdr -= dot(Fdr,n)*n;
+            
+            tan = Fdr;
+            if (norm(tan)>0.0) tan/=norm(tan);
+            if (norm(Fdr)>eta*Mu*norm(Fn))
+            {
+                Fdr = eta*Mu*norm(Fn)*tan;
+                Nr++;
+            }
+
+            Ft = -Fdr;
+            
+            F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
+            dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
         }
-
-        Vec3_t Ft = -Fdr;
-        
-        Vec3_t F = Fn + Kt*Fdvv + Gn*dot(n,vrel)*n + Gt*vt;
-        dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
-#else
-        Fn  = Kn*sqrt(delta)*delta*n;
-
-        Fnet += Fn;
-        Fdvv += vt*dt;
-        Fdvv -= dot(Fdvv,n)*n;
-        Vec3_t tan = Fdvv;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
-        {
-             //Count a sliding contact
-            Nsc++;
-            Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
-            dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
-        }
-        Ftnet += Kt*sqrt(delta)*Fdvv;
-
-        //Calculating the rolling resistance torque
-        double Kr = beta*Kt*sqrt(delta);
-        Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
-        Fdr += Kr*Vr*dt;
-        Fdr -= dot(Fdr,n)*n;
-        
-        tan = Fdr;
-        if (norm(tan)>0.0) tan/=norm(tan);
-        if (norm(Fdr)>eta*Mu*norm(Fn))
-        {
-            Fdr = eta*Mu*norm(Fn)*tan;
-            Nr++;
-        }
-
-        Vec3_t Ft = -Fdr;
-        
-        Vec3_t F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
-        dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
-#endif
         
 
         F1   += -F;

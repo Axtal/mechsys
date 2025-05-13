@@ -209,6 +209,7 @@ public:
     size_t                                            Nproc;                       ///< Number of cores for multithreading
     size_t                                            idx_out;                     ///< Index of output
     size_t                                            iter;                        ///< Iteration counter
+    size_t                                            ContactLaw;                  ///< Contact law index                                                                                  
     std::unordered_map<size_t,size_t>                 PairtoCInt;                  ///< A map to identify which interacton has a given pair
     Array<Array <int> >                               Listofclusters;              ///< List of particles belonging to bounded clusters (applies only for cohesion simulations)
     MtData *                                          MTD;                         ///< Multithread data
@@ -255,7 +256,15 @@ public:
     DynInteractonCU  * pDynInteractonsEE;
     DynInteractonCU  * pDynInteractonsVF;
     DynInteractonCU  * pDynInteractonsFV;
-    dem_aux          * pdemaux;                                              
+    dem_aux          * pdemaux;
+    // Pointers to the main function calculating forces and dynamics
+    ForceVV_ptr_t      pForceVV;                                            ///< pointer to the force calculation for vertex vertex
+    ForceEE_ptr_t      pForceEE;                                            ///< pointer to the force calculation for edge edge
+    ForceVF_ptr_t      pForceVF;                                            ///< pointer to the force calculation for vertex face
+    ForceFV_ptr_t      pForceFV;                                            ///< pointer to the force calculation for face vertex
+    Translate_ptr_t    pTranslate;                                          ///< pointer to the translation function
+    Rotate_ptr_t       pRotate;                                             ///< pointer to the rotation function
+    void             * pExtraParams;                                        ///< pointer to a structure of extra parameters for force calculation
 #endif
     
 };
@@ -294,8 +303,19 @@ inline Domain::Domain (void * UD)
     UserData = UD;
     MostlySpheres = false;
     Xmax = Xmin = Ymax = Ymin = Zmax = Zmin =0.0;
+    ContactLaw = 0;
 #ifdef USE_OMP
     omp_init_lock(&lck);
+#endif
+#ifdef USE_CUDA
+    //cudaMemcpyFromSymbol(&pForceVV,ForceVV_Linear_ptr,sizeof(ForceVV_ptr_t));
+    pForceVV   = CalcForceVV;
+    pForceEE   = CalcForceEE;
+    pForceVF   = CalcForceVF;
+    pForceFV   = CalcForceFV;
+    pTranslate = Translate;
+    pRotate    = Rotate;
+    pExtraParams = NULL;
 #endif
 }
 
@@ -453,6 +473,12 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     double MaxBn   =  0.0;
     double MinDmax = -1.0;
     double MinMass = -1.0;
+#ifdef USE_CUDA
+    if (ContactLaw==1)
+    {
+        pForceVV = CalcForceVV_Hertz;
+    }
+#endif
     for (size_t i=0; i<Particles.Size(); i++) 
     { 
         if (Particles[i]->IsFree())
@@ -462,11 +488,14 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             if (Particles[i]->Dmax     > MaxDmax) MaxDmax = Particles[i]->Dmax;
             if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
             if (Particles[i]->Dmax     < MinDmax||(MinDmax<0.0)) MinDmax = Particles[i]->Dmax;
-#ifndef USE_HERTZ
-            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m;
-#else
-            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
-#endif
+            if (ContactLaw==0)
+            {
+                if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m;
+            }
+            else if (ContactLaw==1)
+            {
+                if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
+            }
             FreePar.Push(i);
         }
         else NoFreePar.Push(i);
@@ -581,23 +610,24 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         Reset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux);
         //cudaDeviceSynchronize();
         //Calculate forces
-        CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons,pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux);
+        //CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pForceVV, pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+        pForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "2" << std::endl;
         //cudaDeviceSynchronize();
-        CalcForceEE<<<demaux.neeint/Nthread+1,Nthread>>>(pEdgesCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux);
+        pForceEE<<<demaux.neeint/Nthread+1,Nthread>>>(pEdgesCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "3" << std::endl;
         //cudaDeviceSynchronize();
-        CalcForceVF<<<demaux.nvfint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsVF, pParticlesCU, pDynParticlesCU, pdemaux);
+        pForceVF<<<demaux.nvfint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsVF, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "4" << std::endl;
         //cudaDeviceSynchronize();
-        CalcForceFV<<<demaux.nfvint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux);
+        pForceFV<<<demaux.nfvint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "5" << std::endl;
         //cudaDeviceSynchronize();
         //Move Particles
-        Translate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
+        pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
         //std::cout << "6" << std::endl;
         //cudaDeviceSynchronize();
-        Rotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
+        pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
         //std::cout << "7" << std::endl;
         //cudaDeviceSynchronize();
         MaxD     <<<demaux.nverts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);
@@ -2281,11 +2311,11 @@ inline void Domain::ResetContacts()
             PairtoCInt[hash] = CInteractons.Size();
             if (Particles[n]->Verts.Size()==1 && Particles[m]->Verts.Size()==1)
             {
-                if (!MostlySpheres) CInteractons.Push (new CInteractonSphere(Particles[n],Particles[m]));
+                if (!MostlySpheres) CInteractons.Push (new CInteractonSphere(Particles[n],Particles[m],ContactLaw));
             }
             else
             {
-                CInteractons.Push (new CInteracton(Particles[n],Particles[m]));
+                CInteractons.Push (new CInteracton(Particles[n],Particles[m],ContactLaw));
             }
             std::pair<int,int> p (Particles[n]->Tag,Particles[m]->Tag);
             if (FricCoeff.count(p)==1)
@@ -2575,39 +2605,42 @@ inline double Domain::CalcEnergy (double & Ekin, double & Epot)
 
 inline double Domain::CriticalDt ()
 {
-#ifndef USE_HERTZ
-    double MaxKn   =  0.0;
-    double MaxBn   =  0.0;
-    double MinMass = -1.0;
-    for (size_t i=0; i<Particles.Size(); i++) 
-    { 
-        if (Particles[i]->IsFree())
-        {
-            if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
-            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m;
-        }
-    }
-    for (size_t i=0; i<BInteractons.Size(); i++)
+    if (ContactLaw==0)
     {
-        double pbn = std::max(BInteractons[i]->Bn/BInteractons[i]->L0,BInteractons[i]->Bt/BInteractons[i]->L0);
-        if (pbn > MaxBn) MaxBn = pbn;
-    }
-
-    return 0.1*sqrt(MinMass/(MaxKn+MaxBn));
-#else
-    double MaxKn   =  0.0;
-    double MinMass = -1.0;
-    for (size_t i=0; i<Particles.Size(); i++) 
-    { 
-        if (Particles[i]->IsFree())
-        {
-            if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
-            if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
+        double MaxKn   =  0.0;
+        double MaxBn   =  0.0;
+        double MinMass = -1.0;
+        for (size_t i=0; i<Particles.Size(); i++) 
+        { 
+            if (Particles[i]->IsFree())
+            {
+                if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
+                if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m;
+            }
         }
-    }
+        for (size_t i=0; i<BInteractons.Size(); i++)
+        {
+            double pbn = std::max(BInteractons[i]->Bn/BInteractons[i]->L0,BInteractons[i]->Bt/BInteractons[i]->L0);
+            if (pbn > MaxBn) MaxBn = pbn;
+        }
 
-    return 0.1*sqrt(MinMass/MaxKn);
-#endif
+        return 0.1*sqrt(MinMass/(MaxKn+MaxBn));
+    }
+    else if (ContactLaw==1)
+    {
+        double MaxKn   =  0.0;
+        double MinMass = -1.0;
+        for (size_t i=0; i<Particles.Size(); i++) 
+        { 
+            if (Particles[i]->IsFree())
+            {
+                if (Particles[i]->Props.Kn > MaxKn  ) MaxKn   = Particles[i]->Props.Kn;
+                if (Particles[i]->Props.m  < MinMass||(MinMass<0.0)) MinMass = Particles[i]->Props.m/Particles[i]->Dmax;
+            }
+        }
+
+        return 0.1*sqrt(MinMass/MaxKn);
+    }
 }
 
 inline void Domain::EnergyOutput (size_t IdxOut, std::ostream & OF)
