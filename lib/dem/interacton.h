@@ -47,7 +47,7 @@ public:
 
     // Methods
     virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0) =0;    ///< Update contacts by verlet algorithm
-    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0) =0; ///< Calculates the contact force between particles
+    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0) =0; ///< Calculates the contact force between particles
     virtual void UpdateParameters () =0;                ///< Update the parameters
 
     // Data
@@ -70,7 +70,7 @@ public:
 
     // Methods
     virtual bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    virtual bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0); ///< Calculates the contact force between particles
+    virtual bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contaclaw = 0); ///< Calculates the contact force between particles
     virtual void UpdateParameters ();              ///< Update the parameters
 
     // Data
@@ -119,7 +119,7 @@ public:
     // Methods 
     CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                 ///< Update contacts by verlet algorithm
-    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contaclaw=0);    ///< Calculates the contact force between particles
+    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contactlaw=0);    ///< Calculates the contact force between particles
     void UpdateParameters ();                           ///< Update the parameters
 
     // Data
@@ -143,7 +143,7 @@ public:
 
     // Methods
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0); ///< Calculates the contact force between particles
+    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0); ///< Calculates the contact force between particles
     void UpdateParameters ();              ///< Update the parameters in case they change
 
     // Data
@@ -256,7 +256,7 @@ inline bool CInteracton::UpdateContacts (double alpha, Vec3_t const & Per, size_
     else return false;
 }
 
-inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const iter)
+inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const iter, size_t const contactlaw)
 {
     bool   overlap = false;
     Epot   = 0.0;
@@ -911,7 +911,7 @@ inline bool BInteracton::UpdateContacts (double alpha, Vec3_t const & Per, size_
     return valid;
 }
 
-inline bool BInteracton::CalcForce(double dt, Vec3_t const & Per, size_t const iter)
+inline bool BInteracton::CalcForce(double dt, Vec3_t const & Per, size_t const iter, size_t const contactlaw)
 {
     F1 = OrthoSys::O;
     F2 = OrthoSys::O;

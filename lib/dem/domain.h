@@ -671,7 +671,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             
             //DEM::Interacton * p = Interactons[i];
             //std::cout << p->I1 << " " << p->I2 << std::endl;
-		    if (Interactons[i]->CalcForce(Dt,Per,iter))
+		    if (Interactons[i]->CalcForce(Dt,Per,iter,ContactLaw))
             {
                 String f_error(FileKey+"_error");
                 Save     (f_error.CStr());
