@@ -692,7 +692,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 
         cudaReset<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGammaf,pGamma,pOmeis,LBMDOM.plbmaux);
 
-        DEMDOM.pReset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pInteractons,DEMDOM.pComInteractons,DEMDOM.pdemaux);
+        DEMDOM.pReset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pInteractons,DEMDOM.pComInteractons,DEMDOM.pdemaux,DEMDOM.pExtraParams);
         DEMDOM.pForceVV<<<DEMDOM.demaux.nvvint/Nthread+1,Nthread>>>(DEMDOM.pInteractons,DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVV, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
         DEMDOM.pForceEE<<<DEMDOM.demaux.neeint/Nthread+1,Nthread>>>(DEMDOM.pEdgesCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsEE, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
         DEMDOM.pForceVF<<<DEMDOM.demaux.nvfint/Nthread+1,Nthread>>>(DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVF, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
@@ -716,9 +716,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 
         //start = std::chrono::high_resolution_clock::now();
 
-        DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux);
-        DEMDOM.pRotate   <<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux);
-        DEM::MaxD     <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU, DEMDOM.pdemaux);
+        DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+        DEMDOM.pRotate   <<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+        DEM::MaxD        <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU, DEMDOM.pdemaux);
 
         real maxdis = 0.0;
         thrust::device_vector<real>::iterator it=thrust::max_element(DEMDOM.bMaxDCU.begin(),DEMDOM.bMaxDCU.end());
