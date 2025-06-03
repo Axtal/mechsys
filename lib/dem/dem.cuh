@@ -55,23 +55,25 @@ struct dem_aux
 };
 
 typedef void (*ForceVV_ptr_t)(InteractonCU const *, ComInteractonCU *, DynInteractonCU *, ParticleCU *
-        , DynParticleCU *, dem_aux const *, void const *);
+        , DynParticleCU *, dem_aux const *, void *);
 
 typedef void (*ForceEE_ptr_t)(size_t const *, real3 const *, InteractonCU const *, ComInteractonCU *, DynInteractonCU *, ParticleCU *
-        , DynParticleCU *, dem_aux const *, void const *);
+        , DynParticleCU *, dem_aux const *, void *);
 
 typedef void (*ForceVF_ptr_t)(size_t const *, size_t const *, real3 const *, InteractonCU const *, ComInteractonCU *, DynInteractonCU *, ParticleCU *
-        , DynParticleCU *, dem_aux const *, void const *);
+        , DynParticleCU *, dem_aux const *, void *);
 
 typedef void (*ForceFV_ptr_t)(size_t const *, size_t const *, real3 const *, InteractonCU const *, ComInteractonCU *, DynInteractonCU *, ParticleCU *
-        , DynParticleCU *, dem_aux const *, void const *);
+        , DynParticleCU *, dem_aux const *, void *);
 
-typedef void (*Translate_ptr_t)(real3 *, ParticleCU const *, DynParticleCU * DPar, dem_aux const *);
+typedef void (*Translate_ptr_t)(real3 *, ParticleCU const *, DynParticleCU *, dem_aux const *, void *);
 
-typedef void (*Rotate_ptr_t)   (real3 *, ParticleCU const *, DynParticleCU * DPar, dem_aux const *);
+typedef void (*Rotate_ptr_t)   (real3 *, ParticleCU const *, DynParticleCU *, dem_aux const *, void *);
+
+typedef void (*Reset_ptr_t)    (ParticleCU *, DynParticleCU *, InteractonCU const * , ComInteractonCU *, dem_aux const *, void *);
 
 __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, DynInteractonCU * DIntVV, ParticleCU * Par,
-        DynParticleCU * DPar, dem_aux const * demaux, void const * extraparams)
+        DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nvvint) return;
@@ -164,7 +166,7 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
 }
 
 __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CInt, DynInteractonCU * DIntVV, ParticleCU * Par,
-        DynParticleCU * DPar, dem_aux const * demaux, void const * extraparams)
+        DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nvvint) return;
@@ -260,7 +262,7 @@ __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CI
 }
 
 __global__ void CalcForceEE(size_t const * Edges, real3 const * Verts, InteractonCU const * Int, ComInteractonCU * CInt, DynInteractonCU * DIntEE,
-        ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void const * extraparams)
+        ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].neeint) return;
@@ -346,7 +348,7 @@ __global__ void CalcForceEE(size_t const * Edges, real3 const * Verts, Interacto
 }
 
 __global__ void CalcForceVF(size_t const * Faces, size_t const * Facid, real3 const * Verts, InteractonCU const * Int, ComInteractonCU * CInt,
-        DynInteractonCU * DIntVF, ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void const * extraparams)
+        DynInteractonCU * DIntVF, ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nvfint) return;
@@ -433,7 +435,7 @@ __global__ void CalcForceVF(size_t const * Faces, size_t const * Facid, real3 co
 }
 
 __global__ void CalcForceFV(size_t const * Faces, size_t const * Facid, real3 const * Verts, InteractonCU const * Int, ComInteractonCU * CInt,
-        DynInteractonCU * DIntFV, ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void const * extraparams)
+        DynInteractonCU * DIntFV, ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nfvint) return;
@@ -519,7 +521,7 @@ __global__ void CalcForceFV(size_t const * Faces, size_t const * Facid, real3 co
     }
 }
 
-__global__ void Translate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DPar, dem_aux const * demaux)
+__global__ void Translate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nparts) return;
@@ -544,7 +546,7 @@ __global__ void Translate(real3 * Verts, ParticleCU const * Par, DynParticleCU *
     }
 }
 
-__global__ void Rotate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DPar, dem_aux const * demaux)
+__global__ void Rotate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=demaux[0].nparts) return;
@@ -618,7 +620,8 @@ __global__ void Rotate(real3 * Verts, ParticleCU const * Par, DynParticleCU * DP
     }
 }
 
-__global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, InteractonCU const * Int, ComInteractonCU * CInt, dem_aux const * demaux)
+__global__ void Reset (ParticleCU * Par, DynParticleCU * DPar, InteractonCU const * Int, ComInteractonCU * CInt, dem_aux const * demaux, void *
+        extraparams)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic<demaux[0].nparts)

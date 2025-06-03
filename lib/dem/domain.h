@@ -264,6 +264,7 @@ public:
     ForceFV_ptr_t      pForceFV;                                            ///< pointer to the force calculation for face vertex
     Translate_ptr_t    pTranslate;                                          ///< pointer to the translation function
     Rotate_ptr_t       pRotate;                                             ///< pointer to the rotation function
+    Reset_ptr_t        pReset;                                              ///< pointer to the reset function
     void             * pExtraParams;                                        ///< pointer to a structure of extra parameters for force calculation
 #endif
     
@@ -315,6 +316,7 @@ inline Domain::Domain (void * UD)
     pForceFV   = CalcForceFV;
     pTranslate = Translate;
     pRotate    = Rotate;
+    pReset     = Reset;
     pExtraParams = NULL;
 #endif
 }
@@ -529,7 +531,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     if (Alpha > Beta*MaxDmax)
     {
         Alpha = Beta*MaxDmax;
-        printf("%s  Verlet distance changed to       =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
+        printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
     }
     fflush(stdout); 
 
@@ -607,10 +609,9 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 #ifdef USE_CUDA
         //std::cout << "1" << std::endl;
         //Initialize particles
-        Reset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux);
+        pReset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux,pExtraParams);
         //cudaDeviceSynchronize();
         //Calculate forces
-        //CalcForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pForceVV, pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         pForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "2" << std::endl;
         //cudaDeviceSynchronize();
@@ -624,10 +625,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         //std::cout << "5" << std::endl;
         //cudaDeviceSynchronize();
         //Move Particles
-        pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
+        pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "6" << std::endl;
         //cudaDeviceSynchronize();
-        pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux);
+        pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "7" << std::endl;
         //cudaDeviceSynchronize();
         MaxD     <<<demaux.nverts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);
