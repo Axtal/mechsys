@@ -83,7 +83,7 @@ public:
     typedef void (*ptFun_t) (Domain & Dom, void * UserData);
 
     // Constructor
-    Domain(void * UserData=NULL);
+    Domain(void * UserData=NULL,size_t ContactLaw=0);
 
     // Destructor
     ~Domain();
@@ -292,7 +292,7 @@ struct MtData   /// A structure for the multi-thread data
 
 // Constructor & Destructor
 
-inline Domain::Domain (void * UD)
+inline Domain::Domain (void * UD, size_t contactlaw)
 {
     Initialized = false;
     Dilate = false;
@@ -304,13 +304,13 @@ inline Domain::Domain (void * UD)
     UserData = UD;
     MostlySpheres = false;
     Xmax = Xmin = Ymax = Ymin = Zmax = Zmin =0.0;
-    ContactLaw = 0;
+    ContactLaw = contactlaw;
 #ifdef USE_OMP
     omp_init_lock(&lck);
 #endif
 #ifdef USE_CUDA
-    //cudaMemcpyFromSymbol(&pForceVV,ForceVV_Linear_ptr,sizeof(ForceVV_ptr_t));
-    pForceVV   = CalcForceVV;
+    if (contactlaw==0) pForceVV   = CalcForceVV;
+    if (contactlaw==1) pForceVV   = CalcForceVV_Hertz;
     pForceEE   = CalcForceEE;
     pForceVF   = CalcForceVF;
     pForceFV   = CalcForceFV;
@@ -475,12 +475,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     double MaxBn   =  0.0;
     double MinDmax = -1.0;
     double MinMass = -1.0;
-#ifdef USE_CUDA
-    if (ContactLaw==1)
-    {
-        pForceVV = CalcForceVV_Hertz;
-    }
-#endif
+
     for (size_t i=0; i<Particles.Size(); i++) 
     { 
         if (Particles[i]->IsFree())

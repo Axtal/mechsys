@@ -327,7 +327,9 @@ int main(int argc, char **argv) try
 
     // domain and User data
     UserData dat;
-    DEM::Domain dom(&dat);
+    size_t cl = 0;
+    if (contactlaw=="hertz") cl=1;
+    DEM::Domain dom(&dat,1);
     dom.Alpha=verlet;
     dom.Dilate = true;
 
@@ -360,7 +362,6 @@ int main(int argc, char **argv) try
     
     Vec3_t Xmin,Xmax;
     dom.BoundingBox(Xmin,Xmax);
-    if (contactlaw=="hertz") dom.ContactLaw=1;
     double a = 0.1;
     double maxd = dom.MaxDim();
     if (test=="normal")

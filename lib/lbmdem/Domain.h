@@ -53,7 +53,9 @@ public:
     double                    nu, ///< Viscosity of the fluid
     iVec3_t               Ndim,   ///< Cell divisions per side
     double                dx,     ///< Space spacing
-    double                dt);    ///< Time step
+    double                dt,     ///< Time step
+    size_t        contactlaw=0    ///< contact law for DEM
+    );
 
     Domain (LBMethod  Method,     ///< Type of array, for example D2Q9
     double                nu,     ///< Viscosity of the fluid
@@ -61,7 +63,8 @@ public:
     double                dx,     ///< Space spacing
     double                dt,     ///< Time step
     Vec3_t  xmin=OrthoSys::O,     ///< minimun point of the domain to be rendered
-    Vec3_t  xmax=OrthoSys::O      ///< maximun point of the domain to be rendered
+    Vec3_t  xmax=OrthoSys::O,     ///< maximun point of the domain to be rendered
+    size_t        contactlaw=0    ///< contact law for DEM
     );    
     //Methods
     void Reset();                    ///< Reset LBM grid
@@ -136,7 +139,7 @@ struct MtData
     Array<ParticleCellPair>           LPCP; ///< Same array for periodic boundary information
 };
 
-inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double Thedx, double Thedt)
+inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double Thedx, double Thedt, size_t contactlaw)
 {
     Nproc  = 1;
     idx_out= 0;
@@ -150,7 +153,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     PeriodicY= false;
     PeriodicZ= false;
     LBMDOM = FLBM::Domain(TheMethod, Thenu, TheNdim, Thedx, Thedt);
-    DEMDOM = DEM ::Domain();
+    DEMDOM = DEM ::Domain(NULL,contactlaw);
 
     LBMDOM.Omeis    = new double *** [TheNdim(0)];
     LBMDOM.Gamma    = new double **  [TheNdim(0)];
@@ -182,7 +185,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
 #endif
 }
 
-inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, double Thedx, double Thedt, Vec3_t xmin, Vec3_t xmax)
+inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, double Thedx, double Thedt, Vec3_t xmin, Vec3_t xmax, size_t contactlaw)
 {
     Nproc  = 1;
     idx_out= 0;
@@ -195,7 +198,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
     PeriodicX= false;
     PeriodicY= false;
     PeriodicZ= false;
-    DEMDOM = DEM ::Domain();
+    DEMDOM = DEM ::Domain(NULL,contactlaw);
     DEMDOM.Load(DEMfile);
     Vec3_t Xmax,Xmin;
     DEMDOM.BoundingBoxAll(Xmin,Xmax);
