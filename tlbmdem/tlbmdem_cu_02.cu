@@ -76,7 +76,7 @@ int main(int argc, char **argv) try
     size_t nz = 200;
     double dx = 0.4;
     double dt = 1.6e-2;
-    double R = 3.6;
+    double R = 1.8;
     LBMDEM::Domain dom(D3Q15,nu,iVec3_t(nx,ny,nz),dx,dt);
     UserData dat;
     dom.UserData = &dat;
@@ -84,8 +84,8 @@ int main(int argc, char **argv) try
     dat.nu = nu;
     //dat.acc = Vec3_t(1.0e-2,1.0e-2,1.0e-2);
     dat.acc = Vec3_t(1.0e-2,0.0,0.0);
-    dom.DEMDOM.AddSphere(-1,Vec3_t(0.5*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
-    
+    //dom.DEMDOM.AddSphere(-1,Vec3_t(0.5*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
+    dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
     //dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),R,1.0);
     //double e = pow(M_PI/6.0,1.0/3.0)*2*R;
     //dom.DEMDOM.AddCube(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),0.05*e,e,1.0);
@@ -101,6 +101,7 @@ int main(int argc, char **argv) try
         Vec3_t v(0.0,0.0,0.0);
         iVec3_t idx(ix,iy,iz);
         dom.LBMDOM.Initialize(0,idx,1.0/*rho*/,v);
+        if ((iz==0)||(iz==nz-1)||(iy==0)||(iy==ny-1)) dom.LBMDOM.IsSolid[0][ix][iy][iz] = true;
     }   
 
     dom.Alpha = 2.0*dx;
