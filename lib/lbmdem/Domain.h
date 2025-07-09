@@ -631,9 +631,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     if (PeriodicZ)
     printf("%s  Periodic Boundary conditions in Z between =  %g and %g%s\n" ,TERM_CLR5, DEMDOM.Zmin, DEMDOM.Zmax                                  , TERM_RST);
     
-    if (Alpha>DEMDOM.Beta*DEMDOM.MaxDmax&&DEMDOM.MaxDmax>1.0e-12)
+    if (Alpha>2.0*DEMDOM.Beta*DEMDOM.MaxDmax&&DEMDOM.MaxDmax>1.0e-12)
     {
-        Alpha = DEMDOM.Beta*DEMDOM.MaxDmax;
+        Alpha = 2.0*DEMDOM.Beta*DEMDOM.MaxDmax;
         DEMDOM.Alpha = Alpha;
         printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
     }

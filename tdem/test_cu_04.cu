@@ -329,9 +329,10 @@ int main(int argc, char **argv) try
     UserData dat;
     size_t cl = 0;
     if (contactlaw=="hertz") cl=1;
-    DEM::Domain dom(&dat,1);
+    DEM::Domain dom(&dat,cl);
     dom.Alpha=verlet;
     dom.Dilate = true;
+    dom.Nthread = 128;
 
     bool load = false;
     // particle

@@ -523,9 +523,9 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     printf("%s  Periodic Boundary conditions in Y between =  %g and %g%s\n" ,TERM_CLR5, Zmin, Zmax                           , TERM_RST);
 
 
-    if (Alpha > Beta*MaxDmax)
+    if (Alpha > 2.0*Beta*MaxDmax)
     {
-        Alpha = Beta*MaxDmax;
+        Alpha = 2.0*Beta*MaxDmax;
         printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
     }
     fflush(stdout); 

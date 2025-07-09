@@ -1,7 +1,7 @@
 0.01     = Verlet:      Verlet distance for optimization
 sphereboxhcp = ptype:       Particle type (voronoi, sphere,rice and tetrahedra mesh so far)
 normal  = test;       Typeof test, normal or sawtooth shearing
-linear  = contact law  Contact law, right now only hertz and linear
+hertz  = contact law  Contact law, right now only hertz and linear
 1       = RenderVideo: 1 if video should be render, 0 otherwise
 0       = Cohesion:    1 if cohesion is considered, 0 otherwise
 0.8    = fraction:    Fraction of Particles to appear
