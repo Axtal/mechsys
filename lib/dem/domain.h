@@ -2715,7 +2715,8 @@ inline void Domain::DelParticles (Array<int> const & Tags)
             if (Particles[i]->Tag==Tags[j]) idxs.Push(i);
         }
     }
-    if (idxs.Size()<1) throw new Fatal("Domain::DelParticles: Could not find any particle to be deleted");
+    //if (idxs.Size()<1) throw new Fatal("Domain::DelParticles: Could not find any particle to be deleted");
+    if (idxs.Size()<1) std::cout<< "Warning: Domain::DelParticles: Could not find any particle to be deleted" << std::endl;
     Particles.DelItems (idxs);
     for (size_t i=0; i<Particles.Size(); ++i)
     {
@@ -2725,7 +2726,8 @@ inline void Domain::DelParticles (Array<int> const & Tags)
 
 inline void Domain::DelParticlesIdx (Array<int> const & idxs)
 {
-    if (idxs.Size()<1) throw new Fatal("Domain::DelParticlesIdx: no particles to be deleted");
+    //if (idxs.Size()<1) throw new Fatal("Domain::DelParticlesIdx: no particles to be deleted");
+    if (idxs.Size()<1) std::cout<< "Warning: Domain::DelParticles: Could not find any particle to be deleted" << std::endl;
     Particles.DelItems (idxs);
     for (size_t i=0; i<Particles.Size(); ++i)
     {
