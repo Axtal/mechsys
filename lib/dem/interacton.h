@@ -48,7 +48,7 @@ public:
     // Methods
     virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0) =0;    ///< Update contacts by verlet algorithm
     virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0) =0; ///< Calculates the contact force between particles
-    virtual void UpdateParameters () =0;                ///< Update the parameters
+    virtual void UpdateParameters (size_t contactlaw=0) =0;                ///< Update the parameters
 
     // Data
     Particle     * P1;        ///< First particle
@@ -69,9 +69,9 @@ public:
     CInteracton () {};
 
     // Methods
-    virtual bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    virtual bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contaclaw = 0); ///< Calculates the contact force between particles
-    virtual void UpdateParameters ();              ///< Update the parameters
+    virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
+    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contaclaw = 0); ///< Calculates the contact force between particles
+    virtual void UpdateParameters (size_t contactlaw=0);              ///< Update the parameters
 
     // Data
     bool           First;     ///< Is it the first collision?
@@ -120,7 +120,7 @@ public:
     CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                 ///< Update contacts by verlet algorithm
     bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contactlaw=0);    ///< Calculates the contact force between particles
-    void UpdateParameters ();                           ///< Update the parameters
+    void UpdateParameters (size_t contactlaw=0);                           ///< Update the parameters
 
     // Data
     //ListContacts_t Lvv;                            ///< List of edge-edge contacts 
@@ -144,7 +144,7 @@ public:
     // Methods
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
     bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0); ///< Calculates the contact force between particles
-    void UpdateParameters ();              ///< Update the parameters in case they change
+    void UpdateParameters (size_t contactlaw=0);              ///< Update the parameters in case they change
 
     // Data
     size_t IF1;                            ///< Index of the shared face for particle 1
@@ -303,7 +303,7 @@ inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const 
     return overlap;
 }
 
-inline void CInteracton::UpdateParameters ()
+inline void CInteracton::UpdateParameters (size_t contactlaw)
 {
     Kn              = 2*ReducedValue(P1->Props.Kn,P2->Props.Kn);
     Kt              = 2*ReducedValue(P1->Props.Kt,P2->Props.Kt);
@@ -804,22 +804,45 @@ inline bool CInteractonSphere::UpdateContacts (double alpha, Vec3_t const & Per,
     else return false;
 }
 
-inline void CInteractonSphere::UpdateParameters ()
+inline void CInteractonSphere::UpdateParameters (size_t contactlaw)
 {
     Kn   = 2*ReducedValue(P1->Props.Kn,P2->Props.Kn);
     Kt   = 2*ReducedValue(P1->Props.Kt,P2->Props.Kt);
     double me       = ReducedValue(P1->Props.m ,P2->Props.m );
     Gn              = 2*ReducedValue(P1->Props.Gn,P2->Props.Gn);
     Gt              = 2*ReducedValue(P1->Props.Gt,P2->Props.Gt);
-    if (Gn < -0.001)
+    if (contactlaw==0) 
     {
-        if (fabs(Gn)>1.0) throw new Fatal("CInteracton the restitution coefficient is greater than 1");
-        Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-        Gt = 0.0;
+        Kn   = 2*ReducedValue(P1->Props.Kn,P2->Props.Kn);
+        Kt   = 2*ReducedValue(P1->Props.Kt,P2->Props.Kt);
+        if (Gn < 0.0)
+        {
+            if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
+            Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
+            Gt = 0.0;
+        }
+        Gn *= me;
+        Gt *= me;
     }
-    Gn *= me;
-    Gt *= me;
-    //Mu              = 2*ReducedValue(P1->Props.Mu,P2->Props.Mu);
+
+    else if (contactlaw==1)
+    {
+        double Re  = ReducedValue(P1->Props.R,P2->Props.R);
+        double nu1 = 0.5*P1->Props.Kn/P1->Props.Kt-1.0;
+        double nu2 = 0.5*P2->Props.Kn/P2->Props.Kt-1.0;
+        double Ye  = 1.0/((1.0-nu1*nu1)/P1->Props.Kn + (1.0-nu2*nu2)/P2->Props.Kn);
+        double Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/P1->Props.Kn + 2.0*(2.0-nu2)*(1.0+nu2)/P2->Props.Kn);
+        Kn  = 4.0/3.0*sqrt(Re)*Ye;
+        Kt  = 8.0*sqrt(Re)*Ge;
+
+        if (Gn < 0.0)
+        {
+            double b = sqrt(pow(log(-Gn),2.0)/(M_PI*M_PI+pow(log(-Gn),2.0)));
+            Gn = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
+            Gt = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));
+        }
+    }
+
     if (P1->Props.Mu>1.0e-12&&P2->Props.Mu>1.0e-12)
     {
         if (!P1->IsFree())      Mu = P1->Props.Mu;
@@ -997,7 +1020,7 @@ inline bool BInteracton::CalcForce(double dt, Vec3_t const & Per, size_t const i
     return false;
 }
 
-inline void BInteracton::UpdateParameters ()
+inline void BInteracton::UpdateParameters (size_t contactlaw)
 {
     Bn              = 2*ReducedValue(P1->Props.Bn,P2->Props.Bn)*Area;
     Bt              = 2*ReducedValue(P1->Props.Bt,P2->Props.Bt)*Area;

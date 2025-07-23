@@ -405,7 +405,7 @@ inline void Domain::SetProps (Dict & D)
     }
     for (size_t i=0; i<CInteractons.Size(); i++)
     {
-        CInteractons[i]->UpdateParameters();
+        CInteractons[i]->UpdateParameters(ContactLaw);
     }
 }
 
@@ -2102,13 +2102,13 @@ inline void Domain::ResetInteractons()
             // if both particles are spheres (just one vertex)
             if (Particles[i]->Verts.Size()==1 && Particles[j]->Verts.Size()==1)
             {
-                CInteractons.Push (new CInteractonSphere(Particles[i],Particles[j]));
+                CInteractons.Push (new CInteractonSphere(Particles[i],Particles[j],ContactLaw));
             }
 
             // normal particles
             else
             {
-                CInteractons.Push (new CInteracton(Particles[i],Particles[j]));
+                CInteractons.Push (new CInteracton(Particles[i],Particles[j],ContactLaw));
             }
 
             std::pair<int,int> p (Particles[i]->Tag,Particles[j]->Tag);

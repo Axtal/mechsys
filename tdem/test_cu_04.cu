@@ -39,7 +39,10 @@ struct UdCu //User data for cuda
     real   mtop;
     real   ztop;
     real   zbtop;
+    real   zbot;
+    real   zbbot;
     real   Ftop;
+    real   FA;
     real   Dz;
     real   Vz;
     size_t i1;
@@ -75,7 +78,7 @@ __global__ void AddTopForce(size_t const * TopPar, DEM::DynParticleCU const * DP
 
 __global__ void MoveTop(UdCu * UC,DEM::dem_aux const * demaux)
 {
-    real za   = 2.0*UC[0].ztop - UC[0].zbtop + UC[0].Ftop*demaux[0].dt*demaux[0].dt/UC[0].mtop;
+    real za   = 2.0*UC[0].ztop - UC[0].zbtop + (UC[0].Ftop-UC[0].FA)*demaux[0].dt*demaux[0].dt/UC[0].mtop;
     UC[0].Dz  = za - UC[0].ztop;
     UC[0].Vz  = 0.5*(za - UC[0].zbtop)/demaux[0].dt;
     UC[0].zbtop = UC[0].ztop;
@@ -88,7 +91,7 @@ __global__ void MoveTopPar(size_t * TopPar,real3 * Verts, real3 * Vertso, DEM::P
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=UC[0].nptop) return;
     size_t ip = TopPar[ic];
-    real  vel = UC[0].str*(DPar[UC[0].i2].x.z-DPar[UC[0].i1].x.z-UC[0].Lz)*fmin(10.0*(demaux[0].Time-UC[0].T0)/(UC[0].Tf-UC[0].T0),1.0);
+    real  vel = UC[0].str*(UC[0].ztop-UC[0].zbot)*fmin(10.0*(demaux[0].Time-UC[0].T0)/(UC[0].Tf-UC[0].T0),1.0);
     DPar[ip].v.x  = vel;
     DPar[ip].xb.x = DPar[ip].x.x-vel*demaux[0].dt;
     DPar[ip].v.z  = UC[0].Vz;
@@ -220,6 +223,9 @@ void ReportNor (DEM::Domain & dom, void *UD)
     }
     if (!dom.Finished) 
     {
+        Vec3_t Xmin,Xmax;
+        dom.BoundingBox(Xmin,Xmax);
+        double maxd = dom.MaxDim();
         double Areaz = (dom.Ymax-dom.Ymin)*fabs(dom.Xmax - dom.Xmin);
         double Fx = 0.0;
         for (size_t ip=0;ip<dat.TPar.Size();ip++)
@@ -228,7 +234,7 @@ void ReportNor (DEM::Domain & dom, void *UD)
             Fx += dom.Particles[id]->F(0);
         }
         double Sx    = -Fx/Areaz;
-        double Ey    = (dom.GetParticle(-5)->x(2) - dom.GetParticle(-4)->x(2) - dat.L0)/dat.L0;
+        double Ey    = (Xmax(2)-Xmin(2)-3.0*maxd-dat.L0)/dat.L0;
         dat.oss_ss << Util::_10_6 << dom.Time << Util::_8s << Sx << Util::_8s << Ey << std::endl;
     }
     else
@@ -332,7 +338,7 @@ int main(int argc, char **argv) try
     DEM::Domain dom(&dat,cl);
     dom.Alpha=verlet;
     dom.Dilate = true;
-    dom.Nthread = 128;
+    //dom.Nthread = 128;
 
     bool load = false;
     // particle
@@ -455,22 +461,28 @@ int main(int argc, char **argv) try
     }
     else if (test=="normal")
     {
-        dat.L0   = dom.GetParticle(-5)->x(2) - dom.GetParticle(-4)->x(2);
+        double maxd = dom.MaxDim();
+        dom.BoundingBox(Xmin,Xmax);
+        double Ztop = Xmax(2);
+        double Zbot = Xmin(2);
         UdCu UC;
-        UC.Lz    = dom.GetParticle(-5)->x(2)-dom.GetParticle(-4)->x(2)-(dom.GetParticle(-5)->MinZ()-dom.GetParticle(-4)->MaxZ());
-        UC.i1    = dom.GetParticle(-4)->Index;
-        UC.i2    = dom.GetParticle(-5)->Index;
         UC.str   = str;
         UC.T0    = T0;
         UC.Tf    = Tf;
         UC.mtop  = 0.0;
-        UC.ztop  = 0.0;
-        UC.zbtop = 0.0;
+        UC.ztop  = Ztop-1.5*maxd; 
+        UC.zbtop = Ztop-1.5*maxd; 
+        UC.zbot  = Zbot+1.5*maxd;
+        UC.zbbot = Zbot+1.5*maxd;
+        UC.zbbot = 0.0;
         UC.Ftop  = 0.0;
+        UC.FA    = p0*Lx*Ly;
+
+        dat.L0   = UC.ztop-UC.zbot;
+        Array<int> deltags(2);
+        deltags = -4,-5;
+        dom.DelParticles(deltags);
         
-        double maxd = dom.MaxDim();
-        double Ztop = dom.GetParticle(-5)->x(2);
-        double Zbot = dom.GetParticle(-4)->x(2);
         thrust::host_vector<size_t> hTopPar;
         thrust::host_vector<size_t> hBotPar;
 
