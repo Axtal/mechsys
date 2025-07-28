@@ -60,6 +60,7 @@ enum LBMSolver
     AdvectionDiffusion,
     PhaseFieldIce,
     PhaseField,
+    ShallowWater,
 };
 
 namespace FLBM
@@ -149,7 +150,10 @@ public:
             , Vec3_t & Vel);                                                      ///< Same as previous, but for the Phase Field Ice model
     void   Initialize(iVec3_t idx, double Pre, double Phi
             , Vec3_t & Vel);                                                      ///< Same as previous, but for the Phase Field model
+    void   InitializeSW(iVec3_t idx, double H, Vec3_t & Vel);                     ///< Initialize each cell with a given height and velocity for SW
+                                                                                  ///solver
     double Feq(size_t k, double Rho, Vec3_t & Vel);                               ///< The equilibrium function
+    double FeqSW(size_t k, double H, Vec3_t & Vel);                               ///< The equilibrium function for SW solver
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
     
@@ -181,6 +185,8 @@ public:
     double ***    Gamma;                       ///< Information on the overlapping volume fraction
     double ***    Gammaf;                      ///< Information on the prescribed overlapping volume fraction
     double *      Tau;                         ///< The characteristic time of the lattice
+    //Shallow Water parameters
+    double        g;                           ///< Gravity for SW
     //Shan Chen model parameters
     double *      G;                           ///< The attractive constant for multiphase simulations
     double *      Gs;                          ///< The attractive constant for solid phase
@@ -353,6 +359,7 @@ inline Domain::Domain(LBMethod TheMethod, Array<double> nu, iVec3_t TheNdim, dou
         L      = 1.0;
     }
 
+
     Tau    = new double [Nl];
 
     if (Solver==NavierStokes)
@@ -513,6 +520,14 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
         Op     = OPPOSITED3Q19;
     }
     
+    if (Solver==ShallowWater)
+    {
+        Rhonames[0].Printf("Height");
+        rho[0] = 1.0;
+        cap[0] = 1.0;
+        g      = 1.0;
+        if (TheMethod!=D2Q9) throw new Fatal("ShallowWater solver only works with velocity configuration D2Q9");
+    }
 
 
     Tau    = new double [Nl];
@@ -532,17 +547,20 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     for (size_t i=0;i<Nl;i++)
     {
         Tau     [i]    = 3.0*nu[i]*dt/(dx*dx)+0.5;
-        G       [i]    = 0.0;
-        Gs      [i]    = 0.0;
-        Rhoref  [i]    = 200.0;
-        Psi     [i]    = 4.0;
         F       [i]    = new double *** [Ndim(0)];
         Ftemp   [i]    = new double *** [Ndim(0)];
         Vel     [i]    = new Vec3_t **  [Ndim(0)];
         BForce  [i]    = new Vec3_t **  [Ndim(0)];
         Rho     [i]    = new double **  [Ndim(0)];
         IsSolid [i]    = new bool   **  [Ndim(0)];
-        Rhonames[i].Printf("Density_%d",i);
+        if (Solver==NavierStokes)
+        {
+            G       [i]    = 0.0;
+            Gs      [i]    = 0.0;
+            Rhoref  [i]    = 200.0;
+            Psi     [i]    = 4.0;
+            Rhonames[i].Printf("Density_%d",i);
+        }
         for (size_t nx=0;nx<Ndim(0);nx++)
         {
             F       [i][nx]    = new double ** [Ndim(1)];
@@ -940,6 +958,20 @@ inline double Domain::Feq(size_t k, double Rho, Vec3_t & V)
     return W[k]*Rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
 }
 
+inline double Domain::FeqSW(size_t k, double h, Vec3_t & V)
+{
+    double VdotC = dot(V,C[k]);
+    double VdotV = dot(V,V);
+    if (k==0)
+    {
+        return h - 5.0/6.0*g*h*h/(Cs*Cs) - 2.0/3.0*h*VdotV;
+    }
+    else
+    {
+        return W[k]*h*(1.5*g*h/(Cs*Cs) + 3.0*VdotC + 4.5*VdotC*VdotC - 1.5*VdotV);
+    }
+}
+
 inline void Domain::Initialize(size_t il, iVec3_t idx, double TheRho, Vec3_t & TheVel)
 {
     size_t ix = idx(0);
@@ -962,6 +994,31 @@ inline void Domain::Initialize(size_t il, iVec3_t idx, double TheRho, Vec3_t & T
     {
         Vel[il][ix][iy][iz] = OrthoSys::O;
         Rho[il][ix][iy][iz] = 0.0;
+    }
+}
+
+inline void Domain::InitializeSW(iVec3_t idx, double TheH, Vec3_t & TheVel)
+{
+    size_t ix = idx(0);
+    size_t iy = idx(1);
+    size_t iz = idx(2);
+
+    BForce[0][ix][iy][iz] = OrthoSys::O;
+
+    for (size_t k=0;k<Nneigh;k++)
+    {
+        F[0][ix][iy][iz][k] = FeqSW(k,TheH,TheVel);
+    }
+
+    if (!IsSolid[0][ix][iy][iz])
+    {
+        Vel[0][ix][iy][iz] = TheVel;
+        Rho[0][ix][iy][iz] = TheH;
+    }
+    else
+    {
+        Vel[0][ix][iy][iz] = OrthoSys::O;
+        Rho[0][ix][iy][iz] = 0.0;
     }
 }
 
@@ -1978,6 +2035,7 @@ inline void Domain::UpLoadDevice(size_t Nc)
     lbmaux.dx        = dx;
     lbmaux.iter      = 0;
     lbmaux.Time      = Time;
+    lbmaux.g         = g;
     lbmaux.thick     = thick;
     lbmaux.sigma     = sigma;
     lbmaux.Ts        = Ts;
@@ -2266,6 +2324,10 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         {
             cudaCollidePF<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
+        else if (Solver==ShallowWater)
+        {
+            cudaCollideSW<<<Nl*Ncells/Nthread+1,Nthread>>>(pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
 
         real * tmp = pF;
         pF = pFtemp;
@@ -2283,6 +2345,10 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         else if (Solver==PhaseField)
         {
             cudaStreamPF2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+        }
+        else if (Solver==ShallowWater)
+        {
+            cudaStreamSW2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
         else
         {

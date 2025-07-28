@@ -32,6 +32,7 @@ SET(CUDAPROGS
     tclbm06
     tclbm07
     tclbm08
+    tclbm09
 )
 
 FOREACH(var ${PROGS})

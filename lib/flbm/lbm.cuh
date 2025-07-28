@@ -49,6 +49,8 @@ struct lbm_aux
     real       dx;          ///< grid size
     real       dt;          ///< time step
     real       Time;        ///< Time clock
+    //These parameters are for the SW solver;
+    real       g;           ///< Gravity acceleration
     //These parameters are for Shan Chen type of simulations
     real       G[2];        ///< Collection of cohesive constants for multiphase simulation
     real       Gs[2];       ///< Collection of cohesive constants for multiphase simulation
@@ -72,6 +74,21 @@ __device__ __inline__ real FeqFluid(size_t const & k, real const & rho, real3 co
     real VdotC = dotreal3(vel,lbmaux[0].C[k]);
     real Cs    = lbmaux[0].Cs;
     return lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
+}
+
+__device__ __inline__ real FeqSW   (size_t const & k, real const & h  , real3 const & vel, lbm_aux const * lbmaux)
+{    
+    real Cs    = lbmaux[0].Cs;
+    real VdotV = dotreal3(vel,vel)/(Cs*Cs);
+    real VdotC = dotreal3(vel,lbmaux[0].C[k])/Cs;
+    if (k==0)
+    {
+        return h - 5.0/6.0*lbmaux[0].g*h*h/(Cs*Cs) - 2.0/3.0*h*VdotV;
+    }
+    else
+    {
+        return lbmaux[0].W[k]*h*(1.5*lbmaux[0].g*h/(Cs*Cs) + 3.0*VdotC + 4.5*VdotC*VdotC - 1.5*VdotV);
+    }
 }
 
 //Functions for the smoothing function of LBM DEM interaction
@@ -679,6 +696,48 @@ __global__ void cudaCollidePF(bool const * IsSolid, real * F, real * Ftemp, real
     BForce[ic+1*lbmaux[0].Ncells].y = dotreal3(vel,gradrho);
 }
 
+__global__ void cudaCollideSW(real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
+{   
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
+
+    real3 vel   = Vel[ic];
+    real  h     = Rho[ic];
+    real  tau   = lbmaux[0].Tau[0];
+    
+    real  NonEq[27];
+    real  Q = 0.0;
+    for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    {
+        NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - FeqSW(k,h,vel,lbmaux);
+        Q           += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
+    }
+    Q = sqrt(Q);
+    tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc/h));
+
+    real3 Force = -lbmaux[0].g*h*BForce[ic] - lbmaux[0].cap[0]*norm(vel)*vel;
+
+    bool valid = true;
+    real alpha = 1.0;
+    size_t numit = 0;
+    while (valid&&numit<2)
+    {
+        valid = false;
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(NonEq[k]/tau -
+                    lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/6.0);
+            if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
+            {
+                real temp = tau*F[ic*lbmaux[0].Nneigh + k]/(NonEq[k] - lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/6.0);
+                if (temp<alpha) alpha = temp;
+                valid = true;
+            }
+        }
+        if (valid) numit++;
+    }
+}
+
 __global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real3 * BForce, real const * Rho, lbm_aux const * lbmaux)
 {
     size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
@@ -782,14 +841,7 @@ __global__ void cudaStream1(real * F, real * Ftemp, real3 * BForce, lbm_aux * lb
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
-#ifdef USE_IBB
-    if (ic==0)
-    {
-        lbmaux[0].Time += lbmaux[0].dt;
-        lbmaux[0].iter++;
-    }
-    BForce[ic] = make_real3(0.0,0.0,0.0);
-#endif
+
     size_t icx = ic%lbmaux[0].Nx;
     size_t icy = (ic/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ic/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
@@ -910,6 +962,34 @@ __global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, rea
 
     Vel[ic+2*lbmaux[0].Ncells].z = BForce[ic+2*lbmaux[0].Ncells].z;
     BForce[ic] = make_real3(0.0,0.0,0.0);
+}
+
+__global__ void cudaStreamSW2(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
+    if (ic==0)
+    {
+        lbmaux[0].Time += lbmaux[0].dt;
+        lbmaux[0].iter++;
+    }
+    //BForce[ic] = make_real3(0.0,0.0,0.0);
+    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    //{
+        //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k];
+    //}
+    Rho   [ic] = 0.0;
+    Vel   [ic] = make_real3(0.0,0.0,0.0);
+    if (!IsSolid[ic])
+    {
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            Rho[ic] += F[ic*lbmaux[0].Nneigh + k];
+            Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
+            //if (ic==0) printf("k: %lu %f %f %f %f \n",k,Rho[ic],Vel[ic].x,Vel[ic].y,Vel[ic].z);
+        }
+        Vel[ic] = lbmaux[0].Cs/Rho[ic]*Vel[ic];
+    }
 }
 }
 #endif //MECHSYS_LBM_CUH
