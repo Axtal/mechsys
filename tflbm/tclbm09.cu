@@ -28,45 +28,51 @@
 using std::cout;
 using std::endl;
 
+double ComputeZb(double x, double y)
+{
+    return 0.8 * exp(-5.0 * pow(x - 1.0, 2) - 50.0 * pow(y - 0.5, 2));
+}
+
 int main(int argc, char **argv) try
 {
-    size_t nx = 400, ny = 400;
+    size_t nx = 400, ny = 200;
     double nu = 0.16;
-    double dx = 1.0;
-    double dt = 1.0;
+    double dx = 5.e-3;
+    double dt = 2.e-5;
 
     FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,1), dx, dt, ShallowWater);
 
-    double obsX = nx/2, obsY = ny/2;
-    double Rext = nx/10;
-    double h0   = 0.1;
-    Dom.g       = 0.1;
+    Dom.g       = 9.8;
+    Dom.Sc      = 0.3;
     
 
+    double dh = 0.1;
 
 	for (size_t i=0; i<nx; ++i)
 	for (size_t j=0; j<ny; ++j)
     {
-        double r     = sqrt(pow((int)(i)-obsX,2.0) + pow((int)(j)-obsY,2.0));
-        //double r     = sqrt(pow((int)(j)-obsY,2.0));
-        //double r     = std::max(fabs((int)(i)-obsX),fabs((int)(j)-obsY));
-        double h = 1.0 - h0*exp(-r*r/(Rext*Rext));
-        //if (i==nx/10) h += 0.5;
+        double x = i * dx;
+        double y = j * dx;
+        double zb = ComputeZb(x, y);
+
+        double h = 1.0 - zb + dh*exp(-(i*dx-0.4)*(i*dx-0.4)/(0.01*0.01));
 
         Dom.InitializeSW(iVec3_t(i,j,0),h,OrthoSys::O);
         Dom.BForce[0][i][j][0] = OrthoSys::O;
         for (size_t k=1;k<9;k++)
         {
-            size_t ni = (size_t)((int)i + (int)Dom.C[k](0) + (int)nx)%nx;
-            size_t nj = (size_t)((int)j + (int)Dom.C[k](1) + (int)ny)%ny;
-            double nr = sqrt(pow((int)(ni)-obsX,2.0) + pow((int)(nj)-obsY,2.0));
-            double nh = h0*exp(-nr*nr/(Rext*Rext));
-            Dom.BForce[0][i][j][0] = Dom.BForce[0][i][j][0] + 3.0*Dom.W[k]*nh*Dom.C[k]/dx;
+            size_t ni = (size_t)((int)(i)+ (int)Dom.C[k](0) + (int)(nx))%nx;
+            size_t nj = (size_t)((int)(j)+ (int)Dom.C[k](1) + (int)(ny))%ny;
+            double xn = ni * dx;
+            double yn = nj * dx;
+            double zbn = ComputeZb(xn, yn);
+            // double grad_zb = zbn - zb;
+            Dom.BForce[0][i][j][0] = Dom.BForce[0][i][j][0] + 3.0 * Dom.W[k] * zbn * Dom.C[k] / dx;
         }
     }
-
-    Dom.Solve(1.0e5,1.0e3,NULL,NULL,"tclbm09",true,1);
-
+    
+    
+    Dom.Solve(10.0,1.0e-2,NULL,NULL,"tclbm09",true,1);
 
     return 0;
 }

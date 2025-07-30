@@ -713,7 +713,7 @@ __global__ void cudaCollideSW(real * F, real * Ftemp, real3 * BForce, real3 * Ve
         Q           += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
     }
     Q = sqrt(Q);
-    tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc/h));
+    tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc*lbmaux[0].Sc/h));
 
     real3 Force = -lbmaux[0].g*h*BForce[ic] - lbmaux[0].cap[0]*norm(vel)*vel;
 
@@ -726,10 +726,10 @@ __global__ void cudaCollideSW(real * F, real * Ftemp, real3 * BForce, real3 * Ve
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
             Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(NonEq[k]/tau -
-                    lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/6.0);
+                    lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/(6.0*lbmaux[0].Cs));
             if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
             {
-                real temp = tau*F[ic*lbmaux[0].Nneigh + k]/(NonEq[k] - lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/6.0);
+                real temp = tau*F[ic*lbmaux[0].Nneigh + k]/(NonEq[k] - lbmaux[0].dt*dotreal3(lbmaux[0].C[k],Force)/(6.0*lbmaux[0].Cs));
                 if (temp<alpha) alpha = temp;
                 valid = true;
             }
