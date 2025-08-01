@@ -751,7 +751,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     double Ekin, Epot, Etot;
     Etot = CalcEnergy (Ekin, Epot);
     printf("%s  Total number of iterations                                = %zd%s\n",TERM_CLR4,iter, TERM_RST);
+    if (numup>0)
+    {
     printf("%s  Average number of iterations between contact list updates = %zd%s\n",TERM_CLR4,iter_t/numup, TERM_RST);
+    }
     printf("%s  Kinematic energy                                          = %g%s\n",TERM_CLR4, Ekin, TERM_RST);
     printf("%s  Potential energy                                          = %g%s\n",TERM_CLR4, Epot, TERM_RST);
     printf("%s  Total energy                                              = %g%s\n",TERM_CLR2, Etot, TERM_RST);

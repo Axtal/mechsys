@@ -268,11 +268,7 @@ __global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real
             for (size_t k=0;k<lbmaux[0].Nneigh;k++)
             {
                 real Ome   = Omeis[ic*lbmaux[0].Nneigh + k];
-                #ifndef USE_IBB
                 real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
-                #else
-                real noneq = NonEq[k]/tau;
-                #endif
                 Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);
                 //if((ic==555||ic==556||ic==557||ic==558)&&(k==1)) printf("ic %lu Ftk %g Fk %g iter %lu \n",ic,Ftemp[ic*lbmaux[0].Nneigh + k],F[ic*lbmaux[0].Nneigh + k],lbmaux[0].iter); 
                 if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
