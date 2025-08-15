@@ -95,9 +95,9 @@ void Setup (FLBM::Domain & dom, void * UD)
 int main(int argc, char **argv) try
 {
     size_t Nproc = 1; 
-    if (argc==2) Nproc=atoi(argv[1]);
     double u_max  = 0.1;                // Poiseuille's maximum velocity
     double Re     = 40000.0;                  // Reynold's number
+    if (argc==2) Re=atof(argv[1]);
     size_t nx = 2400;
     size_t ny = 300;
     int radius = ny/10 + 1;           // radius of inner circle (obstacle)
