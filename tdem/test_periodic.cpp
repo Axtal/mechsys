@@ -217,6 +217,7 @@ int main(int argc, char **argv) try
     double verlet;      // Verlet distance for optimization
     String ptype;       // Particle type 
     String test;        // Particle type 
+    String contactlaw;  // Particle type 
     size_t  RenderVideo;// Decide is video should be render
     bool   Cohesion;    // Decide if coheison is going to be simulated
     double fraction;    // Fraction of particles to be generated
@@ -251,6 +252,7 @@ int main(int argc, char **argv) try
         infile >> verlet;       infile.ignore(200,'\n');
         infile >> ptype;        infile.ignore(200,'\n');
         infile >> test;         infile.ignore(200,'\n');
+        infile >> contactlaw;   infile.ignore(200,'\n');
         infile >> RenderVideo;  infile.ignore(200,'\n');
         infile >> Cohesion;     infile.ignore(200,'\n');
         infile >> fraction;     infile.ignore(200,'\n');
@@ -285,7 +287,9 @@ int main(int argc, char **argv) try
 
     // domain and User data
     UserData dat;
-    DEM::Domain dom(&dat);
+    size_t cl = 0;
+    if (contactlaw=="hertz") cl=1;
+    DEM::Domain dom(&dat,cl);
     dom.Alpha=verlet;
     dat.p0 = p0;
     dom.Dilate = true;

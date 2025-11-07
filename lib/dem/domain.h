@@ -1774,6 +1774,48 @@ inline void Domain::Save (char const * FileKey)
         
     }
 
+    for (size_t ii=0;ii<Interactons.Size();ii++)
+    {
+        size_t i1 = Interactons[ii]->I1;
+        size_t i2 = Interactons[ii]->I2;
+        size_t hash = HashFunction(i1,i2);
+        DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+
+        if (norm(Ci->Ftnet)<1.0e-12) continue;
+
+        hid_t group_id;
+        String inter;
+        inter.Printf("/Interacton_%08d",ii);
+        group_id = H5Gcreate(file_id, inter.CStr(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        dims[0] = 1;
+        int datint[1];
+        datint[0] = i1;
+        H5LTmake_dataset_int(group_id,"I1",1,dims,datint);
+        datint[0] = i2;
+        H5LTmake_dataset_int(group_id,"I2",1,dims,datint);
+
+        if (Particles[i1]->Verts.Size()==1 && Particles[i2]->Verts.Size()==1)
+        {
+            DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
+            dims[0] = 3;
+            double cod[3];
+            Vec3_t Ft;
+            String intfvv;
+            intfvv.Printf("Fvv");
+            Ft = Cis->Fdvv*Cis->Kt;
+            cod[0] = Ft(0);
+            cod[1] = Ft(1);
+            cod[2] = Ft(2);
+            H5LTmake_dataset_double(group_id,intfvv.CStr(),1,dims,cod);
+            intfvv.Printf("Fdr");
+            Ft = Cis->Fdr*Cis->Kt*Cis->beta;
+            cod[0] = Ft(0);
+            cod[1] = Ft(1);
+            cod[2] = Ft(2);
+            H5LTmake_dataset_double(group_id,intfvv.CStr(),1,dims,cod);
+        }
+    }
+
     H5Fflush(file_id,H5F_SCOPE_GLOBAL);
     H5Fclose(file_id);
     //sleep(5);

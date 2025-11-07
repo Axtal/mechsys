@@ -515,6 +515,7 @@ __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * 
         }
     }
 
+    //if (icx==50&&icy==50&&icz==6) printf("gamma: %g dist = %g igeo = %d ip = %d \n",len/(12.0*lbmaux[0].dx),minl,igeo,ip);
     if (fabs(len)<1.0e-12) return;
     real Tau = lbmaux[0].Tau[0];
     real gamma  = len/(12.0*lbmaux[0].dx);

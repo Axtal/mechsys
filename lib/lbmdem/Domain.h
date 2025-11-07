@@ -449,7 +449,7 @@ void Domain::ResetParCell()
                         Xs   = Xstemp;
                         B    = -S;
                     }
-                    if (dist<2.0*Alpha+Pa->Props.R)
+                    if (dist<=2.0*Alpha+Pa->Props.R)
                     {
                         if (Pa->Faces[j]->Area()<2.0*M_PI*Pa->Props.R*Pa->Props.R)
                         {

@@ -1,6 +1,7 @@
 0.05     = Verlet:      Verlet distance for optimization
 voronoi = ptype:       Particle type (voronoi, sphere,rice and tetrahedra mesh so far)
-sawtooth  = test;       Typeof test, normal or sawtooth shearing
+normal  = test;       Typeof test, normal or sawtooth shearing
+normal  = contact law  Contact law, right now only hertz and linear
 1       = RenderVideo: 1 if video should be render, 0 otherwise
 0       = Cohesion:    1 if cohesion is considered, 0 otherwise
 0.5    = fraction:    Fraction of Particles to appear
@@ -16,7 +17,7 @@ sawtooth  = test;       Typeof test, normal or sawtooth shearing
 2.0e4  = Bt:          Cohesion Tangential stiffness
 1.0e3  = Bm:          Cohesion Torque stiffness
 0.9     = Eps:        Cohesion Threshold
-0.005     = R:           Spheroradius
+0.005   = R:           Spheroradius
 1234    = seed:        Seed of the random generator
 0.5e-4   = dt:          Time step
 0.1     = dtOut:       Time step for output

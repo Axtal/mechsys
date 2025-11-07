@@ -1016,6 +1016,7 @@ inline void Domain::AddPlane (int Tag, const Vec3_t & X, double R, double Lx, do
     Particles[Particles.Size()-1]->Dmax       = sqrt(Lx*Lx+Ly*Ly)+R;
     Particles[Particles.Size()-1]->PropsReady = true;
     Particles[Particles.Size()-1]->Index      = Particles.Size()-1;
+    Particles[Particles.Size()-1]->Closed     = false;
     // clean up
     if (!ThereisanAxis) delete Axis;
 }
