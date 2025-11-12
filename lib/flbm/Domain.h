@@ -160,6 +160,8 @@ public:
     //Writing Methods
     void WriteXDMF         (char const * FileKey);                                ///< Write the domain data in xdmf file
     void WriteXDMF_DEM     (char const * FileKey);                                ///< Write the domain data in xdmf file for DEM simulations
+    void Save(char const *FileKey);                                               ///< Save and Load pair for the LBM state
+    void Load(char const *FileKey);
    
     //Methods for CUDA 
     #ifdef USE_CUDA
@@ -2014,6 +2016,197 @@ inline void Domain::VelDen()
         }
     }
 }
+
+inline void Domain::Save(char const *FileKey)
+{
+    String fn(FileKey);
+    fn.append(".hdf5");
+    hid_t file_id;
+    file_id = H5Fcreate(fn.CStr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    size_t Nx = Ndim[0];
+    size_t Ny = Ndim[1];
+    size_t Nz = Ndim[2];
+
+#ifdef USE_CUDA
+    thrust:: host_vector<real>  hF;
+    hF = bF;
+    for (size_t j = 0; j < Nl     ; j++)
+    for (size_t m = 0; m < Ndim(2); m++)
+    for (size_t l = 0; l < Ndim(1); l++)
+    for (size_t n = 0; n < Ndim(0); n++)
+    for (size_t k = 0; k < Nneigh ; k++)
+    {
+        size_t Nn = k + n * Nneigh + l * Ndim(0) * Nneigh + m * Ndim(1) *Ndim(0) * Nneigh + j * Ncells * Nneigh;
+        F[j][n][l][m][k] = hF[Nn];
+    }
+#endif
+    for (size_t j = 0; j < Nl; j++)
+    {
+        // Creating data sets
+        double *f       = new double[Nneigh * Nx * Ny * Nz];
+        double *solid   = new double[Nx*Ny*Nz];
+        double *bforce  = new double[3*Nx*Ny*Nz];
+
+        size_t i = 0;
+        for (size_t m = 0; m < Ndim(2); m++)
+        for (size_t l = 0; l < Ndim(1); l++)
+        for (size_t n = 0; n < Ndim(0); n++)
+        {
+            for (size_t k = 0; k < Nneigh; k++)
+            {
+                f[Nneigh * i + k] = F[j][n][l][m][k];
+            }
+            solid[i]  = IsSolid[j][n][l][m] ? 1.0 : 0.0;
+
+            bforce[3*i]   = BForce[j][n][l][m](0);
+            bforce[3*i+1] = BForce[j][n][l][m](1);
+            bforce[3*i+2] = BForce[j][n][l][m](2);
+            i++;
+        }
+
+        // Writing data to h5 file
+        hsize_t dims[1];
+        dims[0] = Nneigh * Nx * Ny * Nz;
+        String dsname;
+
+        dsname.Printf("F_%d", j);
+        H5LTmake_dataset_double(file_id, dsname.CStr(), 1, dims, f);
+
+        dims[0] = Nx*Ny*Nz;
+        dsname.Printf("Solid_%d",j);
+        H5LTmake_dataset_double(file_id, dsname.CStr(), 1, dims, solid);
+
+        dims[0] = 3*Nx*Ny*Nz;
+        dsname.Printf("bforce_%d",j);
+        H5LTmake_dataset_double(file_id, dsname.CStr(),1, dims, bforce);
+
+        dims[0] = 1;
+        int N[1];
+        N[0] = Nneigh * Nx * Ny * Nz;
+        dsname.Printf("Ncell");
+        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+
+        dims[0] = 1;
+        N[0] = Nx;
+        dsname.Printf("Nx");
+        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+
+        dims[0] = 1;
+        N[0] = Ny;
+        dsname.Printf("Ny");
+        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+
+        dims[0] = 1;
+        N[0] = Nz;
+        dsname.Printf("Nz");
+        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+
+        delete[] f;
+        delete[] solid;
+        delete[] bforce;
+    }
+
+
+    // Closing the file
+    H5Fflush(file_id, H5F_SCOPE_GLOBAL);
+    H5Fclose(file_id);
+}
+
+inline void Domain::Load(char const *FileKey)
+{
+    // Opening the file for reading
+    String fn(FileKey);
+    fn.append(".hdf5");
+    if (!Util::FileExists(fn))
+        throw new Fatal("File <%s> not found", fn.CStr());
+    printf("\n%s--- Loading file %s --------------------------------------------%s\n", TERM_CLR1, fn.CStr(), TERM_RST);
+
+    hid_t file_id;
+    file_id = H5Fopen(fn.CStr(), H5F_ACC_RDONLY, H5P_DEFAULT);
+
+    int data[1];
+    H5LTread_dataset_int(file_id, "Ncell", data);
+    int Ncell = data[0];
+
+    H5LTread_dataset_int(file_id, "Nx", data);
+    int Nx = data[0];
+
+    H5LTread_dataset_int(file_id, "Ny", data);
+    int Ny = data[0];
+
+    H5LTread_dataset_int(file_id, "Nz", data);
+    int Nz = data[0];
+
+    for (size_t j = 0; j < (size_t)Nl; j++)
+    {
+
+        String dsnameF;
+        String dsnamesolid;
+        String dsnamebforce;
+        dsnameF.Printf("F_%d", j);
+        dsnamesolid.Printf("Solid_%d",j);
+        dsnamebforce.Printf("bforce_%d",j);
+
+        double *f = new double[Ncell];
+        double *solid = new double [Nx*Ny*Nz];
+        double *bforce = new double [3*Nx*Ny*Nz];
+
+        H5LTread_dataset_double(file_id, dsnameF.CStr(), f);
+        H5LTread_dataset_double(file_id, dsnamesolid.CStr(),solid);
+        H5LTread_dataset_double(file_id, dsnamebforce.CStr(),bforce);
+
+        size_t i = 0;
+        for (size_t m = 0; m < (size_t)Nz; m++)
+        for (size_t l = 0; l < (size_t)Ny; l++)
+        for (size_t n = 0; n < (size_t)Nx; n++)
+        {
+            for (size_t k = 0; k < Nneigh; k++)
+            {
+                F[j][n][l][m][k] = f[Nneigh * i + k];
+                
+                //printf("i = %lu, f = %f \n", i, f[Nneigh*i+k]);
+            }
+            if(solid[i] == 1.0) IsSolid[j][n][l][m] = true;
+            
+            BForce[j][n][l][m](0) = bforce[3*i];
+            BForce[j][n][l][m](1) = bforce[3*i+1];
+            BForce[j][n][l][m](2) = bforce[3*i+2];
+            i++;
+        }
+
+        delete[] f;
+        delete[] solid;
+        delete[] bforce;
+       
+    }
+
+    for (size_t j = 0; j < (size_t)Nl; j++)
+    {
+        for (size_t ix = 0; ix < (size_t)Nx; ix++)
+        for (size_t iy = 0; iy < (size_t)Ny; iy++)
+        for (size_t iz = 0; iz < (size_t)Nz; iz++)
+        {
+            Rho[j][ix][iy][iz] = 0.0;
+            //BForce[j][ix][iy][iz] = OrthoSys::O;
+            Vel[j][ix][iy][iz] = OrthoSys::O;
+
+            if(!IsSolid[j][ix][iy][iz]){
+
+                for (size_t k = 0; k < Nneigh; k++)
+                {
+                    Rho[j][ix][iy][iz] += F[j][ix][iy][iz][k];
+                    Vel[j][ix][iy][iz] += F[j][ix][iy][iz][k] * C[k];
+                }
+                Vel[j][ix][iy][iz] += 0.5 * dt * BForce[j][ix][iy][iz]; // calculating velocity
+                Vel[j][ix][iy][iz] *= Cs / Rho[j][ix][iy][iz];
+            }
+        }
+    }
+
+    H5Fclose(file_id);
+    printf("\n%s--- Done --------------------------------------------%s\n", TERM_CLR2, TERM_RST);
+}
+
 
 #ifdef USE_CUDA
 inline void Domain::UpLoadDevice(size_t Nc)

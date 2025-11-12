@@ -103,8 +103,12 @@ int main(int argc, char **argv) try
     Dom.G [1]    =  0.0;
     Dom.Gs[1]    =  400.0;
     Dom.Gmix     =  0.001;
-
-    Dom.Solve(1.0e5,1.0e3,Setup,NULL,"tclbm03",true,1);
+    String filekey("tclbm03");
+    String filename(filekey+".hdf5");
+    // if tclbm03.hdf5 exists then load that file to continue
+    if (Util::FileExists(filename)) Dom.Load(filekey.CStr());
+    Dom.Solve(1.0e4,1.0e2,Setup,NULL,filekey.CStr(),true,1);
+    Dom.Save(filekey.CStr());
 
 
     return 0;
