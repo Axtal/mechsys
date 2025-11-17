@@ -623,7 +623,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "6" << std::endl;
         //cudaDeviceSynchronize();
-        pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+        if (RotPar) pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "7" << std::endl;
         //cudaDeviceSynchronize();
         MaxD     <<<demaux.nverts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);

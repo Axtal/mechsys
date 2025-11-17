@@ -196,6 +196,11 @@ inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2, size_t contacla
             Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt1->Props.R;
             Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt1->Props.R;
         } 
+        else if (Pt2->Verts.Size()==1)
+        {
+            Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn)*Pt2->Props.R;
+            Kt              = ReducedValue(Pt1->Props.Kt,Pt2->Props.Kt)*Pt2->Props.R;
+        } 
         else
         {
             Kn              = ReducedValue(Pt1->Props.Kn,Pt2->Props.Kn);

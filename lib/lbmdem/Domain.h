@@ -720,7 +720,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //start = std::chrono::high_resolution_clock::now();
 
         DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
-        DEMDOM.pRotate   <<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+        if (DEMDOM.RotPar) DEMDOM.pRotate   <<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
         DEM::MaxD        <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU, DEMDOM.pdemaux);
 
         real maxdis = 0.0;
