@@ -68,6 +68,8 @@ int main(int argc, char **argv) try
 {
     size_t Nproc = 0.75*omp_get_max_threads();
     if (argc>=2) Nproc = atoi(argv[1]);
+    size_t nthread = 256;
+    if (argc>=3) nthread = atoi(argv[2]);
 
         
     double nu = 1.6;

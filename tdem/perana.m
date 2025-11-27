@@ -1,9 +1,9 @@
-Lx = 6.2;
-Ly = 6.2;
+Lx = 5.2;
+Ly = 5.2;
 R  = 0.1*0.018;
 totparvol = 128.455;
 
-df = dir("*tper_hertz_b_0*.h5");
+df = dir("*tper_b_0*.h5");
 filename = df(end).name;
 P = h5read(filename,'/Position');
 Px= P(1:3:end);
@@ -18,7 +18,7 @@ figure(1);
 plot(Vx,Pz,'o');
 hold on;
  
-db = dir("*tper_hertz_b_bf_0*.h5");
+db = dir("*tper_b_bf_0*.h5");
 Mu = [];
 P  = [];
 Phi= [];
@@ -58,7 +58,7 @@ for i=1:length(db)
     Py  = Pos(2:3:end);
     Pz  = Pos(3:3:end);
     
-    Lz = Pz(end)-Pz(end-1)-2*R;      
+    Lz = max(Pz)-min(Pz)-2*R;      
     Vol = Lx*Ly*Lz;
     S = (1/Vol)*[sum(Bx.*(Nx+Tx)) sum(Bx.*(Ny+Ty)) sum(Bx.*(Nz+Tz));sum(By.*(Nx+Tx)) sum(By.*(Ny+Ty)) sum(By.*(Nz+Tz));sum(Bz.*(Nx+Tx)) sum(Bz.*(Ny+Ty)) sum(Bz.*(Nz+Tz))];
     

@@ -185,7 +185,6 @@ public:
     Array<size_t>                                     NoFreePar;                   ///< Particles that are not free
     Array<Particle*>                                  Particles;                   ///< All particles in domain
     Array<Interacton*>                                Interactons;                 ///< All interactons
-    Array<CInteracton*>                               CInteractons;                ///< Contact interactons
     Array<BInteracton*>                               BInteractons;                ///< Cohesion interactons
     double                                            Time;                        ///< Current time
     double                                            Dt;                          ///< Time step
@@ -210,7 +209,7 @@ public:
     size_t                                            idx_out;                     ///< Index of output
     size_t                                            iter;                        ///< Iteration counter
     size_t                                            ContactLaw;                  ///< Contact law index                                                                                  
-    std::unordered_map<size_t,size_t>                 PairtoCInt;                  ///< A map to identify which interacton has a given pair
+    std::unordered_map<size_t,CInteracton *>          PairtoCInt;                  ///< A map to identify which interacton has a given pair
     Array<Array <int> >                               Listofclusters;              ///< List of particles belonging to bounded clusters (applies only for cohesion simulations)
     MtData *                                          MTD;                         ///< Multithread data
 
@@ -279,13 +278,10 @@ struct MtData   /// A structure for the multi-thread data
     DEM::Domain *                      Dom; ///< Pointer to the lbm domain
     double                             Dmx; ///< Maximun displacement
     Array<std::pair<size_t,size_t> >    LC; ///< A temporal list of new contacts
-    Array<size_t>                      LCI; ///< A temporal array of posible Cinteractions
+    Array<std::pair<size_t,size_t> >   LCE; ///< A temporal list of contacts to erase
+    Array<CInteracton * >              LCI; ///< A temporal array of posible Cinteractions
     Array<size_t>                      LCB; ///< A temporal array of posible Binteractions
     Array<std::pair<size_t,size_t> >  CLCI; ///< An array of confirmed pairs
-    Array<std::pair<size_t,size_t> >   LPC; ///< A temporal list of new contacts for periodic boundary conditions
-    Array<size_t>                     LPCI; ///< A temporal array of possible Cinteractions for periodic boundary conditions
-    Array<std::pair<size_t,size_t> > CLPCI; ///< An array of confirmed Cinteractions for periodic boundary conditions
-    Array<size_t>                      LBP; ///< A temporal array of possible boundary particles
     Array<std::pair<iVec3_t,size_t> >  LLC; ///< A temporal array of possible linked cells locations
     Array<std::pair<size_t,size_t> >   LPP; ///< A temporal array of possible particle types
 };
@@ -403,9 +399,9 @@ inline void Domain::SetProps (Dict & D)
     {
         BInteractons[i]->UpdateParameters();
     }
-    for (size_t i=0; i<CInteractons.Size(); i++)
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
     {
-        CInteractons[i]->UpdateParameters(ContactLaw);
+        it->second->UpdateParameters(ContactLaw);
     }
 }
 
@@ -762,17 +758,15 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
 inline void Domain::WriteBF (char const * FileKey)
 {
-
     size_t n_fn = 0;
     size_t n_rl = 0;
 
-    for (size_t i=0;i<CInteractons.Size();i++)
-    {
-        //if ((norm(CInteractons[i]->Fnet)>1.0e-12)&&(CInteractons[i]->P1->IsFree()&&CInteractons[i]->P2->IsFree())) n_fn++;
-        if (norm(CInteractons[i]->Fnet)>1.0e-12)
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
+    {        
+        if (norm(it->second->Fnet)>1.0e-12)
         {
             n_fn++;
-            if (CInteractons[i]->P1->Verts.Size()==1&&CInteractons[i]->P2->Verts.Size()==1) n_rl++;
+            if (it->second->P1->Verts.Size()==1&&it->second->P2->Verts.Size()==1) n_rl++;
         }
     }
 
@@ -794,37 +788,37 @@ inline void Domain::WriteBF (char const * FileKey)
     size_t idx = 0;
 
     // Saving Collision forces
-    for (size_t i=0;i<CInteractons.Size();i++)
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
     {
         //if ((norm(CInteractons[i]->Fnet)>1.0e-12)&&(CInteractons[i]->P1->IsFree()&&CInteractons[i]->P2->IsFree()))
-        if (norm(CInteractons[i]->Fnet)>1.0e-12)
+        if (norm(it->second->Fnet)>1.0e-12)
         {
-            Fnnet [3*idx  ] = float(CInteractons[i]->Fnet  (0));
-            Fnnet [3*idx+1] = float(CInteractons[i]->Fnet  (1));
-            Fnnet [3*idx+2] = float(CInteractons[i]->Fnet  (2));
-            Ftnet [3*idx  ] = float(CInteractons[i]->Ftnet (0));
-            Ftnet [3*idx+1] = float(CInteractons[i]->Ftnet (1));
-            Ftnet [3*idx+2] = float(CInteractons[i]->Ftnet (2));
+            Fnnet [3*idx  ] = float(it->second->Fnet  (0));
+            Fnnet [3*idx+1] = float(it->second->Fnet  (1));
+            Fnnet [3*idx+2] = float(it->second->Fnet  (2));
+            Ftnet [3*idx  ] = float(it->second->Ftnet (0));
+            Ftnet [3*idx+1] = float(it->second->Ftnet (1));
+            Ftnet [3*idx+2] = float(it->second->Ftnet (2));
             if (n_rl>0)
             {
-            Froll [3*idx  ] = float(CInteractons[i]->Fn    (0));
-            Froll [3*idx+1] = float(CInteractons[i]->Fn    (1));
-            Froll [3*idx+2] = float(CInteractons[i]->Fn    (2));
+            Froll [3*idx  ] = float(it->second->Fn    (0));
+            Froll [3*idx+1] = float(it->second->Fn    (1));
+            Froll [3*idx+2] = float(it->second->Fn    (2));
             }
-            //Branch[3*idx  ] = float(CInteractons[i]->P1->x(0)-CInteractons[i]->P2->x(0));
-            //Branch[3*idx+1] = float(CInteractons[i]->P1->x(1)-CInteractons[i]->P2->x(1)); 
-            //Branch[3*idx+2] = float(CInteractons[i]->P1->x(2)-CInteractons[i]->P2->x(2)); 
-            Branch[3*idx  ] = float(CInteractons[i]->Branch(0));
-            Branch[3*idx+1] = float(CInteractons[i]->Branch(1)); 
-            Branch[3*idx+2] = float(CInteractons[i]->Branch(2)); 
-            //Orig  [3*idx  ] = 0.5*float(CInteractons[i]->P1->x(0)+CInteractons[i]->P2->x(0));
-            //Orig  [3*idx+1] = 0.5*float(CInteractons[i]->P1->x(1)+CInteractons[i]->P2->x(1)); 
-            //Orig  [3*idx+2] = 0.5*float(CInteractons[i]->P1->x(2)+CInteractons[i]->P2->x(2)); 
-            Orig  [3*idx  ] = float(CInteractons[i]->P2->x(0));
-            Orig  [3*idx+1] = float(CInteractons[i]->P2->x(1)); 
-            Orig  [3*idx+2] = float(CInteractons[i]->P2->x(2)); 
-            ID1   [idx]     = int  (CInteractons[i]->P1->Index);
-            ID2   [idx]     = int  (CInteractons[i]->P2->Index);
+            //Branch[3*idx  ] = float(it->second->P1->x(0)-it->second->P2->x(0));
+            //Branch[3*idx+1] = float(it->second->P1->x(1)-it->second->P2->x(1)); 
+            //Branch[3*idx+2] = float(it->second->P1->x(2)-it->second->P2->x(2)); 
+            Branch[3*idx  ] = float(it->second->Branch(0));
+            Branch[3*idx+1] = float(it->second->Branch(1)); 
+            Branch[3*idx+2] = float(it->second->Branch(2)); 
+            //Orig  [3*idx  ] = 0.5*float(it->second->P1->x(0)+it->second->P2->x(0));
+            //Orig  [3*idx+1] = 0.5*float(it->second->P1->x(1)+it->second->P2->x(1)); 
+            //Orig  [3*idx+2] = 0.5*float(it->second->P1->x(2)+it->second->P2->x(2)); 
+            Orig  [3*idx  ] = float(it->second->P2->x(0));
+            Orig  [3*idx+1] = float(it->second->P2->x(1)); 
+            Orig  [3*idx+2] = float(it->second->P2->x(2)); 
+            ID1   [idx]     = int  (it->second->P1->Index);
+            ID2   [idx]     = int  (it->second->P2->Index);
             idx++;
         }
     }
@@ -1773,7 +1767,7 @@ inline void Domain::Save (char const * FileKey)
         }
         
     }
-
+/*
     for (size_t ii=0;ii<Interactons.Size();ii++)
     {
         size_t i1 = Interactons[ii]->I1;
@@ -1815,7 +1809,7 @@ inline void Domain::Save (char const * FileKey)
             H5LTmake_dataset_double(group_id,intfvv.CStr(),1,dims,cod);
         }
     }
-
+*/
     H5Fflush(file_id,H5F_SCOPE_GLOBAL);
     H5Fclose(file_id);
     //sleep(5);
@@ -2104,11 +2098,6 @@ inline void Domain::Center(Vec3_t C)
 inline void Domain::ClearInteractons()
 {
     // delete old interactors
-    for (size_t i=0; i<CInteractons.Size(); ++i)
-    {
-        if (CInteractons[i]!=NULL) delete CInteractons[i];
-    }
-    CInteractons.Resize(0);
     for (size_t i=0; i<BInteractons.Size(); ++i)
     {
         if (BInteractons[i]!=NULL) delete BInteractons[i];
@@ -2122,13 +2111,13 @@ inline void Domain::ClearInteractons()
 inline void Domain::ResetInteractons()
 {
     // delete old interactors
-    for (size_t i=0; i<CInteractons.Size(); ++i)
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
     {
-        if (CInteractons[i]!=NULL) delete CInteractons[i];
+        if (it->second!=NULL) delete it->second;
     }
 
     // new interactors
-    CInteractons.Resize(0);
+    PairtoCInt.clear();
     for (size_t i=0; i<Particles.Size()-1; i++)
     {
         bool pi_has_vf = !Particles[i]->IsFree();
@@ -2142,24 +2131,23 @@ inline void Domain::ResetInteractons()
             if ((pi_has_vf && pj_has_vf) || !close ) continue;
             size_t hash = HashFunction(i,j);
             //Listofpairs.insert(hash);
-            PairtoCInt[hash] = CInteractons.Size();
 
             // if both particles are spheres (just one vertex)
             if (Particles[i]->Verts.Size()==1 && Particles[j]->Verts.Size()==1)
             {
-                CInteractons.Push (new CInteractonSphere(Particles[i],Particles[j],ContactLaw));
+                PairtoCInt[hash] = new CInteractonSphere(Particles[i],Particles[j],ContactLaw);
             }
 
             // normal particles
             else
             {
-                CInteractons.Push (new CInteracton(Particles[i],Particles[j],ContactLaw));
+                PairtoCInt[hash] = new CInteracton(Particles[i],Particles[j],ContactLaw);
             }
 
             std::pair<int,int> p (Particles[i]->Tag,Particles[j]->Tag);
             if (FricCoeff.count(p)==1)
             {
-                CInteractons[CInteractons.Size()-1]->Mu = FricCoeff[p];                    
+                PairtoCInt[hash]->Mu = FricCoeff[p];
             }
         }
     }
@@ -2245,7 +2233,7 @@ inline void Domain::UpdateLinkedCells()
         int i = index(0);
         int j = index(1);
         int k = index(2);
-        std::set<size_t> UniqueLC;
+        std::unordered_set<size_t> UniqueLC;
         for (int knb=(pz ? k-1 : std::max(0,k-1));knb<=(pz ? k+1 : std::min(k+1,(int)LCellDim(2)));knb++)
         for (int jnb=(py ? j-1 : std::max(0,j-1));jnb<=(py ? j+1 : std::min(j+1,(int)LCellDim(1)));jnb++)
         for (int inb=(px ? i-1 : std::max(0,i-1));inb<=(px ? i+1 : std::min(i+1,(int)LCellDim(0)));inb++)
@@ -2313,10 +2301,12 @@ inline double Domain::MaxDim()
 
 inline void Domain::ResetContacts()
 {   
+    //std::cout << "1" << std::endl;
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t i=0;i<Nproc;i++)
     {
         MTD[i].LC.Resize(0);
+        MTD[i].LCE.Resize(0);
         MTD[i].LCI.Resize(0);
         MTD[i].CLCI.Resize(0);
         MTD[i].LCB.Resize(0);
@@ -2333,13 +2323,10 @@ inline void Domain::ResetContacts()
         MTD[omp_get_thread_num()].CLCI.Push(std::make_pair(i,j));
         size_t hash = HashFunction(i,j);
         if (PairtoCInt.count(hash)!=0) continue;
-        //std::set<size_t>::iterator it = Listofpairs.find(hash);
-        //if (it != Listofpairs.end())
-        //{
-            //continue;
-        //}
         MTD[omp_get_thread_num()].LC.Push(std::make_pair(i,j));
     }
+
+    //std::cout << "2" << std::endl;
     Array<std::pair<size_t,size_t> > CPairs;
     for (size_t i=0;i<Nproc;i++)
     {
@@ -2348,20 +2335,18 @@ inline void Domain::ResetContacts()
             size_t n = MTD[i].LC[j].first;
             size_t m = MTD[i].LC[j].second;
             size_t hash = HashFunction(n,m);
-            //Listofpairs.insert(hash);
-            PairtoCInt[hash] = CInteractons.Size();
             if (Particles[n]->Verts.Size()==1 && Particles[m]->Verts.Size()==1)
             {
-                if (!MostlySpheres) CInteractons.Push (new CInteractonSphere(Particles[n],Particles[m],ContactLaw));
+                if (!MostlySpheres) PairtoCInt[hash] = new CInteractonSphere(Particles[n],Particles[m],ContactLaw);
             }
             else
             {
-                CInteractons.Push (new CInteracton(Particles[n],Particles[m],ContactLaw));
+                PairtoCInt[hash] = new CInteracton(Particles[n],Particles[m],ContactLaw);
             }
             std::pair<int,int> p (Particles[n]->Tag,Particles[m]->Tag);
             if (FricCoeff.count(p)==1)
             {
-                CInteractons[CInteractons.Size()-1]->Mu = FricCoeff[p];                    
+                PairtoCInt[hash]->Mu = FricCoeff[p];                    
             }
         }
         for (size_t j=0;j<MTD[i].CLCI.Size();j++)
@@ -2371,33 +2356,59 @@ inline void Domain::ResetContacts()
             CPairs.Push(std::make_pair(n,m));
         }
     }
+
+    //std::cout << "3" << std::endl;
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t n=0;n<CPairs.Size();n++)
     {
         size_t i = CPairs[n].first;
         size_t j = CPairs[n].second;
         size_t hash = HashFunction(i,j);
-        size_t nc = PairtoCInt[hash];
-        if(CInteractons[nc]->UpdateContacts(Alpha,Per,iter)) MTD[omp_get_thread_num()].LCI.Push(nc);
+        if(PairtoCInt[hash]->UpdateContacts(Alpha,Per,iter)) MTD[omp_get_thread_num()].LCI.Push(PairtoCInt[hash]);
     }
+
+    //std::cout << "4" << std::endl;
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t n=0;n<BInteractons.Size();n++)
     {
         if(BInteractons[n]->UpdateContacts(Alpha,Per)) MTD[omp_get_thread_num()].LCB.Push(n);
     }
      
+    //std::cout << "5" << std::endl;
     Interactons.Resize(0);
+    std::unordered_set<size_t> UniquePair;
     for (size_t i=0;i<Nproc;i++)
     {
         for (size_t j=0;j<MTD[i].LCI.Size();j++)
         {
-            Interactons.Push(CInteractons[MTD[i].LCI[j]]);
+            Interactons.Push(MTD[i].LCI[j]);
+            size_t n = Interactons[Interactons.Size()-1]->I1;
+            size_t m = Interactons[Interactons.Size()-1]->I2;
+            size_t hash = HashFunction(n,m);
+            UniquePair.insert(hash);
         }
         for (size_t j=0;j<MTD[i].LCB.Size();j++)
         {
             Interactons.Push(BInteractons[MTD[i].LCB[j]]);
         }
     }
+
+    //std::cout << "6" << std::endl;
+    //Erasing old interactions
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();)
+    {
+        size_t hash = it->first;
+        if (UniquePair.count(hash)==0)
+        {
+            delete it->second;
+            it = PairtoCInt.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    //std::cout << "7" << std::endl;
 }
 
 inline void Domain::UpdateContacts()
@@ -2635,9 +2646,9 @@ inline double Domain::CalcEnergy (double & Ekin, double & Epot)
 
     // potential energy
     Epot = 0.0;
-    for (size_t i=0; i<CInteractons.Size(); i++)
+    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
     {
-        Epot += CInteractons[i]->Epot;
+        Epot += it->second->Epot;
     }
 
     // total energy
@@ -2970,7 +2981,7 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         size_t i1 = Interactons[ii]->I1;
         size_t i2 = Interactons[ii]->I2;
         size_t hash = HashFunction(i1,i2);
-        DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+        DEM::CInteracton * Ci = PairtoCInt[hash];
         Ivv[2*ii  ] = idvv;
         Iee[2*ii  ] = idee;
         Ivf[2*ii  ] = idvf;
@@ -3015,7 +3026,7 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         size_t hash = HashFunction(i1,i2);
         real   r1   = Particles[i1]->Props.R;
         real   r2   = Particles[i2]->Props.R;
-        DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+        DEM::CInteracton * Ci = PairtoCInt[hash];
         InteractonCU     Icu;
         ComInteractonCU CIcu;
         Icu.BothFree= Ci->BothFree;
@@ -3193,7 +3204,7 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t i1 = hComInteractons  [id ].I1;
             size_t i2 = hComInteractons  [id ].I2;
             size_t hash = HashFunction(i1,i2);
-            DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+            DEM::CInteracton * Ci = PairtoCInt[hash];
             DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
             Cis->Fdvv(0) = hDynInteractonsVV[ivv].Ft.x/Cis->Kt;
             Cis->Fdvv(1) = hDynInteractonsVV[ivv].Ft.y/Cis->Kt;
@@ -3216,7 +3227,7 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t f1 = hDynInteractonsEE[iee].IF1-Particles[i1]->Nei;
             size_t f2 = hDynInteractonsEE[iee].IF2-Particles[i2]->Nei;
             size_t hash = HashFunction(i1,i2);
-            DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+            DEM::CInteracton * Ci = PairtoCInt[hash];
             hash = HashFunction(f1,f2);
             Ci->Fdee[hash](0) = hDynInteractonsEE[iee].Ft.x/Ci->Kt;
             Ci->Fdee[hash](1) = hDynInteractonsEE[iee].Ft.y/Ci->Kt;
@@ -3232,7 +3243,7 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t f1 = hDynInteractonsVF[ivf].IF1-Particles[i1]->Nvi;
             size_t f2 = hDynInteractonsVF[ivf].IF2-Particles[i2]->Nfi;
             size_t hash = HashFunction(i1,i2);
-            DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+            DEM::CInteracton * Ci = PairtoCInt[hash];
             hash = HashFunction(f1,f2);
             Ci->Fdvf[hash](0) = hDynInteractonsVF[ivf].Ft.x/Ci->Kt;
             Ci->Fdvf[hash](1) = hDynInteractonsVF[ivf].Ft.y/Ci->Kt;
@@ -3248,7 +3259,7 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t f1 = hDynInteractonsFV[ifv].IF1-Particles[i1]->Nfi;
             size_t f2 = hDynInteractonsFV[ifv].IF2-Particles[i2]->Nvi;
             size_t hash = HashFunction(i1,i2);
-            DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
+            DEM::CInteracton * Ci = PairtoCInt[hash];
             hash = HashFunction(f1,f2);
             Ci->Fdfv[hash](0) = hDynInteractonsFV[ifv].Ft.x/Ci->Kt;
             Ci->Fdfv[hash](1) = hDynInteractonsFV[ifv].Ft.y/Ci->Kt;

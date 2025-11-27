@@ -34,6 +34,7 @@ int main(int argc, char **argv) try
     double theta = 0.0*M_PI/180.0;
     if (argc>=2) Nproc      =atoi(argv[1]);
     if (argc>=3) dom.Alpha  =atof(argv[2]);
+    if (argc>=4) dom.Nthread=atoi(argv[3]);
     //dom.Alpha = 100.0;
     //dom.Beta  = 4.0;
     dom.AddVoroPack (-1, 0.1, 20.0,20.0,240.0, 20,20,240, 1.0, false, true, 1000, 0.8);
@@ -58,7 +59,9 @@ int main(int argc, char **argv) try
     B.Set(-1,"Gn Gt Kn Kt Mu",-0.2,0.0,1.0e7,5.0e6,mu);
     B.Set(-2,"Gn Gt Kn Kt Mu",-0.2,0.0,1.0e7,5.0e6,mu);
     dom.SetProps(B);
-    dom.Solve(/*final time*/10.0,/*time step*/dt,/*Output step*/0.1,NULL,NULL,/*file key*/"test_cu_03",/*Render video?*/2,Nproc);
+
+    double Tf = 10.0;
+    dom.Solve(/*final time*/Tf,/*time step*/dt,/*Output step*/Tf/100,NULL,NULL,/*file key*/"test_cu_03",/*Render video?*/2,Nproc);
 
     return 0;
 }

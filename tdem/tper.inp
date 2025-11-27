@@ -31,4 +31,4 @@ hertz  = contact law  Contact law, right now only hertz and linear
 3.0   = p0:          Pressure for the isotropic compression
 0.1   = str:         Strain rate
 10.0      = T0:          Time span for the compression
-50.0     = Tf:          Final time for the test
+100.0     = Tf:          Final time for the test
