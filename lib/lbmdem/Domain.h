@@ -633,9 +633,11 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     
     if (Alpha>2.0*DEMDOM.Beta*DEMDOM.MaxDmax&&DEMDOM.MaxDmax>1.0e-12)
     {
-        Alpha = 2.0*DEMDOM.Beta*DEMDOM.MaxDmax;
-        DEMDOM.Alpha = Alpha;
-        printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
+        //Alpha = 2.0*DEMDOM.Beta*DEMDOM.MaxDmax;
+        //DEMDOM.Alpha = Alpha;
+        //printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
+        DEMDOM.Beta = 0.5*Alpha/DEMDOM.MaxDmax;
+        printf("%s  Beta factor changed to                    =  %g%s\n"   ,TERM_CLR2, DEMDOM.Beta                                    , TERM_RST);
     }
     fflush(stdout); 
 

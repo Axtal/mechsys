@@ -521,8 +521,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
     if (Alpha > 2.0*Beta*MaxDmax)
     {
-        Alpha = 2.0*Beta*MaxDmax;
-        printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
+        //Alpha = 2.0*Beta*MaxDmax;
+        //printf("%s  Verlet distance changed to                =  %g%s\n"   ,TERM_CLR2, Alpha                                    , TERM_RST);
+        Beta = 0.5*Alpha/MaxDmax;
+        printf("%s  Beta factor changed to                    =  %g%s\n"   ,TERM_CLR2, Beta                                    , TERM_RST);
     }
     fflush(stdout); 
 
