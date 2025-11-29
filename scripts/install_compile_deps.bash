@@ -110,31 +110,32 @@ download_and_compile() {
         blitz)
             PKG=blitz-$VER_BLITZ
             EXT=tar.gz
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT 
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT 
+            #LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT 
             #LOCATION=http://downloads.sourceforge.net/project/blitz/blitz/Blitz%2B%2B%20$VER_BLITZ/blitz-$VER_BLITZ.$EXT 
             DO_CONF=1
             DO_PATCH=1
             ;;
         triangle)
             PKG=triangle$VER_TRIANGLE
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_PATCH=1
             ;;
         tetgen)
             PKG=tetgen$VER_TETGEN
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_PATCH=1
             ;;
         voro)
             PKG=voro++-$VER_VORO
-            LOCATION=http://mechsys.nongnu.org/software/voro++-$VER_VORO.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/voro++-$VER_VORO.$EXT
             #LOCATION=http://math.lbl.gov/voro++/download/dir/voro++-$VER_VORO.$EXT
             #DO_PATCH=1
             DO_MAKE=1
             ;;
         igraph)
             PKG=igraph-$VER_IGRAPH
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             #LOCATION=http://sourceforge.net/projects/igraph/files/C%20library/$VER_IGRAPH/$PKG.$EXT
             CONF_PRMS="--enable-tls"
             DO_CONF=1
@@ -156,21 +157,21 @@ download_and_compile() {
         gsl)
             PKG=gsl-$VER_GSL
             EXT=tar.gz
-            LOCATION=ftp://ftp.gnu.org/gnu/gsl/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_CONF=1
             DO_MAKE=1
             ;;
         boost)
             PKG=boost_$VER_BOOST
             EXT=tar.bz2
-            LOCATION=http://internode.dl.sourceforge.net/project/boost/boost/1.59.0/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_CONF=1
             DO_MAKE=1
             ;;
         lapack)
             PKG=lapack-$VER_LAPACK
             EXT=tgz
-            LOCATION=http://www.netlib.org/lapack/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_CONF=0
             DO_CMAKECONF=1
             DO_MAKE=1
@@ -178,7 +179,7 @@ download_and_compile() {
         hdf5)
             PKG=hdf5-$VER_HDF5
             EXT=tar.gz
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             #LOCATION=https://www.hdfgroup.org/ftp/HDF5/releases/hdf5-$VER_HDF5/src/$PKG.$EXT
             DO_CONF=1
             DO_MAKE=1
@@ -186,7 +187,7 @@ download_and_compile() {
         szip)
             PKG=szip-$VER_SZIP
             EXT=tar.gz
-            LOCATION=http://mechsys.nongnu.org/software/$PKG.$EXT
+            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             #LOCATION=https://support.hdfgroup.org/ftp/lib-external/szip/$VER_SZIP/src/szip-$VER_SZIP.tar.gz
             DO_CONF=1
             DO_MAKE=1
