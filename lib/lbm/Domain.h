@@ -106,6 +106,7 @@ public:
     void AddVoroPack     (int Tag, double R, double Lx, double Ly, double Lz, size_t nx, size_t ny, size_t nz,
     double rho, bool Cohesion, bVec3_t Periodic,size_t Randomseed, double fraction, Vec3_t q = OrthoSys::O);                                             ///< Generate a Voronoi Packing with dimensions Li and polihedra per side ni, Periodic conditions are chosen for each particle
     void AddFromJson (int Tag, char const * Filename, double R, double rho, double scale,bool Erode = false);                                            ///< Add a particle generated from Json mesh
+    void AddFromOBJ  (int Tag, char const * Filename, double R, double rho, double scale,bool Erode = false);                                            ///< Add a particle generated from Json mesh
     void AddDisk(int TheTag, Vec3_t const & TheX, Vec3_t const & TheV, Vec3_t const & TheW, double Therho, double TheR, double dt);                      ///< Add a disk element in 2D
     
     // Access methods

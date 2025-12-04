@@ -1319,7 +1319,7 @@ inline void Domain::AddFromOBJ  (int Tag, char const * Filename, double R, doubl
 	  	{
 	  		ss >> c >> x >> y >> z;
 	        Vec3_t v(x,y,z);
-            V.Push(v);
+            V.Push(scale*v);
 	  	}
 	  	else if (line[0]=='f')
 	  	{

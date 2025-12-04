@@ -990,6 +990,101 @@ inline void Domain::AddFromJson (int Tag, char const * Filename, double R, doubl
     Particles[Particles.Size()-1]->Index = Particles.Size()-1;
 }
 
+inline void Domain::AddFromOBJ  (int Tag, char const * Filename, double R, double rho, double scale, bool Erode)
+{
+
+    Array<Vec3_t>       V;
+    Array<Array <int> > E;
+    Array<Array <int> > F;
+
+    String fn(Filename);
+    if (!Util::FileExists(fn)) throw new Fatal("File <%s> not found",fn.CStr());
+    ifstream fi(fn.CStr());
+    
+    std::string line;
+    while(getline(fi,line))
+    {
+        std::istringstream ss( line );
+        char c;
+        double x,y,z;
+	  	if (line[0]=='v' && line[1]==' ')
+	  	{
+	  		ss >> c >> x >> y >> z;
+	        Vec3_t v(x,y,z);
+            V.Push(scale*v);
+	  	}
+	  	else if (line[0]=='f')
+	  	{
+            std::vector<std::string> ls;
+            std::string lse;
+			while (ss>>lse)	ls.push_back(lse);
+            Array<int> face;
+	        for (size_t m=1; m<ls.size(); ++m)
+	        {
+	        	 face.Push(stoi(ls[m])-1);
+	        }
+            F.Push(face);
+        }
+    }
+    
+    std::set<std::pair <int,int> > edges;
+    for (size_t nf=0;nf<F.Size();nf++)
+    {
+        for (size_t nff=0;nff<F[nf].Size();nff++)
+        {
+            std::pair <int,int> p1,p2;
+            p1 = std::make_pair(F[nf][(nff+1)%F[nf].Size()],F[nf][nff]);
+            p2 = std::make_pair(F[nf][nff],F[nf][(nff+1)%F[nf].Size()]);
+            if (!edges.count(p1)&&!edges.count(p2))
+            {
+                Array<int> edge;
+                edge.Push(F[nf][nff]);
+                edge.Push(F[nf][(nff+1)%F[nf].Size()]);
+                E.Push(edge);
+                edges.insert(p1);
+            }
+        }
+    }
+    
+
+    double vol; // volume of the polyhedron
+    Vec3_t CM;  // Center of mass of the polyhedron
+    Mat3_t It;  // Inertia tensor of the polyhedron
+    DEM::PolyhedraMP(V,F,vol,CM,It);
+    if (Erode) DEM::Erosion(V,E,F,R);
+    // add particle
+    Particles.Push (new DEM::Particle(Tag,V,E,F,OrthoSys::O,OrthoSys::O,R,rho));
+    if (Erode) Particles[Particles.Size()-1]->Eroded = true;
+    Particles[Particles.Size()-1]->x       = CM;
+    Particles[Particles.Size()-1]->Props.V = vol;
+    Particles[Particles.Size()-1]->Props.m = vol*rho;
+    Vec3_t I;
+    Quaternion_t Q;
+    Vec3_t xp,yp,zp;
+    Eig(It,I,xp,yp,zp);
+    CheckDestroGiro(xp,yp,zp);
+    I *= rho;
+    Q(0) = 0.5*sqrt(1+xp(0)+yp(1)+zp(2));
+    Q(1) = (yp(2)-zp(1))/(4*Q(0));
+    Q(2) = (zp(0)-xp(2))/(4*Q(0));
+    Q(3) = (xp(1)-yp(0))/(4*Q(0));
+    Q = Q/norm(Q);
+    Particles[Particles.Size()-1]->I     = I;
+    Particles[Particles.Size()-1]->Q     = Q;
+    double Dmax = DEM::Distance(CM,V[0])+R;
+    for (size_t i=1; i<V.Size(); ++i)
+    {
+        if (DEM::Distance(CM,V[i])+R > Dmax) Dmax = DEM::Distance(CM,V[i])+R;
+    }
+    Particles[Particles.Size()-1]->Ekin = 0.0;
+    Particles[Particles.Size()-1]->Erot = 0.0;
+    Particles[Particles.Size()-1]->Dmax  = Dmax;
+    Particles[Particles.Size()-1]->PropsReady = true;
+    Particles[Particles.Size()-1]->Index = Particles.Size()-1;
+        
+    printf("[1;32mDEM::domain.h ConstructFromOBJ: finished[0m\n");
+}
+
 inline void Domain::AddDisk(int TheTag, Vec3_t const & TheX, Vec3_t const & TheV, Vec3_t const & TheW, double Therho, double TheR, double dt)
 {
     Disks.Push(new Disk(TheTag,TheX,TheV,TheW,Therho,TheR,dt));

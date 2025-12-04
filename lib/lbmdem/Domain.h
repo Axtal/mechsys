@@ -647,6 +647,40 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     ResetParCell();
     ImprintLattice();
     DEMDOM.UpdateContacts();
+    if (fabs(LBMDOM.G[0])>1.0e-12)
+    {
+        LBMDOM.Sc = 0.0;
+        Array<iVec3_t> CPP(0);
+
+        size_t nx = LBMDOM.Ndim(0);
+        size_t ny = LBMDOM.Ndim(1);
+        size_t nz = LBMDOM.Ndim(2);
+
+        for (size_t iz=0;iz<nz;iz++)
+        for (size_t iy=0;iy<ny;iy++)
+        for (size_t ix=0;ix<nx;ix++)
+        {
+            size_t nc = FLBM::Pt2idx(iVec3_t(ix,iy,iz),LBMDOM.Ndim);
+            for (size_t k=1;k<LBMDOM.Nneigh;k++)
+            {
+                size_t nix = (size_t)((int)ix + (int)LBMDOM.C[k](0) + (int)LBMDOM.Ndim(0))%LBMDOM.Ndim(0);
+                size_t niy = (size_t)((int)iy + (int)LBMDOM.C[k](1) + (int)LBMDOM.Ndim(1))%LBMDOM.Ndim(1);
+                size_t niz = (size_t)((int)iz + (int)LBMDOM.C[k](2) + (int)LBMDOM.Ndim(2))%LBMDOM.Ndim(2);
+                size_t nb  = FLBM::Pt2idx(iVec3_t(nix,niy,niz),LBMDOM.Ndim);
+                if (nb>nc)
+                {
+                    CPP.Push(iVec3_t(nc,nb,k));
+                }
+            }
+        }
+
+        LBMDOM.NCellPairs = CPP.Size();
+        LBMDOM.CellPairs = new iVec3_t [LBMDOM.NCellPairs];
+        for (size_t n=0;n<LBMDOM.NCellPairs;n++)
+        {
+            LBMDOM.CellPairs[n] = CPP[n];
+        }
+    }
 #ifdef USE_CUDA
     DEMDOM.UpLoadDevice(Nproc,true);
     LBMDOM.UpLoadDevice(Nproc);
@@ -750,6 +784,11 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Final                " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
+        if (fabs(LBMDOM.G[0])>1.0e-12)
+        {
+            FLBM::cudaApplyForcesSCMP<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
+        }
+        
         FLBM::cudaCollideSCDEM<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         real * tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;

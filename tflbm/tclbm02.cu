@@ -34,10 +34,10 @@ int main(int argc, char **argv) try
     if (argc==2) Nproc=atoi(argv[1]);
     size_t nx = 100;
     size_t ny = 100;
-    size_t nz = 100;
+    //size_t nz = 100;
     //size_t nx = 10;
     //size_t ny = 10;
-    //size_t nz = 1;
+    size_t nz = 1;
     double nu = 1.0/6.0;
     //double nu = 0.001;
     double dx = 1.0;
@@ -45,8 +45,8 @@ int main(int argc, char **argv) try
     double Tf = 10000.0;
     //double Tf = 200.0;
     //FLBM::Domain Dom(D3Q15, nu, iVec3_t(nx,ny,nz), dx, dt);
-    FLBM::Domain Dom(D3Q19, nu, iVec3_t(nx,ny,nz), dx, dt);
-    //FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,nz), dx, dt);
+    //FLBM::Domain Dom(D3Q19, nu, iVec3_t(nx,ny,nz), dx, dt);
+    FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,nz), dx, dt);
     //Dom.Rhoref[0] =  2.0;
     //Dom.G     [0] = -4.0;
     //Dom.Gs    [0] =  0.0;

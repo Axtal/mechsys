@@ -123,7 +123,7 @@ int main(int argc, char **argv) try
         //if (j<0.6*ny)
         if (j<ny/2.0)
         {
-            Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(2300.0,v0);
+            Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(1300.0,v0);
             //Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(3000.0,v0);
             Dom.Lat[1].GetCell(iVec3_t(i,j,k))->Initialize(0.01  ,v0);
         }
