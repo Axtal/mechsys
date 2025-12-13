@@ -153,5 +153,88 @@ inline void Node::FixNode ()
         Mn(2) = Mass*Vn(2);
     }
 }
+
+#ifdef USE_CUDA
+struct NodeCU
+{
+    bool valid;
+    int3       X;                           ///< index position of the node
+    size_t     Idx;                         ///< Index of the node
+    real       Mass;                        ///< Mass of each node
+    real3      Vn;                          ///< Velocity at each node
+    real3      Vnf;                         ///< Fixed Velocity at each node for Dirichlet BCs
+    real3      Mn;                          ///< Momentum at each node
+    real3      Fn;                          ///< Force at each node
+    real3      SnD;                         ///< Stress at each node diagonal terms
+    real3      SnT;                         ///< Stress at each node non diagonal terms
+    bool       vxf, vyf, vzf;               ///< Fixed components of velocity
+    bool       fixCor;
+};
+
+__host__ void UploadNode(MPM::NodeCU & NCu, MPM::Node & Node)
+{
+    NCu.valid  = Node.valid  ;
+    NCu.X.x    = Node.X(0)   ;
+    NCu.X.y    = Node.X(1)   ;
+    NCu.X.z    = Node.X(2)   ;
+    NCu.Idx    = Node.Idx    ;
+    NCu.Mass   = Node.Mass   ;
+    NCu.Vn.x   = Node.Vn(0)  ;
+    NCu.Vn.y   = Node.Vn(1)  ;
+    NCu.Vn.z   = Node.Vn(2)  ;
+    NCu.Vnf.x  = Node.Vnf(0) ;
+    NCu.Vnf.y  = Node.Vnf(1) ;
+    NCu.Vnf.z  = Node.Vnf(2) ;
+    NCu.Mn.x   = Node.Mn(0)  ;
+    NCu.Mn.y   = Node.Mn(1)  ;
+    NCu.Mn.z   = Node.Mn(2)  ;
+    NCu.Fn.x   = Node.Fn(0)  ;
+    NCu.Fn.y   = Node.Fn(1)  ;
+    NCu.Fn.z   = Node.Fn(2)  ;
+    NCu.SnD.x  = Node.Sn(0,0);
+    NCu.SnD.y  = Node.Sn(1,1);
+    NCu.SnD.z  = Node.Sn(2,2);
+    NCu.SnT.x  = Node.Sn(0,1);
+    NCu.SnT.y  = Node.Sn(0,2);
+    NCu.SnT.z  = Node.Sn(1,2);
+    NCu.vxf    = Node.vxf    ;
+    NCu.vyf    = Node.vyf    ;
+    NCu.vzf    = Node.vzf    ;
+    NCu.fixCor = Node.fixCor ; 
+}
+
+__host__ void DnloadNode(MPM::NodeCU & NCu, MPM::Node & Node)
+{
+    Node.valid   = NCu.valid ;
+    Node.X(0)    = NCu.X.x   ;
+    Node.X(1)    = NCu.X.y   ;
+    Node.X(2)    = NCu.X.z   ;
+    Node.Idx     = NCu.Idx   ;
+    Node.Mass    = NCu.Mass  ;
+    Node.Vn(0)   = NCu.Vn.x  ;
+    Node.Vn(1)   = NCu.Vn.y  ;
+    Node.Vn(2)   = NCu.Vn.z  ;
+    Node.Vnf(0)  = NCu.Vnf.x ;
+    Node.Vnf(1)  = NCu.Vnf.y ;
+    Node.Vnf(2)  = NCu.Vnf.z ;
+    Node.Mn(0)   = NCu.Mn.x  ;
+    Node.Mn(1)   = NCu.Mn.y  ;
+    Node.Mn(2)   = NCu.Mn.z  ;
+    Node.Fn(0)   = NCu.Fn.x  ;
+    Node.Fn(1)   = NCu.Fn.y  ;
+    Node.Fn(2)   = NCu.Fn.z  ;
+    Node.Sn(0,0) = NCu.SnD.x ;
+    Node.Sn(1,1) = NCu.SnD.y ;
+    Node.Sn(2,2) = NCu.SnD.z ;
+    Node.Sn(0,1) = NCu.SnT.x ;
+    Node.Sn(0,2) = NCu.SnT.y ;
+    Node.Sn(1,2) = NCu.SnT.z ;
+    Node.vxf     = NCu.vxf   ;
+    Node.vyf     = NCu.vyf   ;
+    Node.vzf     = NCu.vzf   ;
+    Node.fixCor  = NCu.fixCor; 
+}
+
+#endif
 }
 #endif //MECHSYS_MPM_NODE_H

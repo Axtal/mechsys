@@ -25,7 +25,7 @@ SET(CUDAPROGS
     tlbmdem_cu_01
     tlbmdem_cu_02
     tlbmdem_cu_03
-    #    tlbmdem_cu_04
+    tlbmdem_cu_04
 )
 
 FOREACH(var ${PROGS})

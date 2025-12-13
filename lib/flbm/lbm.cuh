@@ -91,23 +91,6 @@ __device__ __inline__ real FeqSW   (size_t const & k, real const & h  , real3 co
     }
 }
 
-//Functions for the smoothing function of LBM DEM interaction
-typedef real (*FuncBn_ptr)(real,real);
- 
-__device__ __inline__ real BnSmooth(real gamma, real tau)
-{
-    return (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
-}
-
-__device__ __inline__ real BnLadd(real gamma, real tau)
-{
-    return floor(gamma);
-}
-
-__device__ FuncBn_ptr d_fBnSmooth = BnSmooth;
-
-__device__ FuncBn_ptr d_fBnLadd   = BnLadd;
-
 __global__ void cudaCheckUpLoad (lbm_aux const * lbmaux)
 {
     /*
@@ -164,7 +147,7 @@ __global__ void cudaCheckUpLoad (lbm_aux const * lbmaux)
 __global__ void cudaCollideSC(bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, lbm_aux const * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
-    if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
+    if (ic>=lbmaux[0].Ncells) return;
 
     if (!IsSolid[ic])
     {
@@ -200,81 +183,6 @@ __global__ void cudaCollideSC(bool const * IsSolid, real * F, real * Ftemp, real
                 {
                     //real temp = F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]/tau - Fk);
                     real temp = tau*F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]);
-                    if (temp<alpha) alpha = temp;
-                    valid = true;
-                }
-            }
-            if (valid) numit++;
-        }
-    }
-    else
-    {
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-        {
-            Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
-        }
-    }
-    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-    //{
-        //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k]; 
-    //}
-}
-
-template <typename FuncBn>
-__global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real * Omeis,
-        lbm_aux const * lbmaux)
-{
-    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
-    if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
-
-    if (!IsSolid[ic])
-    {
-        real3 vel   = Vel[ic]+lbmaux[0].dt*(lbmaux[0].Tau[0]/Rho[ic])*BForce[ic];
-        real  rho   = Rho[ic];
-        real  tau   = lbmaux[0].Tau[0];
-        real  gamma = Gamma[ic];
-        real Bn = fBn(gamma,tau);
-        //real Bn = BnSmooth(gamma,tau);
-        //if (ic==0) printf("Bn = %g \n",Bn);
-//#ifndef USE_LADD
-        //real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
-        //real Bn = gamma;
-//#else
-        //real Bn = floor(gamma);
-//#endif
-
-        real  NonEq[27];
-        //real  Feq  [27];
-        real  Q = 0.0;
-
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-        {
-            //real VdotC = dot(vel,lbmaux[0].C[k]);
-            //Feq  [k]     = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
-            //Feq[k]       = FeqFluid(k,rho,vel,lbmaux);
-            //NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - Feq[k];
-            NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - FeqFluid(k,rho,vel,lbmaux);
-            Q           += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
-        }
-        Q = sqrt(2.0*Q);
-        tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc/rho));
-
-        bool valid = true;
-        real alpha = 1.0;
-        size_t numit = 0;
-        while (valid&&numit<2)
-        {
-            valid = false;
-            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-            {
-                real Ome   = Omeis[ic*lbmaux[0].Nneigh + k];
-                real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
-                Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);
-                //if((ic==555||ic==556||ic==557||ic==558)&&(k==1)) printf("ic %lu Ftk %g Fk %g iter %lu \n",ic,Ftemp[ic*lbmaux[0].Nneigh + k],F[ic*lbmaux[0].Nneigh + k],lbmaux[0].iter); 
-                if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
-                {
-                    //real temp = F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]/tau - Fk);
-                    real temp = F[ic*lbmaux[0].Nneigh + k]/noneq;
                     if (temp<alpha) alpha = temp;
                     valid = true;
                 }
@@ -749,6 +657,7 @@ __global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real
         real G    = lbmaux[0].G[il];
         if (fabs(G)<1.0e-12) continue;
         if (!IsSolid[ic]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
+        else              G    = lbmaux[0].Gs[il];
         if (!IsSolid[in]) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
         else              G    = lbmaux[0].Gs[il];
         
@@ -780,6 +689,7 @@ __global__ void cudaApplyForcesSCMP(uint3 * pCellPairs, bool const * IsSolid, re
         real G    = lbmaux[0].G[il];
         if (fabs(G)<1.0e-12) continue;
         if (!IsSolid[ic+il*lbmaux[0].Ncells]) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
+        else              G    = lbmaux[0].Gs[il];
         if (!IsSolid[in+il*lbmaux[0].Ncells]) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
         else              G    = lbmaux[0].Gs[il];
 

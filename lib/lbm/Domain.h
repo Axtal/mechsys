@@ -3228,7 +3228,7 @@ inline void Domain::ResetContacts()
                             minl = dist;
                             Xs   = Xstemp;
                         }
-                        if (dist<2.0*Alpha+Pa->Props.R)
+                        if (dist<=2.0*Alpha+Pa->Props.R)
                         {
                             if (Pa->Faces[j]->Area()<2.0*M_PI*Pa->Props.R*Pa->Props.R)
                             {
@@ -3798,6 +3798,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
             }
         }
 
+        //std::cout << GetParticle(-1)->Flbm(1) <<std::endl;
         //std::chrono::high_resolution_clock::time_point ti2 = std::chrono::high_resolution_clock::now();
 //
         //auto duration = std::chrono::duration_cast<std::chrono::microseconds>( ti2 - ti1 ).count();

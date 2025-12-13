@@ -85,7 +85,7 @@ int main(int argc, char **argv) try
     dat.R  = R;
     dat.nu = nu;
     //dat.acc = Vec3_t(1.0e-2,1.0e-2,1.0e-2);
-    dat.acc = Vec3_t(1.0e-2,0.0,0.0);
+    dat.acc = Vec3_t(1.0e-1,0.0,0.0);
     dom.DEMDOM.AddSphere(-1,Vec3_t(0.5*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
     //dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.5*dx*ny,0.5*dx*nz),R,1.0);
     //dom.DEMDOM.AddSphere(-1,Vec3_t(0.95*dx*nx,0.95*dx*ny,0.95*dx*nz),R,1.0);
@@ -114,7 +114,6 @@ int main(int argc, char **argv) try
     dom.PeriodicX= true;
     dom.PeriodicY= true;
     dom.PeriodicZ= true;
-    
     double Tf = 2.0e3;
     dom.Solve(Tf,Tf/200,Setup,Report,"tlbmdem_cu_02",true,Nproc);
 }

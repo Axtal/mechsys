@@ -529,7 +529,7 @@ __global__ void Translate(real3 * Verts, ParticleCU const * Par, DynParticleCU *
     if (Par[ic].vxf) Ft.x = 0.0;
     if (Par[ic].vyf) Ft.y = 0.0;
     if (Par[ic].vzf) Ft.z = 0.0;
-
+    //if (ic==0) printf("Fz = %g \n",DPar[ic].Flbm.z);
     real3 temp,xa;
     xa    = 2.0*DPar[ic].x - DPar[ic].xb + (demaux[0].dt*demaux[0].dt/Par[ic].m)*Ft;
     temp  = xa - DPar[ic].x;

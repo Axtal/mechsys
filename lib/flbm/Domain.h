@@ -962,8 +962,8 @@ inline double Domain::Feq(size_t k, double Rho, Vec3_t & V)
 
 inline double Domain::FeqSW(size_t k, double h, Vec3_t & V)
 {
-    double VdotC = dot(V,C[k]);
-    double VdotV = dot(V,V);
+    double VdotC = dot(V,C[k])/Cs;
+    double VdotV = dot(V,V)/(Cs*Cs);
     if (k==0)
     {
         return h - 5.0/6.0*g*h*h/(Cs*Cs) - 2.0/3.0*h*VdotV;

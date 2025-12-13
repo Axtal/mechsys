@@ -57,6 +57,14 @@ public:
     size_t        contactlaw=0    ///< contact law for DEM
     );
 
+    Domain (LBMethod      Method, ///< Type of array, for example D2Q9
+    Array<double>             nu, ///< Viscosities of fluid mixtures
+    iVec3_t               Ndim,   ///< Cell divisions per side
+    double                dx,     ///< Space spacing
+    double                dt,     ///< Time step
+    size_t        contactlaw=0    ///< contact law for DEM
+    );
+
     Domain (LBMethod  Method,     ///< Type of array, for example D2Q9
     double                nu,     ///< Viscosity of the fluid
     char const *     DEMfile,     ///< A DEM save file 
@@ -121,7 +129,7 @@ public:
     size_t                               * pPaCeF;            ///< Pointer to particle cell pair
     size_t                               * pPaCeV;            ///< Pointer to particle cell pair
     lbmdem_aux                           * plbmdemaux;        ///< pointer to auxiliary data
-    FLBM::FuncBn_ptr                       pfBn;              ///< pointer to the fluid overlapping function                                                            
+    FuncBn_ptr                             pfBn;              ///< pointer to the fluid overlapping function                                                            
                                                         
 #endif
 };
@@ -181,7 +189,53 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     }
 #ifdef USE_CUDA
     //Pointer to overlapping function
-    cudaMemcpyFromSymbol(&pfBn,FLBM::d_fBnSmooth,sizeof(FLBM::FuncBn_ptr));
+    cudaMemcpyFromSymbol(&pfBn,d_fBnSmooth,sizeof(FuncBn_ptr));
+#endif
+}
+
+inline Domain::Domain(LBMethod TheMethod, Array<double> Thenu, iVec3_t TheNdim, double Thedx, double Thedt, size_t contactlaw)
+{
+    Nproc  = 1;
+    idx_out= 0;
+    iter   = 0;
+    dt = Thedt;
+    dx = Thedx;
+    Time = 0.0;
+    Alpha = 0.05;
+    Fconv = 1.0;
+    PeriodicX= false;
+    PeriodicY= false;
+    PeriodicZ= false;
+    LBMDOM = FLBM::Domain(TheMethod, Thenu, TheNdim, Thedx, Thedt);
+    DEMDOM = DEM ::Domain(NULL,contactlaw);
+
+    LBMDOM.Omeis    = new double *** [TheNdim(0)];
+    LBMDOM.Gamma    = new double **  [TheNdim(0)];
+    LBMDOM.Gammaf   = new double **  [TheNdim(0)];
+    LBMDOM.DEMInside= new int    **  [TheNdim(0)];
+    for (size_t ix=0; ix< TheNdim(0); ix++)
+    {
+        LBMDOM.Omeis    [ix] = new double ** [TheNdim(1)];
+        LBMDOM.Gamma    [ix] = new double *  [TheNdim(1)];
+        LBMDOM.Gammaf   [ix] = new double *  [TheNdim(1)];
+        LBMDOM.DEMInside[ix] = new int    *  [TheNdim(1)];
+        for (size_t iy=0; iy< TheNdim(1); iy++)
+        {
+            LBMDOM.Omeis    [ix][iy] = new double * [TheNdim(2)];
+            LBMDOM.Gamma    [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.Gammaf   [ix][iy] = new double   [TheNdim(2)];
+            LBMDOM.DEMInside[ix][iy] = new int      [TheNdim(2)];
+            for (size_t iz=0; iz< TheNdim(2); iz++)
+            {
+                LBMDOM.Gammaf    [ix][iy][iz] = 0.0;
+                LBMDOM.Omeis     [ix][iy][iz] = new double [LBMDOM.Nneigh];
+                LBMDOM.DEMInside [ix][iy][iz] = -1;
+            }
+        }
+    }
+#ifdef USE_CUDA
+    //Pointer to overlapping function
+    cudaMemcpyFromSymbol(&pfBn,d_fBnSmooth,sizeof(FuncBn_ptr));
 #endif
 }
 
@@ -275,7 +329,7 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
 
 #ifdef USE_CUDA
     //Pointer to overlapping function
-    cudaMemcpyFromSymbol(&pfBn,FLBM::d_fBnSmooth,sizeof(FLBM::FuncBn_ptr));
+    cudaMemcpyFromSymbol(&pfBn,d_fBnSmooth,sizeof(FuncBn_ptr));
 #endif
 }
 
@@ -647,7 +701,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     ResetParCell();
     ImprintLattice();
     DEMDOM.UpdateContacts();
-    if (fabs(LBMDOM.G[0])>1.0e-12)
+    if (fabs(LBMDOM.G[0])>1.0e-12||fabs(LBMDOM.Gmix)>1.0e-12)
     {
         LBMDOM.Sc = 0.0;
         Array<iVec3_t> CPP(0);
@@ -784,12 +838,24 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         //std::cout << "DEM Final                " << duration.count() << std::endl;
 
         //start = std::chrono::high_resolution_clock::now();
-        if (fabs(LBMDOM.G[0])>1.0e-12)
+        if (LBMDOM.Nl==1)
         {
-            FLBM::cudaApplyForcesSCMP<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
+            if (fabs(LBMDOM.G[0])>1.0e-12)
+            {
+                cudaApplyForcesSC<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,pGamma,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
+            }
+             
+            cudaCollideSCDEM<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         }
-        
-        FLBM::cudaCollideSCDEM<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
+        else
+        {
+            if ((fabs(LBMDOM.G[0])>1.0e-12)||(fabs(LBMDOM.G[1])>1.0e-12)||(fabs(LBMDOM.Gmix)>1.0e-12))
+            {
+                cudaApplyForcesSCMP<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,pGamma,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
+            }
+
+            cudaCollideMPDEM<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
+        }
         real * tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
@@ -895,7 +961,7 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
     if (first)
     {
         
-        thrust::host_vector<real>  hOmeis         (LBMDOM.Ncells*LBMDOM.Nneigh);
+        thrust::host_vector<real>  hOmeis         (LBMDOM.Nl*LBMDOM.Ncells*LBMDOM.Nneigh);
         thrust::host_vector<real>  hGamma         (LBMDOM.Ncells); 
         thrust::host_vector<real>  hGammaf        (LBMDOM.Ncells); 
         thrust::host_vector<int >  hInside        (LBMDOM.Ncells); 
@@ -913,8 +979,12 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                     hInside[Nm]        = LBMDOM.DEMInside[nx][ny][nz];
                     for (size_t nn=0;nn<LBMDOM.Nneigh;nn++)
                     {
-                        size_t Nn = nn + nx*LBMDOM.Nneigh + ny*LBMDOM.Ndim(0)*LBMDOM.Nneigh + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0)*LBMDOM.Nneigh; 
-                        hOmeis[Nn] = LBMDOM.Omeis[nx][ny][nz][nn];
+                        size_t Nn = nn + nx*LBMDOM.Nneigh + ny*LBMDOM.Ndim(0)*LBMDOM.Nneigh + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0)*LBMDOM.Nneigh;                        
+                        //hOmeis[Nn] = LBMDOM.Omeis[nx][ny][nz][nn];
+                        for (size_t nl=0;nl<LBMDOM.Nl;nl++)
+                        {
+                            hOmeis[Nn + nl*LBMDOM.Ncells*LBMDOM.Nneigh] = 0.0;
+                        }
                     }
                 }
             }

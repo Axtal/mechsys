@@ -128,14 +128,8 @@ __global__ void cudaReset(bool const * IsSolid, real * Gammaf, real * Gamma, rea
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
-    //if (Gamma[ic]<0) printf("ice %lu iter %lu \n",ic,lbmaux[0].iter);
-    //if (ic==484) printf("Gamma %g Gammaf %g iter %lu \n",Gamma[ic],Gammaf[ic], lbmaux[0].iter);
     if (IsSolid[ic])  Gamma[ic] = 1.0;
     else              Gamma[ic] = Gammaf[ic];
-    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-    //{
-        //Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
-    //}
 }
 /*
 //#ifdef USE_IBB
@@ -391,6 +385,166 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
 }
 //#else
 */
+//#endif
+//Functions for the smoothing function of LBM DEM interaction
+typedef real (*FuncBn_ptr)(real,real);
+ 
+__device__ __inline__ real BnSmooth(real gamma, real tau)
+{
+    return (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
+}
+
+__device__ __inline__ real BnLadd(real gamma, real tau)
+{
+    return floor(gamma);
+}
+
+__device__ FuncBn_ptr d_fBnSmooth = BnSmooth;
+
+__device__ FuncBn_ptr d_fBnLadd   = BnLadd;
+
+template <typename FuncBn>
+__global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real * Omeis,
+        FLBM::lbm_aux const * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+
+    if (!IsSolid[ic])
+    {
+        real3 vel   = Vel[ic]+lbmaux[0].dt*(lbmaux[0].Tau[0]/Rho[ic])*BForce[ic];
+        real  rho   = Rho[ic];
+        real  tau   = lbmaux[0].Tau[0];
+        real  gamma = Gamma[ic];
+        real Bn = fBn(gamma,tau);
+        //real Bn = BnSmooth(gamma,tau);
+        //if (ic==0) printf("Bn = %g \n",Bn);
+//#ifndef USE_LADD
+        //real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
+        //real Bn = gamma;
+//#else
+        //real Bn = floor(gamma);
+//#endif
+
+        real  NonEq[27];
+        //real  Feq  [27];
+        real  Q = 0.0;
+
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            //real VdotC = dot(vel,lbmaux[0].C[k]);
+            //Feq  [k]     = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
+            //Feq[k]       = FeqFluid(k,rho,vel,lbmaux);
+            //NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - Feq[k];
+            NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - FLBM::FeqFluid(k,rho,vel,lbmaux);
+            Q           += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
+        }
+        Q = sqrt(2.0*Q);
+        tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc/rho));
+
+        bool valid = true;
+        real alpha = 1.0;
+        size_t numit = 0;
+        while (valid&&numit<2)
+        {
+            valid = false;
+            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+            {
+                real Ome   = Omeis[ic*lbmaux[0].Nneigh + k];
+                real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
+                Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);
+                //if((ic==555||ic==556||ic==557||ic==558)&&(k==1)) printf("ic %lu Ftk %g Fk %g iter %lu \n",ic,Ftemp[ic*lbmaux[0].Nneigh + k],F[ic*lbmaux[0].Nneigh + k],lbmaux[0].iter); 
+                if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
+                {
+                    //real temp = F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]/tau - Fk);
+                    real temp = F[ic*lbmaux[0].Nneigh + k]/noneq;
+                    if (temp<alpha) alpha = temp;
+                    valid = true;
+                }
+            }
+            if (valid) numit++;
+        }
+    }
+    else
+    {
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        {
+            Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+        }
+    }
+    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+    //{
+        //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k]; 
+    //}
+}
+
+template <typename FuncBn>
+__global__ void cudaCollideMPDEM(FuncBn fBn, bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real
+        * Omeis, FLBM::lbm_aux const * lbmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Ncells) return;
+
+    real3 Vmix = make_real3(0.0,0.0,0.0);
+    real  den  = 0.0;
+    for(size_t il=0;il<lbmaux[0].Nl;il++)
+    {
+        Vmix = Vmix + (Rho[ic+il*lbmaux[0].Ncells]/lbmaux[0].Tau[il])*Vel[ic+il*lbmaux[0].Ncells];
+        den  = den  + Rho[ic+il*lbmaux[0].Ncells]/lbmaux[0].Tau[il];
+    }
+    Vmix = Vmix/den;
+
+    real  gamma = Gamma[ic];
+    for(size_t il=0;il<lbmaux[0].Nl;il++)
+    {
+        if (!IsSolid[ic+il*lbmaux[0].Ncells])
+        {
+            real  rho   = Rho[ic+il*lbmaux[0].Ncells];
+            real3 vel   = Vmix + (lbmaux[0].dt*lbmaux[0].Tau[il]/rho)*BForce[ic+il*lbmaux[0].Ncells];
+            real  VdotV = dotreal3(vel,vel);
+            real  tau   = lbmaux[0].Tau[il];
+            real  Bn    = fBn(gamma,tau);
+            bool valid = true;
+            real alphal = 1.0;
+            real alphat = 1.0;
+            size_t numit = 0;
+            while (valid)
+            {
+                numit++;
+                valid = false;
+                alphal = alphat;
+                for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+                {
+                    real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+                    real Cs    = lbmaux[0].Cs;
+                    real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
+                    size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+                    real Ome   = Omeis[idx];
+                    real NonEq = (1.0-Bn)*(F[idx]-Feq)/tau - Bn*Ome;
+                    Ftemp[idx] = F[idx] - alphal*NonEq;
+                    if (Ftemp[idx]<0.0&&numit<2)
+                    {
+                        real temp = F[idx]/NonEq;
+                        if (temp<alphat) alphat = temp;
+                        valid = true;
+                    }
+                    if (Ftemp[idx]<0.0&&numit>=2)
+                    {
+                        Ftemp[idx] = 0.0;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+            {
+                Ftemp[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+            }
+        }
+    } 
+}
+
 template <typename FuncBn>
 __global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real const * Rho, real * Gamma, real * Omeis, real const *
         F, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
@@ -416,29 +570,27 @@ __global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::Part
     Xs  = C-B;
     len = cudaSphereCube(Xs,C,Par[ip].Dmax,lbmaux[0].dx);
     if (fabs(len)<1.0e-12) return;
-    real Tau = lbmaux[0].Tau[0];
     real gamma  = len/(12.0*lbmaux[0].dx);
     if (gamma<Gamma[ice]) return;
     Gamma[ice] = gamma;
     real3 tmp;
     Rotation(DPar[ip].w,DPar[ip].Q,tmp);
     real3 VelP   = DPar[ip].v + cross(tmp,B);
-    real rho = Rho[ice];
-    real Bn = fBn(gamma,Tau);
-//#ifndef USE_LADD
-    //real Bn  = (gamma*(Tau-0.5))/((1.0-gamma)+(Tau-0.5));
-//#else
-    //real Bn  = floor(gamma);
-//#endif
+
     size_t ncells = lbmaux[0].Nneigh;
     real3 Flbm = make_real3(0.0,0.0,0.0);
-    for (size_t k=0;k<ncells;k++)
+    for (size_t il=0;il<lbmaux[0].Nl;il++)
     {
-        real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
-        real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
-        real Omega    = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
-        Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
-        Flbm = Flbm - lbmdemaux[0].Fconv*Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
+        real Bn  = fBn(gamma,lbmaux[0].Tau[il]);
+        real rho = Rho[ice + il*lbmaux[0].Ncells];
+        for (size_t k=0;k<ncells;k++)
+        {
+            real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
+            real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
+            real Omega    = F[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + k] - Fvp);
+            Omeis[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + k] = Omega;
+            Flbm = Flbm - lbmdemaux[0].Fconv*Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
+        }
     }
     real3 Tlbm,Tt;
     Tt =           cross(B,Flbm);
@@ -456,7 +608,6 @@ __global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::Part
     atomicAdd(& Par[ip].T.y   ,Tlbm.y);
     atomicAdd(& Par[ip].T.z   ,Tlbm.z);
 }
-//#endif
 
 __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * PaCeF, size_t const * Faces, size_t const * Facid, real3 const * Verts, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar
         , real const * Rho, real * Gamma, real * Omeis, real const * F, DEM::dem_aux const * demaux, FLBM::lbm_aux const * lbmaux, lbmdem_aux const * lbmdemaux)
@@ -517,25 +668,27 @@ __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * 
 
     //if (icx==50&&icy==50&&icz==6) printf("gamma: %g dist = %g igeo = %d ip = %d \n",len/(12.0*lbmaux[0].dx),minl,igeo,ip);
     if (fabs(len)<1.0e-12) return;
-    real Tau = lbmaux[0].Tau[0];
     real gamma  = len/(12.0*lbmaux[0].dx);
     if (gamma<Gamma[ice]) return;
     Gamma[ice] = gamma;
     real3 tmp;
     Rotation(DPar[ip].w,DPar[ip].Q,tmp);
     real3 VelP   = DPar[ip].v + cross(tmp,B);
-    real rho = Rho[ice];
-    real Bn  = (gamma*(Tau-0.5))/((1.0-gamma)+(Tau-0.5));
     //real Bn  = gamma;
     size_t ncells = lbmaux[0].Nneigh;
     real3 Flbm = make_real3(0.0,0.0,0.0);
-    for (size_t k=0;k<ncells;k++)
+    for (size_t il=0;il<lbmaux[0].Nl;il++)
     {
-        real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
-        real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
-        real Omega    = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
-        Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
-        Flbm = Flbm - Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
+        real Bn  = (gamma*(lbmaux[0].Tau[il]-0.5))/((1.0-gamma)+(lbmaux[0].Tau[il]-0.5));
+        real rho = Rho[ice + il*lbmaux[0].Ncells];
+        for (size_t k=0;k<ncells;k++)
+        {
+            real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
+            real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
+            real Omega    = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
+            Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
+            Flbm = Flbm - Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
+        }
     }
     real3 Tlbm,Tt;
     Tt =           cross(B,Flbm);
@@ -554,25 +707,156 @@ __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * 
     atomicAdd(& Par[ip].T.z   ,Tlbm.z);
 }
 
+__global__ void cudaApplyForcesSC(uint3 * pCellPairs, bool const * IsSolid, real * Gamma, real3 * BForce, real const * Rho, FLBM::lbm_aux const * lbmaux)
+{
+    size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
+    if (icp>=lbmaux[0].NCPairs) return;
+    size_t ic = pCellPairs[icp].x;
+    size_t in = pCellPairs[icp].y;
+    size_t k  = pCellPairs[icp].z;
+
+    for (size_t il=0;il<lbmaux[0].Nl;il++)
+    {
+        real psic = 1.0;
+        real psin = 1.0;
+        real G    = lbmaux[0].G[il];
+        bool chksolidc = false;
+        bool chksolidn = false;
+        if (fabs(G)<1.0e-12) continue;
+        if (!IsSolid[ic]&&fabs(1.0-Gamma[ic])>1.0e-12) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
+        else
+        {            
+            G    = lbmaux[0].Gs[il];
+            chksolidc = true;
+        }
+        if (!IsSolid[in]&&fabs(1.0-Gamma[in])>1.0e-12) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
+        else
+        {
+            G    = lbmaux[0].Gs[il];
+            chksolidn = true;
+        }
+
+        if (chksolidc&&chksolidn) G = 0.0;
+        
+        real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
+
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].x, bforce.x);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].y, bforce.y);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].z, bforce.z);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].x,-bforce.x);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].y,-bforce.y);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].z,-bforce.z);
+    }
+
+    //printf("BForce %d %f %f %f \n",ic,BForce[ic].x,BForce[ic].y,BForce[ic].z);
+}
+
+__global__ void cudaApplyForcesSCMP(uint3 * pCellPairs, bool const * IsSolid, real * Gamma, real3 * BForce, real const * Rho, FLBM::lbm_aux const * lbmaux)
+{
+    size_t icp = threadIdx.x + blockIdx.x * blockDim.x;
+    if (icp>=lbmaux[0].NCPairs) return;
+    size_t ic = pCellPairs[icp].x;
+    size_t in = pCellPairs[icp].y;
+    size_t k  = pCellPairs[icp].z;
+
+    bool chksolidc = false;
+    bool chksolidn = false;
+
+    for (size_t il=0;il<lbmaux[0].Nl;il++)
+    {
+        real psic = 0.0;
+        real psin = 0.0;
+        real G    = lbmaux[0].G[il];
+        if (fabs(G)<1.0e-12) continue;
+        if (!IsSolid[ic+il*lbmaux[0].Ncells]&&fabs(1.0-Gamma[ic])>1.0e-12) psic = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[ic+il*lbmaux[0].Ncells]);
+        if (!IsSolid[in+il*lbmaux[0].Ncells]&&fabs(1.0-Gamma[in])>1.0e-12) psin = lbmaux[0].Psi[il]*exp(-lbmaux[0].Rhoref[il]/Rho[in+il*lbmaux[0].Ncells]);
+
+        real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
+
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].x, bforce.x);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].y, bforce.y);
+        atomicAdd(&BForce[ic+il*lbmaux[0].Ncells].z, bforce.z);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].x,-bforce.x);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].y,-bforce.y);
+        atomicAdd(&BForce[in+il*lbmaux[0].Ncells].z,-bforce.z);
+    }
+    
+    for (size_t il1=0    ;il1<lbmaux[0].Nl-1;il1++)
+    for (size_t il2=il1+1;il2<lbmaux[0].Nl  ;il2++)
+    {
+        chksolidc = false;
+        chksolidn = false;
+        real psic = 1.0;
+        real psin = 1.0;
+        real G    = lbmaux[0].Gmix;
+        if (!IsSolid[ic+il1*lbmaux[0].Ncells]&&fabs(1.0-Gamma[ic])>1.0e-12) psic = Rho[ic+il1*lbmaux[0].Ncells];
+        else
+        {
+            G    = lbmaux[0].Gs[il2];
+            chksolidc = true;
+        }
+        if (!IsSolid[in+il2*lbmaux[0].Ncells]&&fabs(1.0-Gamma[in])>1.0e-12) psin = Rho[in+il2*lbmaux[0].Ncells];
+        else
+        {
+            G    = lbmaux[0].Gs[il1];
+            chksolidn = true;
+        }
+
+        if (chksolidc&&chksolidn) G = 0.0;
+
+        real3 bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
+
+        atomicAdd(&BForce[ic+il1*lbmaux[0].Ncells].x, bforce.x);
+        atomicAdd(&BForce[ic+il1*lbmaux[0].Ncells].y, bforce.y);
+        atomicAdd(&BForce[ic+il1*lbmaux[0].Ncells].z, bforce.z);
+        atomicAdd(&BForce[in+il2*lbmaux[0].Ncells].x,-bforce.x);
+        atomicAdd(&BForce[in+il2*lbmaux[0].Ncells].y,-bforce.y);
+        atomicAdd(&BForce[in+il2*lbmaux[0].Ncells].z,-bforce.z);
+
+        chksolidc = false;
+        chksolidn = false;
+        psic = 1.0;
+        psin = 1.0;
+        G    = lbmaux[0].Gmix;
+        if (!IsSolid[ic+il2*lbmaux[0].Ncells]&&fabs(1.0-Gamma[ic])>1.0e-12) psic = Rho[ic+il2*lbmaux[0].Ncells];
+        else
+        {            
+            G    = lbmaux[0].Gs[il1];
+            chksolidc = true;
+        }
+        if (!IsSolid[in+il1*lbmaux[0].Ncells]&&fabs(1.0-Gamma[in])>1.0e-12) psin = Rho[in+il1*lbmaux[0].Ncells];
+        else
+        {
+            G    = lbmaux[0].Gs[il2];
+            chksolidn = true;
+        }
+
+        if (chksolidc&&chksolidn) G = 0.0;
+
+        bforce = (-G*lbmaux[0].W[k]*psic*psin)*lbmaux[0].C[k];
+
+        atomicAdd(&BForce[ic+il2*lbmaux[0].Ncells].x, bforce.x);
+        atomicAdd(&BForce[ic+il2*lbmaux[0].Ncells].y, bforce.y);
+        atomicAdd(&BForce[ic+il2*lbmaux[0].Ncells].z, bforce.z);
+        atomicAdd(&BForce[in+il1*lbmaux[0].Ncells].x,-bforce.x);
+        atomicAdd(&BForce[in+il1*lbmaux[0].Ncells].y,-bforce.y);
+        atomicAdd(&BForce[in+il1*lbmaux[0].Ncells].z,-bforce.z);
+    }
+    
+}
+
 __global__ void cudaStream2(bool const * IsSolid, real * Gamma, real * Omeis, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
-    #ifndef USE_IBB
     if (ic==0)
     {
         lbmaux[0].Time += lbmaux[0].dt;
         lbmaux[0].iter++;
     }
     BForce[ic] = make_real3(0.0,0.0,0.0);
-    #endif
-    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-    //{
-        //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k];
-    //}
     Rho   [ic] = 0.0;
     Vel   [ic] = make_real3(0.0,0.0,0.0);
-    //Gamma[ic]  = (real) IsSolid[ic];
     if (!IsSolid[ic])
     {
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)

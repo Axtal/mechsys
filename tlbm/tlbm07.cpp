@@ -73,7 +73,7 @@ int main(int argc, char **argv) try
     double nu = 0.01;
     double dx = 1.0;
     double dt = 1.0;
-    double rho= 3000.0;
+    double rho= 2000.0;
     
     Array<double> Nu(2);
     Nu[0] = nu;
@@ -123,7 +123,7 @@ int main(int argc, char **argv) try
         //if (j<0.6*ny)
         if (j<ny/2.0)
         {
-            Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(1300.0,v0);
+            Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(1200.0,v0);
             //Dom.Lat[0].GetCell(iVec3_t(i,j,k))->Initialize(3000.0,v0);
             Dom.Lat[1].GetCell(iVec3_t(i,j,k))->Initialize(0.01  ,v0);
         }
@@ -153,11 +153,11 @@ int main(int argc, char **argv) try
     deltag.Push(-8);
     Dom.DelParticles(deltag);
 
-    Dom.AddSphere(-1,Vec3_t(0.58*nx*dx,0.65*ny*dx,0.58*nz*dx),0.1*ny,0.4*rho);
-    Dom.AddSphere(-2,Vec3_t(0.57*nx*dx,0.85*ny*dx,0.57*nz*dx),0.1*ny,rho    );
-    Dom.AddSphere(-3,Vec3_t(0.43*nx*dx,0.65*ny*dx,0.42*nz*dx),0.1*ny,rho    );
-    Dom.AddSphere(-4,Vec3_t(0.36*nx*dx,0.85*ny*dx,0.63*nz*dx),0.1*ny,0.3*rho);
-    Dom.AddSphere(-5,Vec3_t(0.70*nx*dx,0.65*ny*dx,0.40*nz*dx),0.1*ny,0.6*rho);
+    Dom.AddSphere(-1,Vec3_t(0.5*nx*dx,0.7*ny*dx,0.5*nz*dx),0.1*ny,0.4*rho);
+    //Dom.AddSphere(-2,Vec3_t(0.57*nx*dx,0.85*ny*dx,0.57*nz*dx),0.1*ny,rho    );
+    //Dom.AddSphere(-3,Vec3_t(0.43*nx*dx,0.65*ny*dx,0.42*nz*dx),0.1*ny,rho    );
+    //Dom.AddSphere(-4,Vec3_t(0.36*nx*dx,0.85*ny*dx,0.63*nz*dx),0.1*ny,0.3*rho);
+    //Dom.AddSphere(-5,Vec3_t(0.70*nx*dx,0.65*ny*dx,0.40*nz*dx),0.1*ny,0.6*rho);
 
     //Dom.AddRecBox(-1,OrthoSys::O,Vec3_t(0.2*nx*dx,0.2*ny*dx,0.1*nz*dx),1.0,0.5*rho);
     //Dom.GetParticle(-1)->Position(Vec3_t(0.5*nx*dx,0.8*ny*dx,0.5*nz*dx));
@@ -176,7 +176,7 @@ int main(int argc, char **argv) try
 
     //Dom.WriteXDMF("test07");
     //Solving
-    Dom.Solve(4000.0,10.0,Setup,NULL,"test07",true,Nproc);
+    Dom.Solve(40000.0,100.0,Setup,NULL,"test07",true,Nproc);
 }
 MECHSYS_CATCH
 

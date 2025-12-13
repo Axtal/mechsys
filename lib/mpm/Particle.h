@@ -203,5 +203,12 @@ inline void Particle::Reset(double dt)
     }
 }
 
+#ifdef USE_CUDA
+struct ParticleCU
+{
+
+}
+#endif
+
 }
 #endif //MECHSYS_MPM_PARTICLE_H
