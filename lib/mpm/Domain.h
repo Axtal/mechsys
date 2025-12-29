@@ -52,6 +52,10 @@
 #include <mechsys/dem/domain.h>
 #include <mechsys/mesh/unstructured.h>
 
+#ifdef USE_CUDA
+#include <mechsys/mpm/mpm.cuh>
+#include <thrust/sequence.h>
+#endif
 
 namespace MPM
 {
@@ -143,6 +147,31 @@ public:
 #ifdef USE_HDF5    
     void WriteXDMF         (char const * FileKey);                                      ///< Save a xdmf file for visualization
 #endif
+
+    //CUDA Implementation
+#ifdef USE_CUDA
+    size_t Nthread = 256;                                                   ///< Number of GPU threads 
+    size_t ValidNumber = 0;                                                 ///< Number of Valid nodes                                                                            
+    void UpLoadDevice(size_t Nc=1);                                         ///< Upload the domain to cuda device
+    void DnLoadDevice(size_t Nc=1);                                         ///< Download the key data from device
+    thrust::device_vector<ParticleCU>      bParticlesCU;                    ///< device vector of particles
+    thrust::device_vector<NodeCU    >      bNodeCU     ;                    ///< device vector of nodes
+    thrust::device_vector<size_t    >      bAllIndexes ;                    ///< vector of all indexes of nodes
+    thrust::device_vector<size_t    >      bSelIndexes ;                    ///< vector of selected indexes of nodes
+    thrust::device_vector<bool      >      bValidMask  ;                    ///< Mask marking valid nodes from non-valid ones
+    mpm_aux                                mpmaux      ;                    ///< structure with domain data                                              
+
+    //Pointers to GPU arrays
+    ParticleCU * pParticlesCU;
+    NodeCU     * pNodeCU;
+    size_t     * pAllIndexes;
+    size_t     * pSelIndexes;
+    size_t     * pValidNumber;
+    bool       * pValidMask;
+    mpm_aux    * pmpmaux;
+
+#endif
+
 };
 
 inline void Domain::AddFromJson (int Tag, char const * Filename, double rho, double scale, size_t nx)
@@ -1471,7 +1500,7 @@ inline void Domain::BoundaryMesh()
     Array<Array <int> > Neigh (BodyMesh->Cells.Size());
     Array<Array <int> > FNeigh(BodyMesh->Cells.Size());
     BodyMesh->FindNeigh();
-    for (size_t ic;ic<BodyMesh->Cells.Size();ic++)
+    for (size_t ic=0;ic<BodyMesh->Cells.Size();ic++)
     {
         for (Mesh::Neighs_t::const_iterator p=BodyMesh->Cells[ic]->Neighs.begin(); p!=BodyMesh->Cells[ic]->Neighs.end(); ++p)
         {
@@ -1664,11 +1693,26 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
     {
         BoundaryMesh();
     }
+#ifdef USE_CUDA
+    //if (iter==0) UpLoadDevice(Nproc,true);
+    //else         UpLoadDevice(Nproc,false);
+    mpmaux.Tf = Tf;
+    UpLoadDevice(Nproc);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties (&prop,0);
+    std::cout 
+        << TERM_CLR2 
+        << "  Using GPU:                                =  " << prop.name       << TERM_RST << std::endl
+        << "  Using Number of CUDA threads:             =  " << Nthread         << TERM_RST << std::endl;
+#endif
     while (Time < Tf)
     {
         if (ptSetup!=NULL) (*ptSetup) ((*this), UserData);
         if (Time >= tout)
         {
+#ifdef USE_CUDA
+            DnLoadDevice(Nproc);
+#endif
             if (TheFileKey!=NULL)
             {
                 String fn;
@@ -1684,6 +1728,38 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
             tout += dtOut;
             idx_out++;
         }
+#ifdef USE_CUDA
+        if (BodyMesh!=NULL)
+        {
+        }
+        else
+        {
+            cudaResetNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
+
+            cudaParticleToNode<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pValidMask,pmpmaux);
+
+            //Building the slected node array
+            
+            auto new_end = thrust::copy_if(
+            bAllIndexes.begin(),
+            bAllIndexes.end(),
+            bValidMask .begin(),                    // Stencil: 1 or 0
+            bSelIndexes.begin(),
+            thrust::identity<bool>());            // Identity: returns the value itself
+
+            ValidNumber = thrust::distance(bSelIndexes.begin(),new_end);
+            cudaFree(pValidNumber);
+            cudaMalloc(&pValidNumber, sizeof(size_t));
+            cudaMemcpy(pValidNumber, &ValidNumber, sizeof(size_t), cudaMemcpyHostToDevice);
+
+            bSelIndexes.resize(ValidNumber);
+
+            cudaSolveNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
+
+            cudaNodeToParticle<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pmpmaux);
+
+        }
+#else
         if (BodyMesh!=NULL)
         {
             OneStepCPI();
@@ -1695,9 +1771,85 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
             NodeToParticle();
         //OneStepUSF();
         }
+#endif
         Time += dt;
         //std::cout << Time << std::endl;
     }
 }
+
+#ifdef USE_CUDA
+
+inline void Domain::UpLoadDevice(size_t Nc)
+{
+    mpmaux.Mmin    = Mmin    ;
+    mpmaux.Dx      = Dx      ;
+    mpmaux.Dt      = Dt      ;
+    mpmaux.Time    = Time    ;
+    mpmaux.Gn      = Gn      ;
+    mpmaux.Nx      = Ndim (0);
+    mpmaux.Ny      = Ndim (1);
+    mpmaux.Nz      = Ndim (2);
+    mpmaux.Nnodes  = Nnodes  ;
+    mpmaux.Npart   = Particles.Size();
+    mpmaux.Xlow .x = Xlow (0);
+    mpmaux.Xlow .y = Xlow (1);
+    mpmaux.Xlow .z = Xlow (2);
+    mpmaux.Xhigh.x = Xhigh(0);
+    mpmaux.Xhigh.y = Xhigh(1);
+    mpmaux.Xhigh.z = Xhigh(2);
+
+    thrust::host_vector<ParticleCU> hParticles(Particles.Size());
+    thrust::host_vector<NodeCU    > hNodes(Nnodes)              ;
+
+    #pragma omp parallel for schedule(static) num_threads(Nc)
+    for (size_t ip=0;ip<Particles.Size();ip++)
+    {
+         UploadParticle(hParticles[ip],*Particles[ip]);
+    }
+
+    #pragma omp parallel for schedule(static) num_threads(Nc)
+    for (size_t in=0;in<Nnodes;in++)
+    {
+        UploadNode(hNodes[in],Nodes[in]);
+    }
+
+    bParticlesCU.resize(Particles.Size());
+    bNodeCU     .resize(Nnodes);
+    bValidMask  .resize(Nnodes);
+    bAllIndexes .resize(Nnodes);
+    bSelIndexes .resize(Nnodes);
+    thrust::copy(hParticles.begin(),hParticles.end(),bParticlesCU.begin());
+    thrust::copy(hNodes    .begin(),hNodes    .end(),bNodeCU     .begin());
+    thrust::fill(bValidMask.begin(),bValidMask.end(),false);
+    thrust::sequence(bAllIndexes.begin(), bAllIndexes.end(), 0);
+    thrust::sequence(bSelIndexes.begin(), bSelIndexes.end(), 0);
+
+    pParticlesCU = thrust::raw_pointer_cast(bParticlesCU.data());
+    pNodeCU      = thrust::raw_pointer_cast(bNodeCU     .data());
+    pAllIndexes  = thrust::raw_pointer_cast(bAllIndexes .data());
+    pSelIndexes  = thrust::raw_pointer_cast(bSelIndexes .data());
+    pValidMask   = thrust::raw_pointer_cast(bValidMask  .data());
+
+    ValidNumber = 0;
+    cudaMalloc(&pValidNumber, sizeof(size_t));
+    cudaMemcpy(pValidNumber, &ValidNumber, sizeof(size_t), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&pmpmaux, sizeof(mpm_aux));
+    cudaMemcpy(pmpmaux, &mpmaux, sizeof(mpm_aux), cudaMemcpyHostToDevice);
+}
+
+inline void Domain::DnLoadDevice(size_t Nc)
+{
+    thrust::host_vector<ParticleCU> hParticles = bParticlesCU;
+
+    #pragma omp parallel for schedule(static) num_threads(Nc)
+    for (size_t ip=0;ip<Particles.Size();ip++)
+    {
+        DnloadParticle(hParticles[ip],*Particles[ip]);
+    }
+}
+
+#endif
+
 }
 #endif //MECHSYS_MPM_DOMAIN_H

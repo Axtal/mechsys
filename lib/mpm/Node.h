@@ -90,6 +90,10 @@ inline Node::Node(iVec3_t Pt0, size_t idx0)
     Vn = OrthoSys::O;
     Mn = OrthoSys::O;
     Fn = OrthoSys::O;
+    vxf = false;
+    vyf = false;
+    vzf = false;
+    fixCor = false;
     #ifdef USE_OMP
     omp_init_lock(&lck);    ///< to protect variables in multithreading
     #endif
@@ -157,7 +161,7 @@ inline void Node::FixNode ()
 #ifdef USE_CUDA
 struct NodeCU
 {
-    bool valid;
+    bool       valid;                       ///< mark is a node is valid
     int3       X;                           ///< index position of the node
     size_t     Idx;                         ///< Index of the node
     real       Mass;                        ///< Mass of each node
@@ -165,13 +169,61 @@ struct NodeCU
     real3      Vnf;                         ///< Fixed Velocity at each node for Dirichlet BCs
     real3      Mn;                          ///< Momentum at each node
     real3      Fn;                          ///< Force at each node
-    real3      SnD;                         ///< Stress at each node diagonal terms
-    real3      SnT;                         ///< Stress at each node non diagonal terms
+    Mat3       Sn;                          ///< Stress at the node
     bool       vxf, vyf, vzf;               ///< Fixed components of velocity
     bool       fixCor;
+
+
+    __host__ __device__ void Reset()
+    {
+        fixCor = false;
+        valid  = false; 
+        Mass   = 0.0;
+        Vn     = make_real3(0.0,0.0,0.0);
+        Mn     = Vn;
+        Fn     = Vn;
+        Sn.SetZero();
+    }
+
+    __host__ __device__ void UpdateNode(real gn, real dt, real mmin)
+    {
+        real3 fdamp = gn*Mn;
+        Fn = Fn - fdamp;
+        Mn = Mn - dt*fdamp;
+        if (Mass<mmin)
+        {
+            Vn = make_real3(0.0,0.0,0.0);
+        }
+        else
+        {
+            Vn = (1.0/Mass)*Mn;
+        }
+    }
+
+    __host__ __device__ void FixNode()
+    {
+        if (vxf)
+        {
+            Fn.x = 0.0;
+            Vn.x =     Vnf.x;
+            Mn.x = Mass*Vn.x;
+        }
+        if (vyf)
+        {
+            Fn.y = 0.0;
+            Vn.y =     Vnf.y;
+            Mn.y = Mass*Vn.y;
+        }
+        if (vzf)
+        {
+            Fn.z = 0.0;
+            Vn.z =     Vnf.z;
+            Mn.z = Mass*Vn.z;
+        }
+    }
 };
 
-__host__ void UploadNode(MPM::NodeCU & NCu, MPM::Node & Node)
+__host__ void UploadNode(      NodeCU & NCu, const Node & Node)
 {
     NCu.valid  = Node.valid  ;
     NCu.X.x    = Node.X(0)   ;
@@ -191,25 +243,19 @@ __host__ void UploadNode(MPM::NodeCU & NCu, MPM::Node & Node)
     NCu.Fn.x   = Node.Fn(0)  ;
     NCu.Fn.y   = Node.Fn(1)  ;
     NCu.Fn.z   = Node.Fn(2)  ;
-    NCu.SnD.x  = Node.Sn(0,0);
-    NCu.SnD.y  = Node.Sn(1,1);
-    NCu.SnD.z  = Node.Sn(2,2);
-    NCu.SnT.x  = Node.Sn(0,1);
-    NCu.SnT.y  = Node.Sn(0,2);
-    NCu.SnT.z  = Node.Sn(1,2);
+    NCu.Sn     = Node.Sn     ;
     NCu.vxf    = Node.vxf    ;
     NCu.vyf    = Node.vyf    ;
     NCu.vzf    = Node.vzf    ;
     NCu.fixCor = Node.fixCor ; 
 }
 
-__host__ void DnloadNode(MPM::NodeCU & NCu, MPM::Node & Node)
+__host__ void DnloadNode(const NodeCU & NCu,       Node & Node)
 {
     Node.valid   = NCu.valid ;
     Node.X(0)    = NCu.X.x   ;
     Node.X(1)    = NCu.X.y   ;
     Node.X(2)    = NCu.X.z   ;
-    Node.Idx     = NCu.Idx   ;
     Node.Mass    = NCu.Mass  ;
     Node.Vn(0)   = NCu.Vn.x  ;
     Node.Vn(1)   = NCu.Vn.y  ;
@@ -223,16 +269,7 @@ __host__ void DnloadNode(MPM::NodeCU & NCu, MPM::Node & Node)
     Node.Fn(0)   = NCu.Fn.x  ;
     Node.Fn(1)   = NCu.Fn.y  ;
     Node.Fn(2)   = NCu.Fn.z  ;
-    Node.Sn(0,0) = NCu.SnD.x ;
-    Node.Sn(1,1) = NCu.SnD.y ;
-    Node.Sn(2,2) = NCu.SnD.z ;
-    Node.Sn(0,1) = NCu.SnT.x ;
-    Node.Sn(0,2) = NCu.SnT.y ;
-    Node.Sn(1,2) = NCu.SnT.z ;
-    Node.vxf     = NCu.vxf   ;
-    Node.vyf     = NCu.vyf   ;
-    Node.vzf     = NCu.vzf   ;
-    Node.fixCor  = NCu.fixCor; 
+    copyMat3(Node.Sn,NCu.Sn) ;
 }
 
 #endif

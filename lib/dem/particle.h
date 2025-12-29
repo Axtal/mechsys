@@ -22,6 +22,7 @@
 // Std lib
 #include <iostream>
 #include <fstream>
+#include <limits>
 #ifdef USE_OMP
     #include <omp.h>
 #endif
@@ -759,6 +760,17 @@ inline void Particle::Translate (double dt)
     xb   = x;
     x    = xa;
     Ekin = 0.5*Props.m*dot(v,v);
+
+    //if(std::isinf(norm(x))) 
+    //{
+        //std::cout << "Index    = " << Index   << std::endl;
+        //std::cout << "Positionb= " << xb      << std::endl;
+        //std::cout << "Force    = " << Ft      << std::endl;
+        //std::cout << "Mass     = " << Props.m << std::endl;
+        //std::cout << "Inertia  = " << I       << std::endl;
+        //printf("Particle::Translate: The new position is not a number %zd(%d), try reducing the time step \n",Index,Tag);
+        //throw new Fatal("Particle::Translate: The force is not a number %zd(%d)",Index,Tag);
+    //}
 
     //std::cout << "2" << std::endl;
     size_t nv = Verts.Size();

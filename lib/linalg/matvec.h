@@ -2137,6 +2137,441 @@ __host__ __device__ __inline__ real3 cross(real3 const & a, real3 const & b)
     return make_real3(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x);
 }
 
+// Main Mat3 structure
+struct Mat3 
+{
+    // Column-major storage for better memory coalescing on GPU
+    // data[0], data[1], data[2] = first column
+    // data[3], data[4], data[5] = second column
+    // data[6], data[7], data[8] = third column
+    real data[9];
+    
+    // =============== CONSTRUCTORS ===============
+    __host__ __device__ Mat3() {
+        // Initialize to identity matrix
+        #pragma unroll
+        for (int i = 0; i < 9; i++) data[i] = 0.0f;
+        data[0] = data[4] = data[8] = 1.0f;
+    }
+    
+    // Constructor from individual components (column-major)
+    __host__ __device__ Mat3(real m00, real m10, real m20,
+                             real m01, real m11, real m21,
+                             real m02, real m12, real m22) {
+        data[0] = m00; data[1] = m10; data[2] = m20;  // Column 0
+        data[3] = m01; data[4] = m11; data[5] = m21;  // Column 1
+        data[6] = m02; data[7] = m12; data[8] = m22;  // Column 2
+    }
+    
+    // Constructor from three column vectors
+    __host__ __device__ Mat3(real3 col0, real3 col1, real3 col2) {
+        data[0] = col0.x; data[1] = col0.y; data[2] = col0.z;  // Column 0
+        data[3] = col1.x; data[4] = col1.y; data[5] = col1.z;  // Column 1
+        data[6] = col2.x; data[7] = col2.y; data[8] = col2.z;  // Column 2
+    }
+    
+    // Constructor from three row vectors
+    __host__ __device__ static Mat3 fromRows(real3 row0, real3 row1, real3 row2) {
+        return Mat3(row0.x, row1.x, row2.x,  // First column from rows
+                    row0.y, row1.y, row2.y,  // Second column
+                    row0.z, row1.z, row2.z); // Third column
+    }
+    
+    // =============== ACCESS METHODS ===============
+    // Access element (row, column) - column-major
+    __host__ __device__ real & operator()(int row, int col) {
+        return data[col * 3 + row];
+    }
+
+    __host__ __device__ real operator()(int row, int col) const {
+        return data[col * 3 + row];
+    }
+    
+    // Get row as real3 (convert from column-major)
+    __host__ __device__ real3 getRow(int row) const {
+        return make_real3(data[row], data[3 + row], data[6 + row]);
+    }
+    
+    // Get column as real3
+    __host__ __device__ real3 getCol(int col) const {
+        int base = col * 3;
+        return make_real3(data[base], data[base + 1], data[base + 2]);
+    }
+    
+    // =============== MATRIX OPERATIONS ===============
+    
+    // Copy Mat3 to host Mat3_t and viceversa
+    __host__ Mat3 operator=(const Mat3_t & mat)
+    {
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            #pragma unroll
+            for (int j = 0; j < 3; j++) {
+                (*this)(i, j) = mat(i,j);
+            }
+        }
+        return *this;
+    }
+
+    __host__ __device__ Mat3 operator=(const Mat3 & mat)
+    {
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            #pragma unroll
+            for (int j = 0; j < 3; j++) {
+                (*this)(i, j) = mat(i,j);
+            }
+        }
+        return *this;
+    }
+
+    __host__ __device__ void SetZero()
+    {
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            data[i] = 0.0;
+        }
+    }
+
+    // Matrix addition
+    __host__ __device__ Mat3 operator+(const Mat3& other) const {
+        Mat3 result;
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            result.data[i] = data[i] + other.data[i];
+        }
+        return result;
+    }
+    
+    // Matrix addition assignment
+    __host__ __device__ Mat3& operator+=(const Mat3& other) {
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            data[i] += other.data[i];
+        }
+        return *this;
+    }
+    
+    // Matrix subtraction
+    __host__ __device__ Mat3 operator-(const Mat3& other) const {
+        Mat3 result;
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            result.data[i] = data[i] - other.data[i];
+        }
+        return result;
+    }
+    
+    // Matrix subtraction assignment
+    __host__ __device__ Mat3& operator-=(const Mat3& other) {
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            data[i] -= other.data[i];
+        }
+        return *this;
+    }
+    
+    // Matrix multiplication (3x3 * 3x3) - Fully unrolled for performance
+    __host__ __device__ Mat3 operator*(const Mat3& other) const {
+        Mat3 result;
+        
+        // Column 0 of result
+        result.data[0] = data[0]*other.data[0] + data[3]*other.data[1] + data[6]*other.data[2];
+        result.data[1] = data[1]*other.data[0] + data[4]*other.data[1] + data[7]*other.data[2];
+        result.data[2] = data[2]*other.data[0] + data[5]*other.data[1] + data[8]*other.data[2];
+        
+        // Column 1 of result
+        result.data[3] = data[0]*other.data[3] + data[3]*other.data[4] + data[6]*other.data[5];
+        result.data[4] = data[1]*other.data[3] + data[4]*other.data[4] + data[7]*other.data[5];
+        result.data[5] = data[2]*other.data[3] + data[5]*other.data[4] + data[8]*other.data[5];
+        
+        // Column 2 of result
+        result.data[6] = data[0]*other.data[6] + data[3]*other.data[7] + data[6]*other.data[8];
+        result.data[7] = data[1]*other.data[6] + data[4]*other.data[7] + data[7]*other.data[8];
+        result.data[8] = data[2]*other.data[6] + data[5]*other.data[7] + data[8]*other.data[8];
+        
+        return result;
+    }
+    
+    // Matrix-vector multiplication (3x3 * real3)
+    __host__ __device__ real3 operator*(real3 vec) const {
+        return make_real3(
+            data[0]*vec.x + data[3]*vec.y + data[6]*vec.z,
+            data[1]*vec.x + data[4]*vec.y + data[7]*vec.z,
+            data[2]*vec.x + data[5]*vec.y + data[8]*vec.z
+        );
+    }
+    
+    // Scalar multiplication
+    __host__ __device__ Mat3 operator*(real scalar) const {
+        Mat3 result;
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            result.data[i] = data[i] * scalar;
+        }
+        return result;
+    }
+    
+    // =============== MATRIX PROPERTIES ===============
+    
+    // Trace (sum of diagonal elements)
+    __host__ __device__ real trace() const {
+        return data[0] + data[4] + data[8];
+    }
+    
+    // Determinant
+    __host__ __device__ real determinant() const {
+        // Sarrus' rule for 3x3 matrix
+        return data[0]*(data[4]*data[8] - data[5]*data[7])
+             - data[3]*(data[1]*data[8] - data[2]*data[7])
+             + data[6]*(data[1]*data[5] - data[2]*data[4]);
+    }
+    
+    // Frobenius norm (sqrt of sum of squares of all elements)
+    __host__ __device__ real frobeniusNorm() const {
+        real sum = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < 9; i++) {
+            sum += data[i] * data[i];
+        }
+        return sqrtf(sum);
+    }
+    
+    // =============== MATRIX TRANSFORMATIONS ===============
+    
+    // Transpose
+    __host__ __device__ Mat3 transpose() const {
+        Mat3 result;
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            #pragma unroll
+            for (int j = 0; j < 3; j++) {
+                result(i, j) = (*this)(j, i);
+            }
+        }
+        return result;
+    }
+    
+    // Transpose in-place
+    __host__ __device__ void transposeInPlace() {
+        real temp;
+        temp = data[1]; data[1] = data[3]; data[3] = temp;
+        temp = data[2]; data[2] = data[6]; data[6] = temp;
+        temp = data[5]; data[5] = data[7]; data[7] = temp;
+    }
+    
+    // Inverse (returns identity if matrix is singular)
+    __host__ __device__ Mat3 inverse() const {
+        real det = determinant();
+        
+        // Check if matrix is singular
+        if (fabsf(det) < 1e-8f) {
+            return Mat3(); // Return identity
+        }
+        
+        real inv_det = 1.0f / det;
+        
+        Mat3 inv;
+        
+        // Compute inverse using cofactors
+        inv.data[0] = (data[4]*data[8] - data[5]*data[7]) * inv_det;
+        inv.data[1] = (data[2]*data[7] - data[1]*data[8]) * inv_det;
+        inv.data[2] = (data[1]*data[5] - data[2]*data[4]) * inv_det;
+        
+        inv.data[3] = (data[5]*data[6] - data[3]*data[8]) * inv_det;
+        inv.data[4] = (data[0]*data[8] - data[2]*data[6]) * inv_det;
+        inv.data[5] = (data[2]*data[3] - data[0]*data[5]) * inv_det;
+        
+        inv.data[6] = (data[3]*data[7] - data[4]*data[6]) * inv_det;
+        inv.data[7] = (data[1]*data[6] - data[0]*data[7]) * inv_det;
+        inv.data[8] = (data[0]*data[4] - data[1]*data[3]) * inv_det;
+        
+        return inv;
+    }
+    
+    // =============== SPECIAL MATRICES ===============
+    
+    // Create identity matrix
+    __host__ __device__ static Mat3 identity() {
+        return Mat3();
+    }
+    
+    // Create zero matrix
+    __host__ __device__ static Mat3 zero() {
+        Mat3 m;
+        #pragma unroll
+        for (int i = 0; i < 9; i++) m.data[i] = 0.0f;
+        return m;
+    }
+    
+    // Create diagonal matrix
+    __host__ __device__ static Mat3 diagonal(real3 diag) {
+        Mat3 m = zero();
+        m(0,0) = diag.x;
+        m(1,1) = diag.y;
+        m(2,2) = diag.z;
+        return m;
+    }
+    
+    // Create symmetric matrix from 6 unique elements
+    __host__ __device__ static Mat3 symmetric(real m00, real m11, real m22,
+                                              real m01, real m02, real m12) {
+        return Mat3(m00, m01, m02,
+                    m01, m11, m12,
+                    m02, m12, m22);
+    }
+    
+    // Create rotation matrix around X axis
+    __host__ __device__ static Mat3 rotationX(real angle) {
+        real c = cosf(angle);
+        real s = sinf(angle);
+        return Mat3(1.0f, 0.0f, 0.0f,
+                    0.0f, c,    -s,
+                    0.0f, s,     c);
+    }
+    
+    // Create rotation matrix around Y axis
+    __host__ __device__ static Mat3 rotationY(real angle) {
+        real c = cosf(angle);
+        real s = sinf(angle);
+        return Mat3(c,    0.0f, s,
+                    0.0f, 1.0f, 0.0f,
+                   -s,    0.0f, c);
+    }
+    
+    // Create rotation matrix around Z axis
+    __host__ __device__ static Mat3 rotationZ(real angle) {
+        real c = cosf(angle);
+        real s = sinf(angle);
+        return Mat3(c,   -s,    0.0f,
+                    s,    c,    0.0f,
+                    0.0f, 0.0f, 1.0f);
+    }
+    
+    // Create scale matrix
+    __host__ __device__ static Mat3 scale(real3 scale) {
+        return diagonal(scale);
+    }
+    
+    // =============== MATRIX CHECKS ===============
+    
+    // Check if symmetric (within tolerance)
+    __host__ __device__ bool isSymmetric(real tolerance = 1e-6f) const {
+        return (fabsf(data[1] - data[3]) < tolerance) &&
+               (fabsf(data[2] - data[6]) < tolerance) &&
+               (fabsf(data[5] - data[7]) < tolerance);
+    }
+    
+    // Check if orthogonal (A * A^T = I)
+    __host__ __device__ bool isOrthogonal(real tolerance = 1e-6f) const {
+        Mat3 prod = *this * this->transpose();
+        Mat3 identity = Mat3::identity();
+        
+        for (int i = 0; i < 9; i++) {
+            if (fabsf(prod.data[i] - identity.data[i]) > tolerance) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Check if identity (within tolerance)
+    __host__ __device__ bool isIdentity(real tolerance = 1e-6f) const {
+        Mat3 identity = Mat3::identity();
+        for (int i = 0; i < 9; i++) {
+            if (fabsf(data[i] - identity.data[i]) > tolerance) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // =============== OPERATOR OVERLOADS ===============
+    
+    // Equality check (with tolerance)
+    __host__ __device__ bool operator==(const Mat3& other) const {
+        for (int i = 0; i < 9; i++) {
+            if (data[i] != other.data[i]) return false;
+        }
+        return true;
+    }
+    
+    // Inequality check
+    __host__ __device__ bool operator!=(const Mat3& other) const {
+        return !(*this == other);
+    }
+    
+    // =============== UTILITY METHODS ===============
+    
+    // Extract Euler angles (ZYX convention)
+    __host__ __device__ real3 extractEulerAngles() const {
+        // Assuming this is a rotation matrix
+        real sy = sqrtf(data[0]*data[0] + data[3]*data[3]);
+        
+        bool singular = sy < 1e-6f;
+        
+        real x, y, z;
+        if (!singular) {
+            x = atan2f(data[7], data[8]);
+            y = atan2f(-data[6], sy);
+            z = atan2f(data[3], data[0]);
+        } else {
+            x = atan2f(-data[5], data[4]);
+            y = atan2f(-data[6], sy);
+            z = 0.0f;
+        }
+        
+        return make_real3(x, y, z);
+    }
+    
+    // Print matrix (for debugging, host only)
+    __host__ __device__ void print(const char* name = "Matrix") const {
+        printf("%s:\n", name);
+        for (int i = 0; i < 3; i++) {
+            printf("[%8.4f %8.4f %8.4f]\n", 
+                   (*this)(i,0), (*this)(i,1), (*this)(i,2));
+        }
+    }
+    
+    // Get pointer to data (useful for CUDA memory copies)
+    __host__ __device__ real* ptr() { return data; }
+    __host__ __device__ const real* ptr() const { return data; }
+};
+
+// =============== GLOBAL OPERATORS ===============
+
+// Scalar multiplication (scalar * matrix)
+__host__ __device__ Mat3 operator*(real scalar, const Mat3& mat) {
+    return mat * scalar;
+}
+
+// Matrix-vector multiplication (vector * matrix) - vector treated as row vector
+__host__ __device__ real3 operator*(real3 vec, const Mat3& mat) {
+    return make_real3(
+        vec.x*mat(0,0) + vec.y*mat(1,0) + vec.z*mat(2,0),
+        vec.x*mat(0,1) + vec.y*mat(1,1) + vec.z*mat(2,1),
+        vec.x*mat(0,2) + vec.y*mat(1,2) + vec.z*mat(2,2)
+    );
+}
+
+// Copy Mat3 to Mat3_t
+__host__ void copyMat3(Mat3_t & mat3t, const Mat3 & mat3)
+{
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+        #pragma unroll
+        for (int j = 0; j < 3; j++) {
+            mat3t(i, j) = mat3(i,j);
+        }
+    }
+}
+
+// Create Mat3 from dyadic product
+__host__ __device__ Mat3 Dyad(const real3 & a, const real3 & b)
+{
+    return Mat3(b.x*a,b.y*a,b.z*a);
+}
+
 #endif
 
 #endif // MECHSYS_MATVEC_H

@@ -83,5 +83,51 @@ double Shape3D(Vec3_t const & x, Vec3_t const & xc, double lx)
     return Shape(x(0),xc(0),lx)*Shape(x(1),xc(1),lx)*Shape(x(2),xc(2),lx);
 }
 
+#ifdef USE_CUDA
+
+__device__ __inline__ void GIMPCU(real x, real xc, real lx, real lpx, real & n, real & gn)
+{
+	n = 0.;
+	gn = 0.;
+	real d = x-xc;
+    real da = fabs(d);
+    if (da<0.5*lpx)
+    {   
+        n  = 1.0-(4.0*d*d+lpx*lpx)/(4.0*lx*lpx);
+        gn = -2.0*d/(lx*lpx);
+    }
+    else if (da<lx-0.5*lpx)
+    {
+        n  = 1.0 - da/lx;
+        gn = -d/(da*lx);
+    }
+    else if (da<lx+0.5*lpx)
+    {
+        n  = (lx + 0.5*lpx - da)*(lx + 0.5*lpx - da)/(2.0*lx*lpx);
+        gn = -d*(lx + 0.5*lpx - da)/(da*lx*lpx);
+    }
+}
+
+__device__ __inline__ void GIMP3DCU(real3 const & x, real3 const & xc, real lx, real3 const & lp, real & n, real3 & gn)
+{
+	real n0 =  0.0;
+	real n1 =  0.0;
+	real n2 =  0.0;
+	real gn0 = 0.0;
+	real gn1 = 0.0;
+	real gn2 = 0.0;
+
+	GIMPCU(x.x, xc.x, lx, lp.x, n0, gn0);
+	GIMPCU(x.y, xc.y, lx, lp.y, n1, gn1);
+	GIMPCU(x.z, xc.z, lx, lp.z, n2, gn2);
+
+	n = n0*n1*n2;
+
+	gn.x = gn0* n1* n2;
+	gn.y =  n0*gn1* n2;
+	gn.z =  n0* n1*gn2;
+}
+#endif
+
 }
 #endif //MECHSYS_MPM_SHAPE_H

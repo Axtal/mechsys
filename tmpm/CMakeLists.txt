@@ -23,7 +23,7 @@ SET(PROGS
 )
 
 SET(CUDAPROGS
-    #tmpm_cu_01
+    tmpm_cu_01
 )
 FOREACH(var ${PROGS})
     ADD_EXECUTABLE        (${var} "${var}.cpp")

@@ -206,8 +206,136 @@ inline void Particle::Reset(double dt)
 #ifdef USE_CUDA
 struct ParticleCU
 {
+    size_t Nnodes;          ///< Number of nodes interacting with this particle
+    int    Tag;             ///< Tag of particles to identify different groups
+    real   V0;              ///< Initial volume assigned to the particle
+    real   V;               ///< Volume assigned to the particle
+    real   Vt;              ///< Volume of the assigned tetrahedron
+    real   m;               ///< Mass of the particle
+    real3  x0;              ///< Initial position of particle
+    real3  x;               ///< Position of particle
+    real3  xb;              ///< Previous position of particle
+    real3  v;               ///< Velocity of the particle
+    real3  vf;              ///< Fixed velocity for dirichlet BCs
+    real3  b;               ///< Body Force
+    real3  h;               ///< Hydraulic Force
+    Mat3   S;               ///< Stress of the particle
+    Mat3   E;               ///< Strain of the particle
+    Mat3   L;               ///< Velocity gradient tensor
+    Mat3   F;               ///< Deformation tensor
+    real3  Dx0;             ///< Size of the particle for GIMP initial
+    real3  Dx;              ///< Size of the particle for GIMP
+    bool   vxf, vyf, vzf;   ///< Fixed components of velocity
+    size_t Pnodes = 0;      ///< number of nodes interacting with the particle
+    size_t Nodes[125];      ///< Array of node indexes relevant to this particle
+    real   Sfunc[125];      ///< Relevant values of the shape function
+    real3  GSf  [125];      ///< Relevant values of the shape function gradient
+    
+    //Data for solid properties
+	real G;				   ///< Shear modulus
+	real K;				   ///< bulk modulus
 
+    __host__ __device__ void Reset (real dt)
+    {
+        if (vxf)
+        {
+            v.x = vf.x;
+            x.x = xb.x + v.x*dt;
+            xb.x = x.x;
+        }
+        if (vyf)
+        {
+            v.y = vf.y;
+            x.y = xb.y + v.y*dt;
+            xb.y = x.y;
+        }
+        if (vzf)
+        {
+            v.z = vf.z;
+            x.z = xb.z + v.z*dt;
+            xb.z = x.z;
+        }
+    }
+
+    __host__ __device__ void CalcVol (real dt)
+    {
+        Mat3 I;
+        F =  (I + dt*L)*F;
+        Dx.x =  Dx0.x*F(0,0);
+	    Dx.y =  Dx0.y*F(1,1);
+	    Dx.z =  Dx0.z*F(2,2);
+        V = V0*F.determinant();
+    }
+
+    __host__ __device__ void CalcStress (real dt)
+    {
+        Mat3 I;
+        Mat3 De = 0.5*dt*(L + L.transpose());
+        Mat3 Dw = 0.5*dt*(L - L.transpose());
+        E = E + De;
+        S = S + (Dw*S - S*Dw) + K*De.trace()*I + 2.0*G*(De-(1.0/3.0)*De.trace()*I);
+    }
+
+};
+
+__host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
+{
+    PCu.Nnodes= 0;
+    PCu.Tag   = Par.Tag   ;         
+    PCu.V0    = Par.V0    ;        
+    PCu.V     = Par.V     ;        
+    PCu.Vt    = Par.Vt    ;        
+    PCu.m     = Par.m     ;       
+    PCu.x0 .x = Par.x0 (0);         
+    PCu.x0 .y = Par.x0 (1);         
+    PCu.x0 .z = Par.x0 (2);         
+    PCu.x  .x = Par.x  (0);         
+    PCu.x  .y = Par.x  (1);         
+    PCu.x  .z = Par.x  (2);         
+    PCu.xb .x = Par.xb (0);         
+    PCu.xb .y = Par.xb (1);         
+    PCu.xb .z = Par.xb (2);         
+    PCu.v  .x = Par.v  (0);         
+    PCu.v  .y = Par.v  (1);         
+    PCu.v  .z = Par.v  (2);         
+    PCu.vf .x = Par.vf (0);         
+    PCu.vf .y = Par.vf (1);         
+    PCu.vf .z = Par.vf (2);         
+    PCu.b  .x = Par.b  (0);         
+    PCu.b  .y = Par.b  (1);         
+    PCu.b  .z = Par.b  (2);         
+    PCu.h  .x = Par.h  (0);         
+    PCu.h  .y = Par.h  (1);         
+    PCu.h  .z = Par.h  (2);         
+    PCu.S     = Par.S     ;
+    PCu.E     = Par.E     ;    
+    PCu.L     = Par.L     ;
+    PCu.F     = Par.F     ;         
+    PCu.Dx0.x = Par.Dx0(0);         
+    PCu.Dx0.y = Par.Dx0(1);         
+    PCu.Dx0.z = Par.Dx0(2);         
+    PCu.Dx .x = Par.Dx (0);        
+    PCu.Dx .y = Par.Dx (1);        
+    PCu.Dx .z = Par.Dx (2);        
+    PCu.vxf   = Par.vxf   ;
+    PCu.vyf   = Par.vyf   ;
+    PCu.vzf   = Par.vzf   ;
+    PCu.G     = Par.G     ;
+    PCu.K     = Par.K     ;
 }
+
+__host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
+{
+    Par.x  (0) = PCu.x  .x;         
+    Par.x  (1) = PCu.x  .y;         
+    Par.x  (2) = PCu.x  .z;         
+    Par.v  (0) = PCu.v  .x;         
+    Par.v  (1) = PCu.v  .y;         
+    Par.v  (2) = PCu.v  .z;         
+    copyMat3(Par.S,PCu.S) ;
+    copyMat3(Par.E,PCu.E) ;
+}
+
 #endif
 
 }
