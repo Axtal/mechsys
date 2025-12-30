@@ -1736,6 +1736,8 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
         {
             cudaResetNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
 
+            thrust::fill(bValidMask.begin(),bValidMask.end(),false);
+
             cudaParticleToNode<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pValidMask,pmpmaux);
 
             //Building the slected node array
