@@ -1161,6 +1161,7 @@ inline void Domain::WriteXDMF (char const * FileKey)
     float * Amovec = new float[3*Particles.Size()];
     float * Ufovec = new float[3*Particles.Size()];
     float * Hfovec = new float[3*Particles.Size()];
+    float * Quater = new float[4*Particles.Size()];
     float * Inertm = new float[6*Particles.Size()];
     float * Ekin   = new float[  Particles.Size()];
     int   * Tag    = new int  [  Particles.Size()];
@@ -1222,6 +1223,10 @@ inline void Domain::WriteXDMF (char const * FileKey)
         Hfovec[3*i  ] = (float) Particles[i]->Flbm(0);
         Hfovec[3*i+1] = (float) Particles[i]->Flbm(1); 
         Hfovec[3*i+2] = (float) Particles[i]->Flbm(2); 
+        Quater[4*i  ] = (float) Particles[i]->Q(0);
+        Quater[4*i+1] = (float) Particles[i]->Q(1);
+        Quater[4*i+2] = (float) Particles[i]->Q(2);
+        Quater[4*i+3] = (float) Particles[i]->Q(3);
         Inertm[6*i  ] = (float) Inertiar(0,0);
         Inertm[6*i+1] = (float) Inertiar(0,1);
         Inertm[6*i+2] = (float) Inertiar(0,2);
@@ -1237,6 +1242,9 @@ inline void Domain::WriteXDMF (char const * FileKey)
     String dsname;
     dsname.Printf("Inertia");
     H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Inertm);
+    dims[0] = 4*Particles.Size();
+    dsname.Printf("Quaternion");
+    H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Quater);
     dims[0] = 3*Particles.Size();
     dsname.Printf("Position");
     H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Posvec);
@@ -1272,6 +1280,7 @@ inline void Domain::WriteXDMF (char const * FileKey)
     delete [] Amovec;
     delete [] Ufovec;
     delete [] Hfovec;
+    delete [] Quater;
     delete [] Inertm;
     delete [] Ekin;
     delete [] Tag;

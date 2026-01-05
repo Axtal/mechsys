@@ -146,7 +146,7 @@ int main(int argc, char **argv) try
         }
     }
     size_t nforpar = dat.ForcePar.size();
-    dat.Fb      = 1.0e-1/dat.ForcePar.size();  // Force applied at the end
+    dat.Fb      = 1.0e0/dat.ForcePar.size();  // Force applied at the end
     cudaMalloc(&dat.pFb, sizeof(real));
     cudaMemcpy(dat.pFb, &dat.Fb, sizeof(real), cudaMemcpyHostToDevice);
     cudaMalloc(&dat.pnFpar, sizeof(size_t));
