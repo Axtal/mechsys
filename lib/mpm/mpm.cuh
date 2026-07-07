@@ -31,6 +31,7 @@ struct mpm_aux
     real   Time;         ///< Time clock
     real   Tf;           ///< Final Time
     real   Gn;           ///< Dissipative constant
+    int    ShapeFunction; ///< Particle-grid interpolation function
     size_t iter   = 0;   ///< Iteration clock;
     size_t Nx;           ///< Integer vector with the dimensions of the MPM node mesh
     size_t Ny;           ///< Integer vector with the dimensions of the MPM node mesh
@@ -54,18 +55,21 @@ __global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * Vali
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=mpmaux[0].Npart) return;
     real3 Xp  = Par[ic].x;
-    real3 Lp  = Par[ic].Dx;
+    real3 Lp  = make_real3(fabs(Par[ic].Dx.x),fabs(Par[ic].Dx.y),fabs(Par[ic].Dx.z));
     Mat3 Vsp  = -Par[ic].V*Par[ic].S;
     real3 Fex = Par[ic].b;
     real Dx   = mpmaux[0].Dx;
     real Dt   = mpmaux[0].Dt;
 
-    size_t nlx  = (size_t)fmax((trunc((Xp.x-0.5*Lp.x-mpmaux[0].Xlow.x)/Dx)-1),0.0);
-    size_t nly  = (size_t)fmax((trunc((Xp.y-0.5*Lp.y-mpmaux[0].Xlow.y)/Dx)-1),0.0);
-    size_t nlz  = (size_t)fmax((trunc((Xp.z-0.5*Lp.z-mpmaux[0].Xlow.z)/Dx)-1),0.0);
-    size_t nhx =  (size_t)fmin((ceil ((Xp.x+0.5*Lp.x-mpmaux[0].Xlow.x)/Dx)+1),(real)mpmaux[0].Nx-1.0);
-    size_t nhy =  (size_t)fmin((ceil ((Xp.y+0.5*Lp.y-mpmaux[0].Xlow.y)/Dx)+1),(real)mpmaux[0].Ny-1.0);
-    size_t nhz =  (size_t)fmin((ceil ((Xp.z+0.5*Lp.z-mpmaux[0].Xlow.z)/Dx)+1),(real)mpmaux[0].Nz-1.0);
+    size_t nlx = 0;
+    size_t nly = 0;
+    size_t nlz = 0;
+    size_t nhx = 0;
+    size_t nhy = 0;
+    size_t nhz = 0;
+    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.x,mpmaux[0].Xlow.x,Dx,Lp.x,mpmaux[0].Nx,nlx,nhx);
+    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.y,mpmaux[0].Xlow.y,Dx,Lp.y,mpmaux[0].Ny,nly,nhy);
+    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.z,mpmaux[0].Xlow.z,Dx,Lp.z,mpmaux[0].Nz,nlz,nhz);
 
     Par[ic].Pnodes = 0;
 
@@ -77,7 +81,7 @@ __global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * Vali
         real3 Gs = make_real3(0.0,0.0,0.0);
         real3 Xn = make_real3(nx*Dx,ny*Dx,nz*Dx);
         Xn = Xn + mpmaux[0].Xlow;
-        GIMP3DCU(Xp,Xn,Dx,Lp,Sf,Gs);
+        MPMShapeFunction3DCU(mpmaux[0].ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
         if (Sf>0.0)
         {
             size_t nc  = nx + ny*mpmaux[0].Nx + nz*mpmaux[0].Nx*mpmaux[0].Ny;

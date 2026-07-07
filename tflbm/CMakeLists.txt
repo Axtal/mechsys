@@ -1,6 +1,8 @@
 ########################################################################
 # MechSys - Open Library for Mechanical Systems                        #
-# Copyright (C) 2010 Sergio Galindo                                    #
+# Copyright (C) 2005 Dorival M. Pedroso, Raúl D. D. Farfan             #
+# Copyright (C) 2009 Sergio Galindo                                    #
+# Copyright (C) 2013 William Oquendo                                   #
 #                                                                      #
 # This program is free software: you can redistribute it and/or modify #
 # it under the terms of the GNU General Public License as published by #
@@ -15,24 +17,28 @@
 # You should have received a copy of the GNU General Public License    #
 # along with this program. If not, see <http://www.gnu.org/licenses/>  #
 ########################################################################
+CMAKE_MINIMUM_REQUIRED (VERSION 3.28)
+
+# --- Force the correct CUDA compiler and architecture ---
+set(CMAKE_CUDA_COMPILER "/usr/local/cuda-13.0/bin/nvcc" CACHE FILEPATH "CUDA compiler" FORCE)
+set(CMAKE_CUDA_FLAGS "-arch=sm_86" CACHE STRING "CUDA flags" FORCE)
+set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA architectures" FORCE)
+
+PROJECT (MECHSYSSANDBOX)
+
+INCLUDE(${MECHSYSSANDBOX_SOURCE_DIR}/UseMECHSYS.cmake)
+
 
 SET(PROGS
-    tflbm01
-    tflbm02
-    tflbm03
-    tflbm04
-    tflbm05
+   tflbm01
+   tflbm02
+   tflbm03
+   tflbm04
+   tflbm05
 )
 
 SET(CUDAPROGS
     tclbm01
-    tclbm02
-    tclbm03
-    tclbm05
-    tclbm06
-    tclbm07
-    tclbm08
-    tclbm09
 )
 
 FOREACH(var ${PROGS})
@@ -44,7 +50,7 @@ ENDFOREACH(var)
 FOREACH(var ${CUDAPROGS})
     ADD_EXECUTABLE        (${var} "${var}.cu")
     TARGET_LINK_LIBRARIES (${var} ${CUDA_LIBRARIES})
+    # Remove any explicit -arch flag; rely on global CMAKE_CUDA_FLAGS
     SET_TARGET_PROPERTIES (${var} PROPERTIES COMPILE_FLAGS "${FLAGS} -DUSE_CUDA" LINK_FLAGS "${LFLAGS}")
-    #SET_TARGET_PROPERTIES (${var} PROPERTIES COMPILE_FLAGS "${FLAGS} -DUSE_CUDA -arch=sm_60" LINK_FLAGS "${LFLAGS}")
-    SET_TARGET_PROPERTIES (${var} PROPERTIES CUDA_ARCHITECTURES "native")
+    # No need for target CUDA_ARCHITECTURES; global setting handles it
 ENDFOREACH(var)
