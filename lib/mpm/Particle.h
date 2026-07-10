@@ -27,10 +27,12 @@
 // Mechsys
 #include <mechsys/linalg/matvec.h>
 #include <mechsys/mpm/eos.h>
+#include <mechsys/mpm/fluid_filter.h>
 
 namespace MPM
 {
-inline double DoubleDot(Mat3_t const & A, Mat3_t const & B)
+
+    inline double DoubleDot(Mat3_t const & A, Mat3_t const & B)
 {
     return A(0,0)*B(0,0) + A(0,1)*B(0,1) + A(0,2)*B(0,2)
          + A(1,0)*B(1,0) + A(1,1)*B(1,1) + A(1,2)*B(1,2)
@@ -96,10 +98,14 @@ public:
     double c4hp;            ///< Hypoplastic dimensionless parameter c4
     double HypoPressureMin; ///< Compressive pressure floor [Pa] for hypoplastic zero-stress starts
 
-    double FluidViscosity;   ///< Dynamic viscosity for Newtonian fluid [Pa s]
-    double FluidSoundSpeed;  ///< Artificial sound speed for weakly-compressible fluid [m/s]
-    double FluidGamma;       ///< Tait/Cole EOS exponent [-]
-    double Pressure;         ///< Positive-compression pressure diagnostic [Pa]
+    double Mu;               ///< Dynamic viscosity for Newtonian fluid [Pa s]
+    double Cs;               ///< Artificial sound speed for weakly-compressible fluid [m/s]
+    int    EOSType;          ///< Fluid EOS selector: EOS_TAIT or EOS_LINEAR
+    double EOSexp;           ///< Tait/Cole EOS exponent [-]
+    double AVLin;            /// Artificial Viscosity Linear coefficient
+    double AVQuad;           /// Artificial Viscosity Quadratic coefficient
+    double FluidDx;          ///< Characteristic grid spacing for the pressure filter [m]
+    double Pressure;         ///< Fluid/solid pressure diagnostic [Pa]
 
     #ifdef USE_OMP
     omp_lock_t      lck;    ///< to protect variables in multithreading
@@ -150,9 +156,9 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     G   = 0.3e4;    // Shear modulus (Pa)
 
     // Initialize Mohr-Coulomb parameters (default values)
-    Cohesion = 0.0;     // Cohesion (Pa)
-    Friction = 35.0*M_PI/180.0; // Default friction angle [radians]
-    Dilation = 0.0;                // Default dilation angle [radians]
+    Cohesion = 0.0;              // Cohesion (Pa)
+    Friction = 28.0*M_PI/180.0;  // Default friction angle [radians]
+    Dilation = 0.0;              // Default dilation angle [radians]
 
     // Initialize Drucker-Prager specific variables
     Fail = 2;          // Default: associated flow
@@ -169,9 +175,13 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     // Legacy member kept for compatibility; the SPH-faithful hypoplastic
     // update below uses the original zero-trace guard directly.
     HypoPressureMin = 0.0;
-    FluidViscosity  = 1.0e-3; // Water at room temperature [Pa s]
-    FluidSoundSpeed = 20.0;   // Artificial WC fluid sound speed; set per case.
-    FluidGamma      = 7.0;    // Standard water exponent in Tait/Cole EOS.
+    Mu              = 1.0e-3; // Water at room temperature [Pa.s]
+    Cs              = 20.0;   // Artificial WC fluid sound speed; set per case.
+    EOSType         = EOS_TAIT;
+    EOSexp          = 7.0;    // Standard water exponent in Tait/Cole EOS.
+    AVLin           = 0.0;
+    AVQuad          = 0.0;
+    FluidDx         = 0.0;
     Pressure        = 0.0;
 
     #ifdef USE_OMP
@@ -188,9 +198,27 @@ inline void Particle::FixVeloc (double vx, double vy, double vz)
 
 inline void Particle::CalcVol(double dt)
 {
-    // Calculate deformation tensor
+    if (Constitutive == 4)
+    {
+        // Ren et al. (2025) weakly-compressible MPM water update:
+        // V^{n+1} = (1 + dt*tr(D)) V^n, with D the symmetric velocity gradient.
+        Mat3_t D = 0.5*(L + ~L);
+        double Jinc = 1.0 + dt*Trace(D);
+        if (Jinc < 1.0e-12) Jinc = 1.0e-12; // Prevent non-physical negative volume after a failed step.
+        V *= Jinc;
+
+        // F is not a fluid state variable here; keep it isotropic and consistent
+        // with the updated volume for diagnostics and particle-size bookkeeping.
+        double J = (V0 > 1.0e-12) ? V/V0 : 1.0;
+        double stretch = (J > 1.0e-12) ? std::pow(J,1.0/3.0) : 1.0e-4;
+        F = stretch*OrthoSys::I;
+        Dx = Vec3_t(stretch*Dx0(0),stretch*Dx0(1),stretch*Dx0(2));
+        return;
+    }
+
+    // Calculate deformation tensor for solid/soil constitutive models.
     F =  (OrthoSys::I + dt*L)*F;
-	
+		
     // Calculating the deformation of a single material point
     //Dx(0) =  Dx0(0)*sqrt(F(0,0)*F(0,0) + F(1,0)*F(1,0) + F(2,0)*F(2,0));
 	//Dx(1) =  Dx0(1)*sqrt(F(0,1)*F(0,1) + F(1,1)*F(1,1) + F(2,1)*F(2,1));
@@ -555,31 +583,33 @@ inline void Particle::HypoplasticModel(double dt)
 inline void Particle::NewtonianFluidModel(double dt)
 {
     // References:
-    // - Monaghan, J. J. (1994), "Simulating free surface flows with SPH",
-    //   Journal of Computational Physics 110:399-406. doi:10.1006/jcph.1994.1034.
-    // - Dominguez, J. M. et al. (2021), "State-of-the-art SPH solver
-    //   DualSPHysics: from fluid dynamics to multiphysics problems",
-    //   Computer Physics Communications 267:108066. doi:10.1016/j.cpc.2021.108066.
-    // - ComFluSoM, Materials/Newtonian.inl and EquationOfState.inl.
+    // - Chen, Z.-P., Zhang, X., Sze, K.Y., Kan, L., and Qiu, X.-M. (2018).
+    //   "v-p material point method for weakly compressible problems".
+    //   Computers and Fluids, 176, pp. 170-181. doi:10.1016/j.compfluid.2018.09.005.
+    // - Ren, S., Liu, Z., Trujillo-Vela, M.G., Galindo-Torres, S.A., Tian, X.,
+    //   and Zhang, P. (2025). "Simulation of solitary wave generation and
+    //   wave-structure interactions using an MPM-SDEM coupling scheme".
+    //   Ocean Engineering, 340, 122195. doi:10.1016/j.oceaneng.2025.122195.
     // Compression is negative stress in this MPM code, so S = tau - pI.
     const double tol = 1.0e-12;
     Mat3_t I = OrthoSys::I;
     Mat3_t D = 0.5*(L + ~L);
+    const double trD = D(0,0) + D(1,1) + D(2,2);   // compute once
+    //Mat3_t E_trial = E + dt*D;
 
     const double rho0 = (V0 > tol) ? m/V0 : 0.0;
-    const double rho  = (V  > tol) ? m/V  : rho0;
-    double p = TaitPressure(rho,rho0,FluidSoundSpeed,FluidGamma);
-    if (p < 0.0) p = 0.0; // Free-surface/cavitation cap: water carries no tensile pressure here.
+    const double rho  = (V  > tol) ? m/V : rho0;
+    double p = EOS(EOSType,rho,rho0,Cs,EOSexp);
+    p += VNRLPressure(rho,trD,FluidDx,Cs,AVLin,AVQuad);
+    // Keep the EOS gauge pressure signed; expansion needs a restoring pressure.
     Pressure = p;
 
-    Mat3_t Ddev = D - (Trace(D)/3.0)*I;
-    S = 2.0*FluidViscosity*Ddev - Pressure*I;
+    Mat3_t Ddev = D - (trD/3.0)*I;
+    S = 2.0*Mu*Ddev - Pressure*I;
 
     // The fluid law is rate-based; E is kept only as an output diagnostic.
-    E = E + dt*D;
+    //E = E_trial;
 }
-// ========================================================================
-
 
 inline void Particle::Reset(double dt)
 {
@@ -662,10 +692,14 @@ struct ParticleCU
     real   c4hp;            ///< Hypoplastic dimensionless parameter c4
     real   HypoPressureMin; ///< Compressive pressure floor [Pa] for hypoplastic zero-stress starts
 
-    real   FluidViscosity;   ///< Dynamic viscosity for Newtonian fluid [Pa s]
-    real   FluidSoundSpeed;  ///< Artificial sound speed for weakly-compressible fluid [m/s]
-    real   FluidGamma;       ///< Tait/Cole EOS exponent [-]
-    real   Pressure;         ///< Positive-compression pressure diagnostic [Pa]
+    real   Mu;              ///< Dynamic viscosity for Newtonian fluid [Pa s]
+    real   Cs;              ///< Artificial sound speed for weakly-compressible fluid [m/s]
+    int    EOSType;         ///< Fluid EOS selector: EOS_TAIT or EOS_LINEAR
+    real   EOSexp;          ///< Tait/Cole EOS exponent [-]
+    real   AVLin;           ///< Linear vNRL artificial-viscosity coefficient cL.
+    real   AVQuad;          ///< Quadratic vNRL artificial-viscosity coefficient cQ.
+    real   FluidDx;         ///< Characteristic grid spacing for the pressure filter [m]
+    real   Pressure;        ///< Fluid/solid pressure diagnostic [Pa]
 
     __host__ __device__ void Reset (real dt)
     {
@@ -693,6 +727,21 @@ struct ParticleCU
     __host__ __device__ void CalcVol (real dt)
     {
         Mat3 I;
+        if (Constitutive == 4)
+        {
+            Mat3 D = 0.5*(L + L.transpose());
+            real Jinc = 1.0 + dt*D.trace();
+            if (Jinc < 1.0e-12) Jinc = 1.0e-12;
+            V *= Jinc;
+
+            real J = (V0 > 1.0e-12) ? V/V0 : 1.0;
+            real stretch = (J > 1.0e-12) ? pow(J,1.0/3.0) : 1.0e-4;
+            F = stretch*I;
+            Dx.x = stretch*Dx0.x;
+            Dx.y = stretch*Dx0.y;
+            Dx.z = stretch*Dx0.z;
+            return;
+        }
         F =  (I + dt*L)*F;
         Dx.x =  Dx0.x*F(0,0);
 	    Dx.y =  Dx0.y*F(1,1);
@@ -988,17 +1037,20 @@ struct ParticleCU
         const real tol = 1.0e-12;
         Mat3 I;
         Mat3 D = 0.5*(L + L.transpose());
+        const real trD = D(0,0) + D(1,1) + D(2,2);   // compute once
+        //Mat3 E_trial = E + dt*D;
         real rho0 = (V0 > tol) ? m/V0 : 0.0;
-        real rho  = (V  > tol) ? m/V  : rho0;
-        real p = TaitPressureCU(rho,rho0,FluidSoundSpeed,FluidGamma);
-        if (p < 0.0) p = 0.0;
+        real rho  = (V  > tol) ? m/V : rho0;
+        real p = EOSCU(EOSType,rho,rho0,Cs,EOSexp);
+        p += VNRLPressureCU(rho,trD,FluidDx,Cs,AVLin,AVQuad);
+        // Keep the EOS gauge pressure signed; expansion needs a restoring pressure.
         Pressure = p;
 
-        Mat3 Ddev = D - (D.trace()/3.0)*I;
-        S = 2.0*FluidViscosity*Ddev - Pressure*I;
+        Mat3 Ddev = D - (trD/3.0)*I;
+        S = 2.0*Mu*Ddev - Pressure*I;
 
         // Strain is not a fluid state variable; keep it as an output diagnostic.
-        E = E + dt*D;
+        // E = E_trial;
     }
 
 };
@@ -1069,9 +1121,13 @@ __host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
     PCu.c3hp = Par.c3hp;
     PCu.c4hp = Par.c4hp;
     PCu.HypoPressureMin = Par.HypoPressureMin;
-    PCu.FluidViscosity  = Par.FluidViscosity;
-    PCu.FluidSoundSpeed = Par.FluidSoundSpeed;
-    PCu.FluidGamma      = Par.FluidGamma;
+    PCu.Mu              = Par.Mu;
+    PCu.Cs              = Par.Cs;
+    PCu.EOSType         = Par.EOSType;
+    PCu.EOSexp          = Par.EOSexp;
+    PCu.AVLin           = Par.AVLin;
+    PCu.AVQuad          = Par.AVQuad;
+    PCu.FluidDx         = Par.FluidDx;
     PCu.Pressure        = Par.Pressure;
 }
 
@@ -1104,9 +1160,13 @@ __host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
     Par.c3hp = PCu.c3hp;
     Par.c4hp = PCu.c4hp;
     Par.HypoPressureMin = PCu.HypoPressureMin;
-    Par.FluidViscosity  = PCu.FluidViscosity;
-    Par.FluidSoundSpeed = PCu.FluidSoundSpeed;
-    Par.FluidGamma      = PCu.FluidGamma;
+    Par.Mu              = PCu.Mu;
+    Par.Cs              = PCu.Cs;
+    Par.EOSType         = PCu.EOSType;
+    Par.EOSexp          = PCu.EOSexp;
+    Par.AVLin           = PCu.AVLin;
+    Par.AVQuad          = PCu.AVQuad;
+    Par.FluidDx         = PCu.FluidDx;
     Par.Pressure        = PCu.Pressure;
 }
 

@@ -59,16 +59,31 @@ void Report(MPM::Domain & dom, void * UD)
 
     double vmax = 0.0;
     double pmax = 0.0;
+    double pmin = 1.0e30;
+    double jmin = 1.0e30;
+    double jmax = -1.0e30;
+    double rhomax = 0.0;
     for (size_t ip=0; ip<dom.Particles.Size(); ip++)
     {
         vmax = std::max(vmax,norm(dom.Particles[ip]->v));
         pmax = std::max(pmax,dom.Particles[ip]->Pressure);
+        pmin = std::min(pmin,dom.Particles[ip]->Pressure);
+        if (dom.Particles[ip]->V0 > 0.0 && dom.Particles[ip]->V > 0.0)
+        {
+            double J = dom.Particles[ip]->V/dom.Particles[ip]->V0;
+            jmin = std::min(jmin,J);
+            jmax = std::max(jmax,J);
+            rhomax = std::max(rhomax,dom.Particles[ip]->m/dom.Particles[ip]->V);
+        }
     }
 
     std::cout << "Time: " << dom.Time
               << ", Particles: " << dom.Particles.Size()
               << ", vmax: " << vmax
-              << ", pmax: " << pmax << std::endl;
+              << ", pmax: " << pmax
+              << ", pmin: " << pmin
+              << ", J-range: [" << jmin << ", " << jmax << "]"
+              << ", rhomax: " << rhomax << std::endl;
 }
 
 void TrimCylinderY(MPM::Domain & dom, int Tag, double radius, double center_x, double center_z)
@@ -90,7 +105,8 @@ void TrimCylinderY(MPM::Domain & dom, int Tag, double radius, double center_x, d
     dom.DelParticles(delete_tag);
 }
 
-void InitializeHydrostaticWater(MPM::Domain & dom, double rho0, double c0, double gamma,
+void InitializeHydrostaticWater(MPM::Domain & dom, int eos_type,
+                                double rho0, double c0, double gamma,
                                 double gravity, double free_surface_y)
 {
     Mat3_t I = OrthoSys::I;
@@ -101,7 +117,10 @@ void InitializeHydrostaticWater(MPM::Domain & dom, double rho0, double c0, doubl
         MPM::Particle * par = dom.Particles[ip];
         double depth = std::max(0.0,free_surface_y - par->x(1));
         double p = rho0*gravity*depth;
-        double density_ratio = std::pow(1.0 + gamma*p/bulk_factor,1.0/gamma);
+        set_to_zero(par->E);
+        double density_ratio = (eos_type == MPM::EOS_LINEAR) ?
+                               1.0 + p/bulk_factor :
+                               std::pow(1.0 + gamma*p/bulk_factor,1.0/gamma);
         double J = 1.0/density_ratio;
         double stretch = std::pow(J,1.0/3.0);
 
@@ -125,16 +144,16 @@ void FixClosedBoxNodes(MPM::Domain & dom, double xmin, double xmax,
         Vec3_t xn;
         dom.NodePosition(in,xn);
         bool x_wall = (xn(0) <= xmin + tol) || (xn(0) >= xmax - tol);
-        bool y_wall = (xn(1) <= ymin + tol) || (xn(1) >= ymax - tol);
+        bool bottom_wall = (xn(1) <= ymin + tol);
         bool z_wall = (xn(2) <= zmin + tol) || (xn(2) >= zmax - tol);
-        if (x_wall || y_wall || z_wall)
+        if (x_wall || bottom_wall || z_wall)
         {
             dom.Nodes[in].FixVeloc();
             fixed_count++;
         }
     }
 
-    std::cout << "No-slip boundary nodes: " << fixed_count << std::endl;
+    std::cout << "No-slip bottom/lateral boundary nodes: " << fixed_count << std::endl;
 }
 
 int main(int argc, char **argv) try
@@ -145,14 +164,15 @@ int main(int argc, char **argv) try
 
     // Coordinate convention: X = main horizontal spread direction,
     // Y = vertical gravity direction, Z = second horizontal direction.
-    dom.ShapeFunction = MPM::SHAPE_BSPLINE_CUBIC;
+    dom.ShapeFunction = MPM::SHAPE_BSPLINE_QUADRATIC;
 
     size_t Nproc = std::max<size_t>(1,(size_t)(0.75*omp_get_max_threads()));
     if (argc > 1) Nproc = atoi(argv[1]);
 
     const double rho0 = 1000.0;   // Water density [kg/m3]
-    const double mu = 1.0e-0;     // Water dynamic viscosity [Pa s]
+    const double mu = 1.0e-3;     // Water dynamic viscosity [Pa s]
     const double gamma = 7.0;     // Tait/Cole EOS exponent for water
+    const int fluid_eos = MPM::EOS_TAIT; // Switch to MPM::EOS_LINEAR for the acoustic EOS.
     const double gravity = 9.81;  // Gravity magnitude [m/s2]
 
     const double water_radius = 8.0e-2;
@@ -167,15 +187,20 @@ int main(int argc, char **argv) try
     const double center_x = cylinder_center_x;
     const double center_z = cylinder_center_z;
 
-    const int particles_per_diameter = 16;
+    const int particles_per_diameter = 70;
     const int particles_per_cell_per_dim = 2;
     const double particle_spacing = 2.0*water_radius/particles_per_diameter;
     const double Dx = particles_per_cell_per_dim*particle_spacing;
     const size_t ndiv = particles_per_diameter;
 
-    const double expected_vmax = std::sqrt(2.0*gravity*water_height);
-    const double sound_speed = 15.0*expected_vmax;
-    const double dt = 0.035*Dx/(sound_speed + expected_vmax);
+    const double target_bulk_modulus = 2.0e5; // Telikicherla and Moutsanidis (2025) dam-break scale.
+    const double sound_speed = std::sqrt(target_bulk_modulus/rho0);
+    const double velocity_scale = std::sqrt(2.0*gravity*box_ly);
+    const double cfl = 0.07;
+    // Set both artificial-viscosity coefficients to zero to disable the filter.
+    const double av_linear = 1.0;
+    const double av_quadratic = 2.0;
+    const double dt = cfl*Dx/(sound_speed + velocity_scale);
     const double Tf = 5.0;
 
     dat.Tf = Tf;
@@ -209,17 +234,26 @@ int main(int argc, char **argv) try
     for (size_t ip=0; ip<dom.Particles.Size(); ip++)
     {
         dom.Particles[ip]->Constitutive = 4;
-        dom.Particles[ip]->FluidViscosity = mu;
-        dom.Particles[ip]->FluidSoundSpeed = sound_speed;
-        dom.Particles[ip]->FluidGamma = gamma;
+        dom.Particles[ip]->Mu = mu;
+        dom.Particles[ip]->Cs = sound_speed;
+        dom.Particles[ip]->EOSType = fluid_eos;
+        dom.Particles[ip]->EOSexp = gamma;
+        dom.Particles[ip]->AVLin = av_linear;
+        dom.Particles[ip]->AVQuad = av_quadratic;
+        dom.Particles[ip]->FluidDx = Dx;
     }
 
-    InitializeHydrostaticWater(dom,rho0,sound_speed,gamma,gravity,water_ymax);
+    InitializeHydrostaticWater(dom,fluid_eos,rho0,sound_speed,gamma,gravity,water_ymax);
     FixClosedBoxNodes(dom,xmin,xmax,ymin,ymax,zmin,zmax,Dx);
 
     std::cout << "3D closed-box cylindrical water collapse" << std::endl;
     std::cout << "Grid spacing: " << Dx << " m" << std::endl;
+    std::cout << "EOS: " << MPM::EOSName(fluid_eos) << std::endl;
+    std::cout << "Bulk modulus: " << target_bulk_modulus << " Pa" << std::endl;
     std::cout << "Sound speed: " << sound_speed << " m/s" << std::endl;
+    std::cout << "Velocity scale for dt: " << velocity_scale << " m/s" << std::endl;
+    std::cout << "CFL factor: " << cfl << std::endl;
+    std::cout << "Pressure filter cL/cQ: " << av_linear << " / " << av_quadratic << std::endl;
     std::cout << "Time step: " << dt << " s" << std::endl;
     std::cout << "Final time: " << Tf << " s" << std::endl;
     std::cout << "Water particles: " << dom.Particles.Size() << std::endl;

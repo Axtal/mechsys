@@ -128,7 +128,7 @@ __global__ void cudaNodeToParticle (ParticleCU * Par, NodeCU * Nodes, mpm_aux * 
     for (size_t nn=0; nn<Par[ic].Pnodes; nn++)
     {
         size_t nc = Par[ic].Nodes[nn];
-        double sf = Par[ic].Sfunc[nn];
+        real sf = Par[ic].Sfunc[nn];
         real3  gs = Par[ic].GSf[nn];
         real3  an = Nodes[nc].Fn/Nodes[nc].Mass;
         Par[ic].v = Par[ic].v + sf*mpmaux[0].Dt*an;
