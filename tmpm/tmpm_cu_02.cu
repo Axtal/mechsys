@@ -41,6 +41,7 @@ struct UserData
     double                       Ly;
     double                       Lz;
     double                       E;
+    double                       BodyAccelY;
     real                         Fb; //Maximun applied body force
     real *                       pFb;
     std::ofstream                oss_ss; // The output file
@@ -70,25 +71,21 @@ const char * SoilModelName(int constitutive_model)
 
 
 // Set the gravity - body - force
-__global__ void SetGravity(MPM::ParticleCU * Par, real gx, real gy, real gz, MPM::mpm_aux * mpmaux)
+__global__ void SetGravity(MPM::ParticleCU * Par, real gy, MPM::mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic >= mpmaux[0].Npart) return; 
-    Par[ic].b.x = Par[ic].m * gx;
+    Par[ic].b.x = 0.0;
     Par[ic].b.y = Par[ic].m * gy;
-    Par[ic].b.z = Par[ic].m * gz;
-    // if (ic==0) printf("M= %g Fx %g \n",Par[ic].m,Par[ic].b.x);
+    Par[ic].b.z = 0.0;
 }
 
 
 void Setup (MPM::Domain & dom, void * UD)
 {
-    (void)UD;
-    // Gravity
-    real gx = 0.0;
-    real gy = -9.81;
-    real gz = 0.0;
-    SetGravity<<<dom.mpmaux.Npart/dom.Nthread + 1, dom.Nthread>>>(dom.pParticlesCU,gx, gy, gz,dom.pmpmaux);
+    UserData * dat = static_cast<UserData *>(UD);
+    SetGravity<<<dom.mpmaux.Npart/dom.Nthread + 1, dom.Nthread>>>
+              (dom.pParticlesCU,(real)dat->BodyAccelY,dom.pmpmaux);
 }
 
 void Report(MPM::Domain & dom, void * UD)
@@ -125,10 +122,10 @@ void Report(MPM::Domain & dom, void * UD)
               << ", Particles: " << dom.Particles.Size()
               << ", vmax: " << vmax
               << ", pmax: " << pmax
-              << ", Syy-range: [" << syy_min << ", " << syy_max << "]"
-              << ", Jmin: " << jmin
-              << ", Jmax: " << jmax
-              << ", y-range: [" << ymin << ", " << ymax << "]" << std::endl;
+              << ", Syy-range: [" << syy_min << ", " << syy_max << "]" << std::endl;
+              //<< ", Jmin: " << jmin
+              //<< ", Jmax: " << jmax
+              //<< ", y-range: [" << ymin << ", " << ymax << "]" << std::endl;
 }
 
 
@@ -268,6 +265,7 @@ int main(int argc, char **argv) try
     dat.Ly      = Ly;
     dat.Lz      = Lz;
     dat.E       = E;
+    dat.BodyAccelY = -gravity;
 
     // Ground is the horizontal X-Z plane at Y=0; gravity acts in -Y.
     double ground_thickness = Dx;
@@ -339,7 +337,6 @@ int main(int argc, char **argv) try
     std::cout << "Particles per cell (approx): " << (double)dom.Particles.Size() / (Nx*Ny*Nz) << std::endl;
 
 
-
     dom.Gn = 0.001; //5.0e0;
     double Tf = 1.5; // Final Time
     dat.Tf = Tf;
@@ -355,7 +352,6 @@ int main(int argc, char **argv) try
               << ", K0 used: " << geostatic_k0
               << " (Jaky)" << std::endl;
     std::cout << "Final time: " << Tf << " s" << std::endl;
-    std::cout << "Soil particles: " << dom.Particles.Size() << std::endl;
 
     dom.Solve(Tf,dt,dtOut,Setup,Report,"tmpm01",true,Nproc);
 

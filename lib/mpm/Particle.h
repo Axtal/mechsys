@@ -102,8 +102,8 @@ public:
     double Cs;               ///< Artificial sound speed for weakly-compressible fluid [m/s]
     int    EOSType;          ///< Fluid EOS selector: EOS_TAIT or EOS_LINEAR
     double EOSexp;           ///< Tait/Cole EOS exponent [-]
-    double AVLin;            /// Artificial Viscosity Linear coefficient
-    double AVQuad;           /// Artificial Viscosity Quadratic coefficient
+    double AVLin;            ///< Linear vNRL artificial-viscosity coefficient cL
+    double AVQuad;           ///< Quadratic vNRL artificial-viscosity coefficient cQ
     double FluidDx;          ///< Characteristic grid spacing for the pressure filter [m]
     double Pressure;         ///< Fluid/solid pressure diagnostic [Pa]
 
@@ -156,9 +156,9 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     G   = 0.3e4;    // Shear modulus (Pa)
 
     // Initialize Mohr-Coulomb parameters (default values)
-    Cohesion = 0.0;              // Cohesion (Pa)
-    Friction = 28.0*M_PI/180.0;  // Default friction angle [radians]
-    Dilation = 0.0;              // Default dilation angle [radians]
+    Cohesion = 0.0;     // Cohesion (Pa)
+    Friction = 35.0*M_PI/180.0; // Default friction angle [radians]
+    Dilation = 0.0;                // Default dilation angle [radians]
 
     // Initialize Drucker-Prager specific variables
     Fail = 2;          // Default: associated flow
@@ -175,13 +175,13 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     // Legacy member kept for compatibility; the SPH-faithful hypoplastic
     // update below uses the original zero-trace guard directly.
     HypoPressureMin = 0.0;
-    Mu              = 1.0e-3; // Water at room temperature [Pa.s]
-    Cs              = 20.0;   // Artificial WC fluid sound speed; set per case.
-    EOSType         = EOS_TAIT;
-    EOSexp          = 7.0;    // Standard water exponent in Tait/Cole EOS.
-    AVLin           = 0.0;
-    AVQuad          = 0.0;
-    FluidDx         = 0.0;
+    Mu       = 1.0e-3; // Water at room temperature [Pa s]
+    Cs       = 20.0;   // Artificial WC fluid sound speed; set per case.
+    EOSType  = EOS_TAIT;
+    EOSexp   = 7.0;    // Standard water exponent in Tait/Cole EOS.
+    AVLin    = 0.0;
+    AVQuad   = 0.0;
+    FluidDx  = 0.0;
     Pressure        = 0.0;
 
     #ifdef USE_OMP
@@ -642,7 +642,7 @@ struct ParticleCU
     size_t Nnodes;          ///< Number of nodes interacting with this particle
     int    Tag;             ///< Tag of particles to identify different groups
     real   V0;              ///< Initial volume assigned to the particle
-    real   V;               ///< Volume assigned to the particle
+    real   V;               ///< Volume assigned to the particleTrujillo-VelaTrujillo-VelasdfasdfsadfsdafasdfasdfsdafJHbvklhkljl;kjjkl;asdf
     real   Vt;              ///< Volume of the assigned tetrahedron
     real   m;               ///< Mass of the particle
     real3  x0;              ///< Initial position of particle
@@ -696,8 +696,8 @@ struct ParticleCU
     real   Cs;              ///< Artificial sound speed for weakly-compressible fluid [m/s]
     int    EOSType;         ///< Fluid EOS selector: EOS_TAIT or EOS_LINEAR
     real   EOSexp;          ///< Tait/Cole EOS exponent [-]
-    real   AVLin;           ///< Linear vNRL artificial-viscosity coefficient cL.
-    real   AVQuad;          ///< Quadratic vNRL artificial-viscosity coefficient cQ.
+    real   AVLin;           ///< Linear vNRL artificial-viscosity coefficient cL
+    real   AVQuad;          ///< Quadratic vNRL artificial-viscosity coefficient cQ
     real   FluidDx;         ///< Characteristic grid spacing for the pressure filter [m]
     real   Pressure;        ///< Fluid/solid pressure diagnostic [Pa]
 

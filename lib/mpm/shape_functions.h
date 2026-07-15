@@ -193,6 +193,36 @@ void ShapeNodeRange(int ShapeFunction, double x, double xlow, double lx, double 
     nhigh = (size_t)std::min(std::max(hi,0.0),(double)nmax-1.0);
 }
 
+void ShapeNodeRangeRaw(int ShapeFunction, double x, double xlow, double lx, double lpx, int & nlow, int & nhigh)
+{
+    double lo = 0.0;
+    double hi = 0.0;
+    if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)
+    {
+        lo = floor((x-xlow)/lx - 0.5);
+        hi = lo + 2.0;
+    }
+    else if (ShapeFunction==SHAPE_BSPLINE_CUBIC)
+    {
+        lo = floor((x-xlow)/lx) - 1.0;
+        hi = lo + 3.0;
+    }
+    else
+    {
+        double r = ShapeSupportRadius(ShapeFunction,lx,lpx);
+        lo = floor((x-r-xlow)/lx);
+        hi = ceil ((x+r-xlow)/lx);
+    }
+    nlow  = (int)lo;
+    nhigh = (int)hi;
+}
+
+inline size_t PeriodicNodeIndex(int n, size_t nmax)
+{
+    int m = n%(int)nmax;
+    return (size_t)((m<0) ? m + (int)nmax : m);
+}
+
 void MPMShapeFunction3D(int ShapeFunction, Vec3_t const & x, Vec3_t const & xc, double lx, Vec3_t const & lp, double & n, Vec3_t & gn)
 {
     if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)
@@ -376,6 +406,36 @@ __device__ __inline__ void ShapeNodeRangeCU(int ShapeFunction, real x, real xlow
     }
     nlow  = (size_t)fmin(fmax(lo,0.0),(real)nmax-1.0);
     nhigh = (size_t)fmin(fmax(hi,0.0),(real)nmax-1.0);
+}
+
+__device__ __inline__ void ShapeNodeRangeRawCU(int ShapeFunction, real x, real xlow, real lx, real lpx, int & nlow, int & nhigh)
+{
+    real lo = 0.0;
+    real hi = 0.0;
+    if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)
+    {
+        lo = floor((x-xlow)/lx - 0.5);
+        hi = lo + 2.0;
+    }
+    else if (ShapeFunction==SHAPE_BSPLINE_CUBIC)
+    {
+        lo = floor((x-xlow)/lx) - 1.0;
+        hi = lo + 3.0;
+    }
+    else
+    {
+        real r = ShapeSupportRadiusCU(ShapeFunction,lx,lpx);
+        lo = floor((x-r-xlow)/lx);
+        hi = ceil ((x+r-xlow)/lx);
+    }
+    nlow  = (int)lo;
+    nhigh = (int)hi;
+}
+
+__device__ __inline__ size_t PeriodicNodeIndexCU(int n, size_t nmax)
+{
+    int m = n%(int)nmax;
+    return (size_t)((m<0) ? m + (int)nmax : m);
 }
 
 __device__ __inline__ void MPMShapeFunction3DCU(int ShapeFunction, real3 const & x, real3 const & xc, real lx, real3 const & lp, real & n, real3 & gn)

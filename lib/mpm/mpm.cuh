@@ -40,6 +40,9 @@ struct mpm_aux
     size_t Npart;        ///< Number of MPM particles
     real3  Xlow;         ///< vectors of extreme positions of the MPM underlaying mesh 
     real3  Xhigh;
+    bool   PeriodicX;    ///< Periodic particle-grid mapping along x
+    bool   PeriodicY;    ///< Periodic particle-grid mapping along y
+    bool   PeriodicZ;    ///< Periodic particle-grid mapping along z
 };
 
 __global__ void cudaResetNode(NodeCU * Nodes, size_t * SelIndexes, size_t * validn, mpm_aux * mpmaux)
@@ -61,21 +64,51 @@ __global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * Vali
     real Dx   = mpmaux[0].Dx;
     real Dt   = mpmaux[0].Dt;
 
-    size_t nlx = 0;
-    size_t nly = 0;
-    size_t nlz = 0;
-    size_t nhx = 0;
-    size_t nhy = 0;
-    size_t nhz = 0;
-    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.x,mpmaux[0].Xlow.x,Dx,Lp.x,mpmaux[0].Nx,nlx,nhx);
-    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.y,mpmaux[0].Xlow.y,Dx,Lp.y,mpmaux[0].Ny,nly,nhy);
-    ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.z,mpmaux[0].Xlow.z,Dx,Lp.z,mpmaux[0].Nz,nlz,nhz);
+    int nlx = 0;
+    int nly = 0;
+    int nlz = 0;
+    int nhx = 0;
+    int nhy = 0;
+    int nhz = 0;
+    if (mpmaux[0].PeriodicX)
+    {
+        ShapeNodeRangeRawCU(mpmaux[0].ShapeFunction,Xp.x,mpmaux[0].Xlow.x,Dx,Lp.x,nlx,nhx);
+    }
+    else
+    {
+        size_t nl = 0;
+        size_t nh = 0;
+        ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.x,mpmaux[0].Xlow.x,Dx,Lp.x,mpmaux[0].Nx,nl,nh);
+        nlx = (int)nl; nhx = (int)nh;
+    }
+    if (mpmaux[0].PeriodicY)
+    {
+        ShapeNodeRangeRawCU(mpmaux[0].ShapeFunction,Xp.y,mpmaux[0].Xlow.y,Dx,Lp.y,nly,nhy);
+    }
+    else
+    {
+        size_t nl = 0;
+        size_t nh = 0;
+        ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.y,mpmaux[0].Xlow.y,Dx,Lp.y,mpmaux[0].Ny,nl,nh);
+        nly = (int)nl; nhy = (int)nh;
+    }
+    if (mpmaux[0].PeriodicZ)
+    {
+        ShapeNodeRangeRawCU(mpmaux[0].ShapeFunction,Xp.z,mpmaux[0].Xlow.z,Dx,Lp.z,nlz,nhz);
+    }
+    else
+    {
+        size_t nl = 0;
+        size_t nh = 0;
+        ShapeNodeRangeCU(mpmaux[0].ShapeFunction,Xp.z,mpmaux[0].Xlow.z,Dx,Lp.z,mpmaux[0].Nz,nl,nh);
+        nlz = (int)nl; nhz = (int)nh;
+    }
 
     Par[ic].Pnodes = 0;
 
-    for (size_t nx=nlx; nx<=nhx; nx++)
-    for (size_t ny=nly; ny<=nhy; ny++)
-    for (size_t nz=nlz; nz<=nhz; nz++)
+    for (int nx=nlx; nx<=nhx; nx++)
+    for (int ny=nly; ny<=nhy; ny++)
+    for (int nz=nlz; nz<=nhz; nz++)
     {
         real Sf=0.0; //Shape function value
         real3 Gs = make_real3(0.0,0.0,0.0);
@@ -84,7 +117,10 @@ __global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * Vali
         MPMShapeFunction3DCU(mpmaux[0].ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
         if (Sf>0.0)
         {
-            size_t nc  = nx + ny*mpmaux[0].Nx + nz*mpmaux[0].Nx*mpmaux[0].Ny;
+            size_t ix = mpmaux[0].PeriodicX ? PeriodicNodeIndexCU(nx,mpmaux[0].Nx) : (size_t)nx;
+            size_t iy = mpmaux[0].PeriodicY ? PeriodicNodeIndexCU(ny,mpmaux[0].Ny) : (size_t)ny;
+            size_t iz = mpmaux[0].PeriodicZ ? PeriodicNodeIndexCU(nz,mpmaux[0].Nz) : (size_t)nz;
+            size_t nc = ix + iy*mpmaux[0].Nx + iz*mpmaux[0].Nx*mpmaux[0].Ny;
             Par[ic].Nodes[Par[ic].Pnodes] = nc;
             Par[ic].Sfunc[Par[ic].Pnodes] = Sf;
             Par[ic].GSf  [Par[ic].Pnodes] = Gs;
@@ -140,6 +176,24 @@ __global__ void cudaNodeToParticle (ParticleCU * Par, NodeCU * Nodes, mpm_aux * 
     Par[ic].CalcVol   (mpmaux[0].Dt);
     Par[ic].CalcStress(mpmaux[0].Dt);
     Par[ic].Reset     (mpmaux[0].Dt);
+    if (mpmaux[0].PeriodicX)
+    {
+        real L = mpmaux[0].Xhigh.x - mpmaux[0].Xlow.x;
+        while (Par[ic].x.x <  mpmaux[0].Xlow .x) {Par[ic].x.x += L; Par[ic].xb.x += L;}
+        while (Par[ic].x.x >= mpmaux[0].Xhigh.x) {Par[ic].x.x -= L; Par[ic].xb.x -= L;}
+    }
+    if (mpmaux[0].PeriodicY)
+    {
+        real L = mpmaux[0].Xhigh.y - mpmaux[0].Xlow.y;
+        while (Par[ic].x.y <  mpmaux[0].Xlow .y) {Par[ic].x.y += L; Par[ic].xb.y += L;}
+        while (Par[ic].x.y >= mpmaux[0].Xhigh.y) {Par[ic].x.y -= L; Par[ic].xb.y -= L;}
+    }
+    if (mpmaux[0].PeriodicZ)
+    {
+        real L = mpmaux[0].Xhigh.z - mpmaux[0].Xlow.z;
+        while (Par[ic].x.z <  mpmaux[0].Xlow .z) {Par[ic].x.z += L; Par[ic].xb.z += L;}
+        while (Par[ic].x.z >= mpmaux[0].Xhigh.z) {Par[ic].x.z -= L; Par[ic].xb.z -= L;}
+    }
 }
 
 

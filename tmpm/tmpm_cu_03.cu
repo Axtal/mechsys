@@ -32,24 +32,23 @@ struct UserData
     double BoxLy;
     double BoxLz;
     double Dx;
+    double BodyAccelY;
 };
 
-__global__ void SetGravity(MPM::ParticleCU * Par, real gx, real gy, real gz, MPM::mpm_aux * mpmaux)
+__global__ void SetGravity(MPM::ParticleCU * Par, real gy, MPM::mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic >= mpmaux[0].Npart) return;
-    Par[ic].b.x = Par[ic].m*gx;
+    Par[ic].b.x = 0.0;
     Par[ic].b.y = Par[ic].m*gy;
-    Par[ic].b.z = Par[ic].m*gz;
+    Par[ic].b.z = 0.0;
 }
 
 void Setup(MPM::Domain & dom, void * UD)
 {
-    (void)UD;
-    const real gx = 0.0;
-    const real gy = -9.81;
-    const real gz = 0.0;
-    SetGravity<<<dom.mpmaux.Npart/dom.Nthread + 1, dom.Nthread>>>(dom.pParticlesCU,gx,gy,gz,dom.pmpmaux);
+    UserData * dat = static_cast<UserData *>(UD);
+    SetGravity<<<dom.mpmaux.Npart/dom.Nthread + 1, dom.Nthread>>>
+              (dom.pParticlesCU,(real)dat->BodyAccelY,dom.pmpmaux);
 }
 
 void Report(MPM::Domain & dom, void * UD)
@@ -172,7 +171,7 @@ int main(int argc, char **argv) try
     const double rho0 = 1000.0;   // Water density [kg/m3]
     const double mu = 1.0e-3;     // Water dynamic viscosity [Pa s]
     const double gamma = 7.0;     // Tait/Cole EOS exponent for water
-    const int fluid_eos = MPM::EOS_TAIT; // Switch to MPM::EOS_LINEAR for the acoustic EOS.
+    const int fluid_eos = MPM::EOS_TAIT; // Switch to MPM::EOS_LINEAR or MPM::EOS_TAIT for the acoustic EOS.
     const double gravity = 9.81;  // Gravity magnitude [m/s2]
 
     const double water_radius = 8.0e-2;
@@ -208,6 +207,7 @@ int main(int argc, char **argv) try
     dat.BoxLy = box_ly;
     dat.BoxLz = box_lz;
     dat.Dx = Dx;
+    dat.BodyAccelY = -gravity;
 
     const double water_xmin = center_x - water_radius;
     const double water_xmax = center_x + water_radius;
@@ -252,11 +252,11 @@ int main(int argc, char **argv) try
     std::cout << "Bulk modulus: " << target_bulk_modulus << " Pa" << std::endl;
     std::cout << "Sound speed: " << sound_speed << " m/s" << std::endl;
     std::cout << "Velocity scale for dt: " << velocity_scale << " m/s" << std::endl;
+    std::cout << "Body acceleration y: " << dat.BodyAccelY << " m/s2" << std::endl;
     std::cout << "CFL factor: " << cfl << std::endl;
     std::cout << "Pressure filter cL/cQ: " << av_linear << " / " << av_quadratic << std::endl;
     std::cout << "Time step: " << dt << " s" << std::endl;
     std::cout << "Final time: " << Tf << " s" << std::endl;
-    std::cout << "Water particles: " << dom.Particles.Size() << std::endl;
 
     dom.Gn = 0.0;
     dom.Solve(Tf,dt,Tf/100.0,Setup,Report,"tmpm03",true,Nproc);

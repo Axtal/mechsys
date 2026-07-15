@@ -93,6 +93,9 @@ public:
         BodyMesh = NULL;
         Time = 0.0;
         ShapeFunction = SHAPE_GIMP;
+        Periodic[0] = false;
+        Periodic[1] = false;
+        Periodic[2] = false;
     };
     //Domain(MPMethod Method, ///< Type of material to solve
     //iVec3_t Ndim            ///< Vector of integers with the dimensions
@@ -113,6 +116,7 @@ public:
     double                   Mmin;              ///< The minimun mass of particle
     Vec3_t                   Xlow;              ///< Lower bound of cubic grid
     Vec3_t                  Xhigh;              ///< Upper bound of cubic grid
+    bool                 Periodic[3];           ///< Periodic particle-grid mapping in x, y, z
     Node *                  Nodes;              ///< Array of Nodes
     iVec3_t                  Ndim;              ///< Array with grid dimensions    
     size_t                 Nnodes;              ///< Total number of nodes
@@ -1038,7 +1042,8 @@ inline void Domain::ParticleToNode()
 	#pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t ip=0; ip < Particles.Size(); ip++)
     {
-        iVec3_t nlow,nhigh;
+        int nlow[3]  = {0,0,0};
+        int nhigh[3] = {0,0,0};
         Vec3_t Xp = Particles[ip]->x;
         Vec3_t Lp(fabs(Particles[ip]->Dx(0)),fabs(Particles[ip]->Dx(1)),fabs(Particles[ip]->Dx(2)));
         Mat3_t Vsp = -Particles[ip]->V*Particles[ip]->S;
@@ -1052,22 +1057,35 @@ inline void Domain::ParticleToNode()
         //nhigh(1) = (size_t(ceil ((Xp(1)+Lp(1)-Xlow(1))/Dx)+1+Ndim(1)))%Ndim(1);
         //nhigh(2) = (size_t(ceil ((Xp(2)+Lp(2)-Xlow(2))/Dx)+1+Ndim(2)))%Ndim(2);
 
-        size_t nl = 0;
-        size_t nh = 0;
-        ShapeNodeRange(ShapeFunction,Xp(0),Xlow(0),Dx,Lp(0),Ndim(0),nl,nh); nlow(0) = nl; nhigh(0) = nh;
-        ShapeNodeRange(ShapeFunction,Xp(1),Xlow(1),Dx,Lp(1),Ndim(1),nl,nh); nlow(1) = nl; nhigh(1) = nh;
-        ShapeNodeRange(ShapeFunction,Xp(2),Xlow(2),Dx,Lp(2),Ndim(2),nl,nh); nlow(2) = nl; nhigh(2) = nh;
+        for (size_t d=0; d<3; d++)
+        {
+            if (Periodic[d])
+            {
+                ShapeNodeRangeRaw(ShapeFunction,Xp(d),Xlow(d),Dx,Lp(d),nlow[d],nhigh[d]);
+            }
+            else
+            {
+                size_t nl = 0;
+                size_t nh = 0;
+                ShapeNodeRange(ShapeFunction,Xp(d),Xlow(d),Dx,Lp(d),Ndim(d),nl,nh);
+                nlow[d]  = (int)nl;
+                nhigh[d] = (int)nh;
+            }
+        }
 
-        for (size_t nx=nlow(0); nx<=nhigh(0); nx++)
-        for (size_t ny=nlow(1); ny<=nhigh(1); ny++)
-        for (size_t nz=nlow(2); nz<=nhigh(2); nz++)
+        for (int nx=nlow[0]; nx<=nhigh[0]; nx++)
+        for (int ny=nlow[1]; ny<=nhigh[1]; ny++)
+        for (int nz=nlow[2]; nz<=nhigh[2]; nz++)
         {
             double Sf=0.0; //Shape function value
             Vec3_t Gs=OrthoSys::O; //Shape function gradient
             //Vec3_t Xn((nx+0.5)*Dx,(ny+0.5)*Dx,(nz+0.5)*Dx);
             Vec3_t Xn(nx*Dx,ny*Dx,nz*Dx);
             Xn += Xlow;
-            iVec3_t Pt(nx,ny,nz);
+            size_t ix = Periodic[0] ? PeriodicNodeIndex(nx,Ndim(0)) : (size_t)nx;
+            size_t iy = Periodic[1] ? PeriodicNodeIndex(ny,Ndim(1)) : (size_t)ny;
+            size_t iz = Periodic[2] ? PeriodicNodeIndex(nz,Ndim(2)) : (size_t)nz;
+            iVec3_t Pt(ix,iy,iz);
             MPMShapeFunction3D(ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
             if (Sf>0.0)
             {
@@ -1172,6 +1190,13 @@ inline void Domain::NodeToParticle()
         Particles[ip]->CalcVol(Dt);
         Particles[ip]->CalcStress(Dt);
         Particles[ip]->Reset(Dt);
+        for (size_t d=0; d<3; d++)
+        {
+            if (!Periodic[d]) continue;
+            double L = Xhigh(d) - Xlow(d);
+            while (Particles[ip]->x(d) <  Xlow (d)) {Particles[ip]->x(d) += L; Particles[ip]->xb(d) += L;}
+            while (Particles[ip]->x(d) >= Xhigh(d)) {Particles[ip]->x(d) -= L; Particles[ip]->xb(d) -= L;}
+        }
     }
 
 }
@@ -1845,6 +1870,9 @@ inline void Domain::UpLoadDevice(size_t Nc)
     mpmaux.Xhigh.x = Xhigh(0);
     mpmaux.Xhigh.y = Xhigh(1);
     mpmaux.Xhigh.z = Xhigh(2);
+    mpmaux.PeriodicX = Periodic[0];
+    mpmaux.PeriodicY = Periodic[1];
+    mpmaux.PeriodicZ = Periodic[2];
 
     thrust::host_vector<ParticleCU> hParticles(Particles.Size());
     thrust::host_vector<NodeCU    > hNodes(Nnodes)              ;
