@@ -58,6 +58,7 @@ SET(PROGS
    tmpm02
    tmpm03
    tmpm04
+   tmpm05
 )
 
 SET(CUDAPROGS
@@ -65,6 +66,7 @@ SET(CUDAPROGS
     tmpm_cu_02
     tmpm_cu_03
     tmpm_cu_04
+    tmpm_cu_05
 )
 
 FOREACH(var ${PROGS})

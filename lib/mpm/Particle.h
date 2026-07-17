@@ -22,6 +22,7 @@
 #define MECHSYS_MPM_PARTICLE_H
 
 //STD
+#include<algorithm>
 #include<iostream>
 
 // Mechsys
@@ -77,11 +78,11 @@ public:
     Array<double> Sfunc;    ///< Relevant values of the shape function
     Array<Vec3_t> GSf;      ///< Relevant values of the shape function gradient
 
-    int    Constitutive;    ///< 0=Elastic, 1=MohrCoulomb, 2=DruckerPrager, 3=Hypoplastic, 4=Newtonian fluid
+    int    Constitutive;    ///< 0=Elastic, 1=DruckerPrager, 2=BuiDruckerPrager, 3=Hypoplastic, 4=Newtonian fluid, 5=mu(I)
     //Data for solid properties
 	double G;				///< Shear modulus
 	double K;				///< bulk modulus
-    // Mohr-Coulomb parameters
+    // Drucker-Prager frictional parameters fitted from Mohr-Coulomb inputs.
     double  Cohesion;  ///< Cohesion [Pa]
     double  Friction;  ///< Friction angle [radians]
     double  Dilation;  ///< Dilation angle [radians]
@@ -106,6 +107,12 @@ public:
     double AVQuad;           ///< Quadratic vNRL artificial-viscosity coefficient cQ
     double FluidDx;          ///< Characteristic grid spacing for the pressure filter [m]
     double Pressure;         ///< Fluid/solid pressure diagnostic [Pa]
+    double MuIStatic;        ///< mu(I) quasi-static friction coefficient mu_s
+    double MuIDynamic;       ///< mu(I) high-inertial-number friction coefficient mu_2
+    double MuII0;            ///< mu(I) characteristic inertial number I0
+    double GrainDiameter;    ///< Mean grain diameter for mu(I) rheology [m]
+    double GrainRho;         ///< Intrinsic grain density for mu(I) rheology [kg/m3]
+    double MuIReg;           ///< Small shear-rate regularization for mu(I) [1/s]
 
     #ifdef USE_OMP
     omp_lock_t      lck;    ///< to protect variables in multithreading
@@ -121,10 +128,11 @@ public:
 
     // Constitutive models
     void   ElasticModel       (double dt);
-    void   MohrCoulombModel   (double dt);
-    void   DruckerPragerModel (double dt);
+    void   DruckerPragerModel    (double dt);
+    void   BuiDruckerPragerModel (double dt);
     void   HypoplasticModel   (double dt);
     void   NewtonianFluidModel(double dt);
+    void   MuIRheologyModel   (double dt);
 };
 
 inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, double mass0, double Vol0)
@@ -155,12 +163,12 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     K   = 1.0e4;    // Bulk modulus (Pa)
     G   = 0.3e4;    // Shear modulus (Pa)
 
-    // Initialize Mohr-Coulomb parameters (default values)
+    // Initialize Drucker-Prager frictional parameters (default values)
     Cohesion = 0.0;     // Cohesion (Pa)
     Friction = 35.0*M_PI/180.0; // Default friction angle [radians]
     Dilation = 0.0;                // Default dilation angle [radians]
 
-    // Initialize Drucker-Prager specific variables
+    // Initialize frictional plasticity variables
     Fail = 2;          // Default: associated flow
     ct = 0;            // Legacy SPH integration flag; not used by MPM updates
     set_to_zero(Sigmab);
@@ -183,6 +191,12 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     AVQuad   = 0.0;
     FluidDx  = 0.0;
     Pressure        = 0.0;
+    MuIStatic       = 0.3819;
+    MuIDynamic      = 0.5718;
+    MuII0           = 0.279;
+    GrainDiameter   = 0.0053;
+    GrainRho        = 2000.0;
+    MuIReg          = 1.0e-4;
 
     #ifdef USE_OMP
     omp_init_lock(&lck);    ///< to protect variables in multithreading
@@ -198,7 +212,7 @@ inline void Particle::FixVeloc (double vx, double vy, double vz)
 
 inline void Particle::CalcVol(double dt)
 {
-    if (Constitutive == 4)
+    if (Constitutive == 4 || Constitutive == 5)
     {
         // Ren et al. (2025) weakly-compressible MPM water update:
         // V^{n+1} = (1 + dt*tr(D)) V^n, with D the symmetric velocity gradient.
@@ -268,16 +282,19 @@ inline void Particle::CalcStress(double dt)
             ElasticModel(dt);
             break;
         case 1:
-            MohrCoulombModel(dt);
+            DruckerPragerModel(dt);
             break;
         case 2:
-            DruckerPragerModel(dt);
+            BuiDruckerPragerModel(dt);
             break;
         case 3:
             HypoplasticModel(dt);
             break;
         case 4:
             NewtonianFluidModel(dt);
+            break;
+        case 5:
+            MuIRheologyModel(dt);
             break;
         default:
             ElasticModel(dt);
@@ -295,14 +312,15 @@ inline void Particle::ElasticModel(double dt)
     S = S + (Dw*S - S*Dw) + K*Trace(De)*I + 2.0*G*(De-(1.0/3.0)*Trace(De)*I);
 }
 
-inline void Particle::MohrCoulombModel(double dt)
+inline void Particle::DruckerPragerModel(double dt)
 {
     // References:
     // - Drucker, D. C. and Prager, W. (1952), "Soil mechanics and plastic analysis for limit design".
     // - Abbo, A. J. and Sloan, S. W. (1995), "A smooth hyperbolic approximation to the Mohr-Coulomb yield criterion".
     // - Simo, J. C. and Hughes, T. J. R. (1998), "Computational Inelasticity".
-    // Smooth Mohr-Coulomb p-q approximation, not the exact hexagonal
-    // principal-stress Mohr-Coulomb surface.
+    // Drucker-Prager cone fitted to the outer Mohr-Coulomb compression meridian.
+    // This is a smooth p-q cone, not the exact hexagonal Mohr-Coulomb
+    // principal-stress surface.
     // Elastic predictor. This code uses the same stress sign convention as
     // ElasticModel: compression is negative stress, so p = -tr(S)/3 below.
     Mat3_t I = OrthoSys::I;
@@ -356,7 +374,7 @@ inline void Particle::MohrCoulombModel(double dt)
               + dev_S(0,1)*dev_S(1,0) + dev_S(0,2)*dev_S(2,0) + dev_S(1,2)*dev_S(2,1);
     if (J2 < 0.0 && J2 > -tol) J2 = 0.0;
     double q = sqrt(3.0*J2); // Shear stress intensity
-    double q_yield = M*p + k; // Shear strength at the current pressure according to the Mohr‑Coulomb cone.
+    double q_yield = M*p + k; // Shear strength at the current pressure according to the fitted Drucker-Prager cone.
     if (q <= q_yield + tol)
     { // If the trial stress lies inside or on the yield surface, no plastic correction is needed; the trial stress is accepted.
         S = S_trial;
@@ -391,9 +409,9 @@ inline void Particle::MohrCoulombModel(double dt)
 
 
 // ========================================================================
-// DRUCKER-PRAGER CONSTITUTIVE MODEL (CPU Version)
+// BUI DRUCKER-PRAGER CONSTITUTIVE MODEL (CPU Version)
 // ========================================================================
-inline void Particle::DruckerPragerModel(double dt)
+inline void Particle::BuiDruckerPragerModel(double dt)
 {
     // References:
     // - Bui, H. H., Fukagawa, R., Sako, K. and Ohno, S. (2008),
@@ -611,6 +629,56 @@ inline void Particle::NewtonianFluidModel(double dt)
     //E = E_trial;
 }
 
+inline void Particle::MuIRheologyModel(double dt)
+{
+    // References:
+    // - Jop, P., Forterre, Y. and Pouliquen, O. (2006), "A constitutive law
+    //   for dense granular flows", Nature 441, 727-730.
+    // - Lubbe, R., Cheng, H., Gupta, P., Luding, S. and Magnanimo, V. (2024),
+    //   "A comparison of regime-specific continuum models for granular flows",
+    //   CHoPS 2024.
+    // Weakly-compressible regularized mu(I): sigma = -pI + 2*eta_mu(I)*D'.
+    const double tol = 1.0e-12;
+    Mat3_t I = OrthoSys::I;
+    Mat3_t D = 0.5*(L + ~L);
+    const double trD = Trace(D);
+    Mat3_t Ddev = D - (trD/3.0)*I;
+
+    double ddev2 = DoubleDot(Ddev,Ddev);
+    if (ddev2 < 0.0 && ddev2 > -tol) ddev2 = 0.0;
+    const double gdot = sqrt(2.0*ddev2);
+
+    const double rho0 = (V0 > tol) ? m/V0 : 0.0;
+    const double rho  = (V  > tol) ? m/V  : rho0;
+    const double p_eos = (rho0 > tol && Cs > tol) ? EOS(EOSType,rho,rho0,Cs,EOSexp) : 0.0;
+    const double p = std::max(p_eos,0.0); // Cohesionless grains do not carry tensile pressure.
+    Pressure = p;
+    E = E + dt*D;
+
+    if (p <= tol)
+    {
+        set_to_zero(S);
+        return;
+    }
+
+    const double reg = std::max(MuIReg,tol);
+    const double eta_static = MuIStatic*p/sqrt(gdot*gdot + reg*reg);
+    double eta_dynamic = 0.0;
+
+    if (gdot > tol && GrainDiameter > tol && GrainRho > tol && MuII0 > tol)
+    {
+        const double sqrt_p_rhop = sqrt(p/GrainRho);
+        if (sqrt_p_rhop > tol)
+        {
+            const double inertial = gdot*GrainDiameter/sqrt_p_rhop;
+            eta_dynamic = (MuIDynamic - MuIStatic)*p*(inertial/(MuII0 + inertial))/gdot;
+        }
+    }
+
+    const double eta = eta_static + eta_dynamic;
+    S = 2.0*eta*Ddev - p*I;
+}
+
 inline void Particle::Reset(double dt)
 {
     Nodes.Resize(0);
@@ -664,11 +732,11 @@ struct ParticleCU
     real   Sfunc[125];      ///< Relevant values of the shape function
     real3  GSf  [125];      ///< Relevant values of the shape function gradient
 
-    int    Constitutive;    ///< 0=Elastic, 1=MohrCoulomb, 2=DruckerPrager, 3=Hypoplastic, 4=Newtonian fluid
+    int    Constitutive;    ///< 0=Elastic, 1=DruckerPrager, 2=BuiDruckerPrager, 3=Hypoplastic, 4=Newtonian fluid, 5=mu(I)
     //Data for solid properties
 	real G;				///< Shear modulus
 	real K;				///< bulk modulus
-    // Mohr-Coulomb parameters
+    // Drucker-Prager frictional parameters fitted from Mohr-Coulomb inputs.
     real  Cohesion;  ///< Cohesion [Pa]
     real  Friction;  ///< Friction angle [radians]
     real  Dilation;  ///< Dilation angle [radians]
@@ -679,7 +747,7 @@ struct ParticleCU
     real  sin_psi;          ///< sin(Dilation angle)
     real  cos_psi;          ///< cos(Dilation angle)
 
-    // Drucker-Prager specific members
+    // Frictional plasticity members
     int    Fail;           ///< 2=Associated flow, 3=Non-associated flow
     int    ct;             ///< Legacy SPH integration flag; not used by MPM DP update
     Mat3   Sigmab;         ///< Legacy backup stress kept for compatibility
@@ -700,6 +768,12 @@ struct ParticleCU
     real   AVQuad;          ///< Quadratic vNRL artificial-viscosity coefficient cQ
     real   FluidDx;         ///< Characteristic grid spacing for the pressure filter [m]
     real   Pressure;        ///< Fluid/solid pressure diagnostic [Pa]
+    real   MuIStatic;       ///< mu(I) quasi-static friction coefficient mu_s
+    real   MuIDynamic;      ///< mu(I) high-inertial-number friction coefficient mu_2
+    real   MuII0;           ///< mu(I) characteristic inertial number I0
+    real   GrainDiameter;   ///< Mean grain diameter for mu(I) rheology [m]
+    real   GrainRho;        ///< Intrinsic grain density for mu(I) rheology [kg/m3]
+    real   MuIReg;          ///< Small shear-rate regularization for mu(I) [1/s]
 
     __host__ __device__ void Reset (real dt)
     {
@@ -727,7 +801,7 @@ struct ParticleCU
     __host__ __device__ void CalcVol (real dt)
     {
         Mat3 I;
-        if (Constitutive == 4)
+        if (Constitutive == 4 || Constitutive == 5)
         {
             Mat3 D = 0.5*(L + L.transpose());
             real Jinc = 1.0 + dt*D.trace();
@@ -757,16 +831,19 @@ struct ParticleCU
                 ElasticModel(dt);
                 break;
             case 1:
-                MohrCoulombModel(dt);
+                DruckerPragerModel(dt);
                 break;
             case 2:
-                DruckerPragerModel(dt);
+                BuiDruckerPragerModel(dt);
                 break;
             case 3:
                 HypoplasticModel(dt);
                 break;
             case 4:
                 NewtonianFluidModel(dt);
+                break;
+            case 5:
+                MuIRheologyModel(dt);
                 break;
             default:
                 ElasticModel(dt);
@@ -792,14 +869,15 @@ struct ParticleCU
         S = S + (Dw*S - S*Dw) + K*De.trace()*I + 2.0*G*(De-(1.0/3.0)*De.trace()*I);
     }
 
-    __host__ __device__ void MohrCoulombModel(real dt)
+    __host__ __device__ void DruckerPragerModel(real dt)
     {
         // References:
         // - Drucker, D. C. and Prager, W. (1952), "Soil mechanics and plastic analysis for limit design".
         // - Abbo, A. J. and Sloan, S. W. (1995), "A smooth hyperbolic approximation to the Mohr-Coulomb yield criterion".
         // - Simo, J. C. and Hughes, T. J. R. (1998), "Computational Inelasticity".
-        // Smooth Mohr-Coulomb p-q approximation, not the exact hexagonal
-        // principal-stress Mohr-Coulomb surface.
+        // Drucker-Prager cone fitted to the outer Mohr-Coulomb compression meridian.
+        // This is a smooth p-q cone, not the exact hexagonal Mohr-Coulomb
+        // principal-stress surface.
         // Elastic predictor. Compression is represented by negative stress,
         // so the pressure invariant used for strength is p = -tr(S)/3.
         Mat3 I;
@@ -871,7 +949,7 @@ struct ParticleCU
         S = -p_new*I + scale*dev_S;
     }
 
-    __host__ __device__ void DruckerPragerModel(real dt)
+    __host__ __device__ void BuiDruckerPragerModel(real dt)
     {
         // References:
         // - Bui, H. H., Fukagawa, R., Sako, K. and Ohno, S. (2008),
@@ -1053,6 +1131,50 @@ struct ParticleCU
         // E = E_trial;
     }
 
+    __host__ __device__ void MuIRheologyModel(real dt)
+    {
+        // Weakly-compressible regularized mu(I), mirroring the CPU path.
+        const real tol = 1.0e-12;
+        Mat3 I;
+        Mat3 D = 0.5*(L + L.transpose());
+        const real trD = D.trace();
+        Mat3 Ddev = D - (trD/3.0)*I;
+
+        real ddev2 = DoubleDot(Ddev,Ddev);
+        if (ddev2 < 0.0 && ddev2 > -tol) ddev2 = 0.0;
+        real gdot = sqrt(2.0*ddev2);
+
+        real rho0 = (V0 > tol) ? m/V0 : 0.0;
+        real rho  = (V  > tol) ? m/V  : rho0;
+        real p_eos = (rho0 > tol && Cs > tol) ? EOSCU(EOSType,rho,rho0,Cs,EOSexp) : 0.0;
+        real p = fmax(p_eos,(real)0.0);
+        Pressure = p;
+        E = E + dt*D;
+
+        if (p <= tol)
+        {
+            S = 0.0*I;
+            return;
+        }
+
+        real reg = fmax(MuIReg,tol);
+        real eta_static = MuIStatic*p/sqrt(gdot*gdot + reg*reg);
+        real eta_dynamic = 0.0;
+
+        if (gdot > tol && GrainDiameter > tol && GrainRho > tol && MuII0 > tol)
+        {
+            real sqrt_p_rhop = sqrt(p/GrainRho);
+            if (sqrt_p_rhop > tol)
+            {
+                real inertial = gdot*GrainDiameter/sqrt_p_rhop;
+                eta_dynamic = (MuIDynamic - MuIStatic)*p*(inertial/(MuII0 + inertial))/gdot;
+            }
+        }
+
+        real eta = eta_static + eta_dynamic;
+        S = 2.0*eta*Ddev - p*I;
+    }
+
 };
 
 __host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
@@ -1110,7 +1232,7 @@ __host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
     PCu.sin_psi = sin(PCu.Dilation);
     PCu.cos_psi = cos(PCu.Dilation);
 
-    // Upload Drucker-Prager specific data
+    // Upload frictional plasticity data
     PCu.Fail     = Par.Fail;
     PCu.ct       = Par.ct;
     PCu.Sigmab   = Par.Sigmab;
@@ -1129,6 +1251,12 @@ __host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
     PCu.AVQuad          = Par.AVQuad;
     PCu.FluidDx         = Par.FluidDx;
     PCu.Pressure        = Par.Pressure;
+    PCu.MuIStatic       = Par.MuIStatic;
+    PCu.MuIDynamic      = Par.MuIDynamic;
+    PCu.MuII0           = Par.MuII0;
+    PCu.GrainDiameter   = Par.GrainDiameter;
+    PCu.GrainRho        = Par.GrainRho;
+    PCu.MuIReg          = Par.MuIReg;
 }
 
 __host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
@@ -1149,7 +1277,7 @@ __host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
     Par.Dx(1) = PCu.Dx.y;
     Par.Dx(2) = PCu.Dx.z;
 
-    // Download Drucker-Prager specific data
+    // Download frictional plasticity data
     Par.Fail    = PCu.Fail;
     Par.ct      = PCu.ct;
     copyMat3(Par.Sigmab, PCu.Sigmab);
@@ -1168,6 +1296,12 @@ __host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
     Par.AVQuad          = PCu.AVQuad;
     Par.FluidDx         = PCu.FluidDx;
     Par.Pressure        = PCu.Pressure;
+    Par.MuIStatic       = PCu.MuIStatic;
+    Par.MuIDynamic      = PCu.MuIDynamic;
+    Par.MuII0           = PCu.MuII0;
+    Par.GrainDiameter   = PCu.GrainDiameter;
+    Par.GrainRho        = PCu.GrainRho;
+    Par.MuIReg          = PCu.MuIReg;
 }
 
 #endif

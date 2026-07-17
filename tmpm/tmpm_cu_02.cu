@@ -49,22 +49,22 @@ struct UserData
 
 enum GranularModel
 {
-    MODEL_MOHR_COULOMB = 1,
-    MODEL_DRUCKER_PRAGER = 2,
+    MODEL_DRUCKER_PRAGER = 1,
+    MODEL_BUI_DRUCKER_PRAGER = 2,
     MODEL_HYPOPLASTIC  = 3
 };
 
 bool IsSoilConstitutive(int constitutive_model)
 {
-    return constitutive_model == MODEL_MOHR_COULOMB ||
-           constitutive_model == MODEL_DRUCKER_PRAGER ||
+    return constitutive_model == MODEL_DRUCKER_PRAGER ||
+           constitutive_model == MODEL_BUI_DRUCKER_PRAGER ||
            constitutive_model == MODEL_HYPOPLASTIC;
 }
 
 const char * SoilModelName(int constitutive_model)
 {
-    if (constitutive_model == MODEL_MOHR_COULOMB) return "Mohr-Coulomb";
     if (constitutive_model == MODEL_DRUCKER_PRAGER) return "Drucker-Prager";
+    if (constitutive_model == MODEL_BUI_DRUCKER_PRAGER) return "Bui Drucker-Prager";
     if (constitutive_model == MODEL_HYPOPLASTIC) return "Hypoplastic";
     return "Unsupported soil model";
 }
@@ -186,7 +186,7 @@ int main(int argc, char **argv) try
     // X = main horizontal spreading direction, Y = vertical gravity direction,
     // Z = second horizontal direction. The ground is the plane Y = 0.
     dom.ShapeFunction  = MPM::SHAPE_BSPLINE_QUADRATIC;
-    const int constitutive_model = MODEL_MOHR_COULOMB; // Soil options: MODEL_MOHR_COULOMB, MODEL_DRUCKER_PRAGER, MODEL_HYPOPLASTIC.
+    const int constitutive_model = MODEL_BUI_DRUCKER_PRAGER; // Soil options: MODEL_DRUCKER_PRAGER, MODEL_BUI_DRUCKER_PRAGER, MODEL_HYPOPLASTIC.
     const bool initialize_geostatic_stress = true;    // Writes initial vertical self-weight stress to the first output.
    
     size_t Nproc = 0.75*omp_get_max_threads();
@@ -198,7 +198,7 @@ int main(int argc, char **argv) try
     double G	= E/(2.0*(1.0+Nu));     // Shear modulus (Pa)
     double c    = 0.0;      // Cohesion (Pa); dry cohesionless sand uses c = 0.
     double phi  = 28.0;    // Friction angle (°)
-    double psi  = 3.0;     // Dilation angle (°)
+    double psi  = 0.0;     // Dilation angle (°)
     double rho  = 1800.0;  // Density of the material (kg/m3)
     // double Cs = sqrt(E/rho); // Legacy elastic sound speed; kept only for comparison.
     double Lx   = 2.0e-1;
@@ -241,7 +241,7 @@ int main(int argc, char **argv) try
     if (!IsSoilConstitutive(constitutive_model))
     {
         std::cout << "Unsupported constitutive_model in tmpm_cu_02.cu" << std::endl;
-        std::cout << "1 => Mohr-Coulomb, 2 => Drucker-Prager, 3 => Hypoplastic" << std::endl;
+        std::cout << "1 => Drucker-Prager, 2 => Bui Drucker-Prager, 3 => Hypoplastic" << std::endl;
         return 1;
     }
     else if (constitutive_model == MODEL_HYPOPLASTIC)
@@ -275,11 +275,11 @@ int main(int argc, char **argv) try
     // Domain bounds with padding (2 ghost cells)
     int ghost_cells = 2;
     double xmin = -Lx - ghost_cells * Dx;
-    double xmax = 3.0*Lx + ghost_cells * Dx;
+    double xmax = 1.5*Lx + ghost_cells * Dx;
     double ymin = ground_ymin - ghost_cells * Dx;
     double ymax = Ly + ghost_cells * Dx;
     double zmin = -Lz - ghost_cells * Dx;
-    double zmax = 3.0*Lz + ghost_cells * Dx;
+    double zmax = 1.5*Lz + ghost_cells * Dx;
 
     dom.AddRectangularBeam(-1, Vec3_t(0.0,0.0,0.0), Vec3_t(Lx,Ly,Lz), rho, ndiv);
     dom.ResizeDomain(Vec3_t(xmin, ymin, zmin),Vec3_t(xmax, ymax, zmax),Dx);
@@ -296,7 +296,7 @@ int main(int argc, char **argv) try
         p->Constitutive = constitutive_model;
         p->Cohesion = c;
 
-        if (constitutive_model == MODEL_MOHR_COULOMB || constitutive_model == MODEL_DRUCKER_PRAGER)
+        if (constitutive_model == MODEL_DRUCKER_PRAGER || constitutive_model == MODEL_BUI_DRUCKER_PRAGER)
         {
             p->K = K;
             p->G = G;
@@ -346,14 +346,14 @@ int main(int argc, char **argv) try
     std::cout << "Grid spacing: " << Dx << " m" << std::endl;
     std::cout << "Signal speed for dt: " << signal_speed << " m/s" << std::endl;
     std::cout << "Time step: " << dt << " s" << std::endl;
-    double dtOut = std::min(Tf/100.0,5000.0*dt);
+    // double dtOut = std::min(Tf/100.0,5000.0*dt);
     std::cout << "Output interval: " << dtOut << " s" << std::endl;
     std::cout << "Initial stress enabled: " << initialize_geostatic_stress
               << ", K0 used: " << geostatic_k0
               << " (Jaky)" << std::endl;
     std::cout << "Final time: " << Tf << " s" << std::endl;
 
-    dom.Solve(Tf,dt,dtOut,Setup,Report,"tmpm01",true,Nproc);
+    dom.Solve(Tf,dt,Tf/100,Setup,Report,"tmpm01",true,Nproc);
 
     return 0;
     //Vec3_t a(1.0,2.0,3.0);
