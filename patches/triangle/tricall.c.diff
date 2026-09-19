@@ -1,0 +1,4 @@
+199a200
+>   mid.triedgemarks = (int *) NULL;
+236a238
+>   out.triedgemarks = (int *) NULL;

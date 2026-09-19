@@ -1,0 +1,12 @@
+--- src/f2c/uninit.c
++++ src/f2c/uninit.c
+@@ -1,3 +1,9 @@
++/* _GNU_SOURCE must be defined before the first system header is included,
++ * otherwise glibc will not declare feenableexcept()/fedisableexcept(). */
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE 1
++#endif
++
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>

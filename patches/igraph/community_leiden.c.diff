@@ -1,0 +1,16 @@
+--- src/community_leiden.c
++++ src/community_leiden.c
+@@ -32,6 +32,13 @@
+ #include "igraph_stack.h"
+ #include "igraph_constructors.h"
+ 
++/* Internal helper defined in vector.pmt (instantiated in igraph_vector.c).
++ * It has external linkage but is not declared in any public header, so we
++ * need a local prototype here. */
++igraph_bool_t igraph_i_vector_binsearch_slice(const igraph_vector_t *v,
++        igraph_real_t what, long int *pos,
++        long int start, long int end);
++
+ /* Move nodes in order to improve the quality of a partition.
+  *
+  * This function considers each node and greedily moves it to a neighboring

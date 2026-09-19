@@ -139,6 +139,9 @@ download_and_compile() {
             #LOCATION=http://sourceforge.net/projects/igraph/files/C%20library/$VER_IGRAPH/$PKG.$EXT
             CONF_PRMS="--enable-tls"
             DO_CONF=1
+            # igraph 0.8.2 does not compile with GCC >= 14 (e.g. Ubuntu 26.04);
+            # see patches/igraph/README.md
+            DO_PATCH=1
             ;;
         #soplex)
             #PKG=soplex-$VER_SOPLEX
