@@ -1,5 +1,5 @@
 0.05   = Verlet:      Verlet distance for optimization
-voronoi = ptype:       Particle type (voronoi, sphere,rice and tetrahedra mesh so far)
+tetra   = ptype:       Particle type (voronoi, sphere,rice and tetrahedra mesh so far)
 bending = test:        Type of test (tensile or vibration)
 2       = RenderVideo: 1 if video should be render, 0 otherwise
 5.0e4   = Kn:          Normal stiffness

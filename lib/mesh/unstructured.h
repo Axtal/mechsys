@@ -34,6 +34,12 @@
           /         \           /         \
          @-----@-----@         @-----------@
         0      3      1              0
+
+   This class is a wrapper around the Gmsh library (https://gmsh.info),
+   built from source into <mechsys>/pkg/gmsh-4.15.2 by the install script.
+   Both the 2D and the 3D generators are handled by Gmsh's built-in CAD
+   kernel plus its mesh module.  The public API is kept identical to the
+   former Triangle/Tetgen based implementation.
 */
 
 // STL
@@ -41,25 +47,18 @@
 #include <sstream>  // for ostringstream
 #include <fstream>  // for ofstream
 #include <cfloat>   // for DBL_EPSILON
+#include <cmath>    // for sqrt, cbrt, fabs
+#include <cstdlib>  // for malloc, free
+#include <vector>
 #include <map>
+#include <set>
+#include <array>
+#include <utility>
+#include <functional>
+#include <algorithm>
 
-// Jonathan R Shewchuk' Triangle
-extern "C"
-{
-    #define REAL double
-    #define ANSI_DECLARATORS
-    #define VOID int
-      #include "triangle.h"
-    #undef REAL
-    #undef ANSI_DECLARATORS
-    #undef VOID
-}
-
-// Hang Si' Tetgen
-#define TETLIBRARY
-#include "tetgen.h"
-#undef REAL
-#undef TETLIBRARY
+// Gmsh
+#include <gmsh.h>
 
 // MechSys
 #include <mechsys/util/array.h>
@@ -72,137 +71,263 @@ namespace Mesh
 {
 
 
-/////////////////////////////////////////////////////////////////////////////////////////// TriIO /////
+/////////////////////////////////////////////////////////////////////////////////////////// Gmsh helpers /////
 
-
-/** JRS' Triangle Input/Output structure. */
-typedef triangulateio TriIO;
-
-/** HSI' Tetgen Input/Output structure. */
-typedef tetgenio TetIO;
-
-inline void TriAllocate (int NPoints, int NSegments, int NRegions, int NHoles, TriIO & Tio)
+// Number of nodes of a Gmsh element type (MSH numbering)
+inline int GmshNVerts (int EType)
 {
-    // check
-    if (NPoints<3)   throw new Fatal("Mesh::TriAllocate: At least 3 points are required. (%d is invalid)",NPoints);
-    if (NSegments<3) throw new Fatal("Mesh::TriAllocate: At least 3 segments are required. (%d is invalid)",NSegments);
-
-    // points
-    Tio.pointlist       = (double*)malloc(NPoints*2*sizeof(double));
-    Tio.numberofpoints  = NPoints;
-    Tio.pointmarkerlist = (int*)malloc(NPoints*sizeof(int));
-
-    // segments
-    Tio.segmentlist       = (int*)malloc(NSegments*2*sizeof(int));
-    Tio.segmentmarkerlist = (int*)malloc(NSegments * sizeof(int));
-    Tio.numberofsegments  = NSegments;
-    for (int i=0; i<NSegments; ++i) Tio.segmentmarkerlist[i]=0;
-
-    // regions
-    if (NRegions>0)
+    switch (EType)
     {
-        Tio.regionlist      = (double*)malloc(NRegions*4*sizeof(double));
-        Tio.numberofregions = NRegions;
-    }
-
-    // holes
-    if (NHoles>0)
-    {
-        Tio.holelist      = (double*)malloc(NHoles*2*sizeof(double));
-        Tio.numberofholes = NHoles;
+        case  1: return  2; // 2-node line
+        case  2: return  3; // 3-node triangle
+        case  3: return  4; // 4-node quadrangle
+        case  4: return  4; // 4-node tetrahedron
+        case  5: return  8; // 8-node hexahedron
+        case  8: return  3; // 3-node line (O2)
+        case  9: return  6; // 6-node triangle (O2)
+        case 10: return  9; // 9-node quadrangle (O2)
+        case 11: return 10; // 10-node tetrahedron (O2)
+        case 12: return 27; // 27-node hexahedron (O2)
+        case 16: return  8; // 8-node quadrangle (O2)
+        default: return -1;
     }
 }
 
-inline void TriSetAllToNull (TriIO & Tio)
+// Initialize the Gmsh API only once
+inline void GmshEnsureInit ()
 {
-    // points
-    Tio.pointlist               = NULL;
-    Tio.pointattributelist      = NULL;
-    Tio.pointmarkerlist         = NULL;
-    Tio.numberofpoints          = 0;
-    Tio.numberofpointattributes = 0;
-
-    // triangles
-    Tio.trianglelist               = NULL;
-    Tio.triangleattributelist      = NULL;
-    Tio.trianglearealist           = NULL;
-    Tio.neighborlist               = NULL;
-    Tio.numberoftriangles          = 0;
-    Tio.numberofcorners            = 0;
-    Tio.numberoftriangleattributes = 0;
-    Tio.triedgemarks               = NULL;
-
-    // segments
-    Tio.segmentlist       = NULL;
-    Tio.segmentmarkerlist = NULL;
-    Tio.numberofsegments  = 0;
-
-    // holes
-    Tio.holelist      = NULL;
-    Tio.numberofholes = 0;
-
-    // regions
-    Tio.regionlist      = NULL;
-    Tio.numberofregions = 0;
-
-    // edges
-    Tio.edgelist       = NULL;
-    Tio.edgemarkerlist = NULL;
-    Tio.normlist       = NULL;
-    Tio.numberofedges  = 0;
+    if (!gmsh::isInitialized())
+    {
+        gmsh::initialize();
+        gmsh::option::setNumber("General.Terminal",     1);
+        gmsh::option::setNumber("General.Verbosity",    2);
+        gmsh::option::setNumber("General.AbortOnError", 1);
+    }
 }
 
-inline void TriDeallocateAll (TriIO & Tio)
+// Characteristic length equivalent to a maximum element area (2D)
+inline double GmshSizeFromArea (double A)
 {
-    // Points
-    if (Tio.pointlist          != NULL) free(Tio.pointlist);
-    if (Tio.pointattributelist != NULL) free(Tio.pointattributelist);
-    if (Tio.pointmarkerlist    != NULL) free(Tio.pointmarkerlist);
+    if (A<=0.0) return -1.0;
+    return sqrt(4.0*A/sqrt(3.0));
+}
 
-    // Triangles
-    if (Tio.trianglelist          != NULL) free(Tio.trianglelist);
-    if (Tio.triangleattributelist != NULL) free(Tio.triangleattributelist);
-    if (Tio.trianglearealist      != NULL) free(Tio.trianglearealist);
-    if (Tio.neighborlist          != NULL) free(Tio.neighborlist);
-    if (Tio.triedgemarks          != NULL) free(Tio.triedgemarks);
+// Characteristic length equivalent to a maximum element volume (3D)
+inline double GmshSizeFromVolume (double V)
+{
+    if (V<=0.0) return -1.0;
+    return cbrt(6.0*sqrt(2.0)*V);
+}
 
-    // Segments
-    if (Tio.segmentlist       != NULL) free(Tio.segmentlist);
-    if (Tio.segmentmarkerlist != NULL) free(Tio.segmentmarkerlist);
+// Signed area of a polygon given by a list of point indices
+inline double PolyArea2D (std::vector<int> const & P, std::vector<double> const & Pts)
+{
+    double a = 0.0;
+    size_t n = P.size();
+    for (size_t i=0; i<n; ++i)
+    {
+        size_t j = (i+1)%n;
+        a += Pts[P[i]*3]*Pts[P[j]*3+1] - Pts[P[j]*3]*Pts[P[i]*3+1];
+    }
+    return 0.5*a;
+}
 
-    // Holes
-    if (Tio.holelist != NULL) free(Tio.holelist);
+// Point in polygon test (ray casting)
+inline bool PointInPoly2D (std::vector<int> const & P, std::vector<double> const & Pts, double X, double Y)
+{
+    bool inside = false;
+    size_t n = P.size();
+    for (size_t i=0, j=n-1; i<n; j=i++)
+    {
+        double xi = Pts[P[i]*3], yi = Pts[P[i]*3+1];
+        double xj = Pts[P[j]*3], yj = Pts[P[j]*3+1];
+        if (((yi>Y)!=(yj>Y)) && (X < (xj-xi)*(Y-yi)/(yj-yi)+xi)) inside = !inside;
+    }
+    return inside;
+}
 
-    // Regions
-    if (Tio.regionlist != NULL) free(Tio.regionlist);
+// Point in closed polyhedron test (ray casting). Orientation independent.
+// Polys is a list of polygons (each a list of vertex indices); each polygon is
+// fan-triangulated. A ray is cast in an arbitrary direction and the number of
+// intersections with the surface is counted (odd => inside).
+inline bool PointInPolyhedron (std::vector<std::vector<int> > const & Polys,
+                               std::vector<double> const & Pts,
+                               double X, double Y, double Z)
+{
+    Vec3_t p (X,Y,Z);
+    Vec3_t d (1.0, 0.1234567, 0.7654321); // arbitrary, not aligned with the axes
+    auto V = [&](int i)->Vec3_t { return Vec3_t(Pts[i*3],Pts[i*3+1],Pts[i*3+2]); };
+    int count = 0;
+    for (size_t q=0; q<Polys.size(); ++q)
+    {
+        std::vector<int> const & poly = Polys[q];
+        if (poly.size()<3) continue;
+        for (size_t t=1; t+1<poly.size(); ++t)
+        {
+            Vec3_t v0 = V(poly[0]);
+            Vec3_t v1 = V(poly[t]);
+            Vec3_t v2 = V(poly[t+1]);
+            Vec3_t e1 = v1-v0;
+            Vec3_t e2 = v2-v0;
+            Vec3_t pv = cross(d,e2);
+            double det = dot(e1,pv);
+            if (fabs(det)<1.0e-14) continue;
+            double inv = 1.0/det;
+            Vec3_t tv = p-v0;
+            double u = dot(tv,pv)*inv;
+            if (u<0.0 || u>1.0) continue;
+            Vec3_t qv = cross(tv,e1);
+            double v = dot(d,qv)*inv;
+            if (v<0.0 || u+v>1.0) continue;
+            double tt = dot(e2,qv)*inv;
+            if (tt>1.0e-12) count++;
+        }
+    }
+    return (count%2)==1;
+}
 
-    // Edges
-    if (Tio.edgelist       != NULL) free(Tio.edgelist);
-    if (Tio.edgemarkerlist != NULL) free(Tio.edgemarkerlist);
-    if (Tio.normlist       != NULL) free(Tio.normlist);
+// Convex hull in 2D (monotone chain). Returns the hull in counter-clockwise order.
+inline void ConvexHull2D (std::vector<double> const & Pts, std::vector<int> & Hull)
+{
+    size_t n = Pts.size()/3;
+    std::vector<int> idx(n);
+    for (size_t i=0; i<n; ++i) idx[i] = i;
+    std::sort (idx.begin(), idx.end(), [&](int a, int b){
+        if (Pts[a*3]!=Pts[b*3]) return Pts[a*3]<Pts[b*3];
+        return Pts[a*3+1]<Pts[b*3+1];
+    });
+    auto cross = [&](int o, int a, int b)->double {
+        return (Pts[a*3]-Pts[o*3])*(Pts[b*3+1]-Pts[o*3+1]) - (Pts[a*3+1]-Pts[o*3+1])*(Pts[b*3]-Pts[o*3]);
+    };
+    std::vector<int> H(2*n);
+    size_t k = 0;
+    for (size_t i=0; i<n; ++i) // lower hull
+    {
+        while (k>=2 && cross(H[k-2],H[k-1],idx[i])<=0) k--;
+        H[k++] = idx[i];
+    }
+    for (size_t i=n-1, t=k+1; i>0; --i) // upper hull
+    {
+        while (k>=t && cross(H[k-2],H[k-1],idx[i-1])<=0) k--;
+        H[k++] = idx[i-1];
+    }
+    H.resize(k-1); // last point == first
+    Hull = H;
+}
 
-    // Clear all
-    TriSetAllToNull (Tio);
+// Convex hull in 3D (incremental algorithm). Returns the outward-oriented triangular faces.
+inline void ConvexHull3D (std::vector<double> const & Pts, std::vector<std::array<int,3> > & Faces)
+{
+    size_t n = Pts.size()/3;
+    if (n<4) throw new Fatal("Mesh::ConvexHull3D: At least 4 points are required (%zd given)",n);
+
+    auto P = [&](int i)->Vec3_t { return Vec3_t(Pts[i*3],Pts[i*3+1],Pts[i*3+2]); };
+    auto D = [&](int a, int b)->Vec3_t { Vec3_t r = P(a)-P(b); return r; };
+
+    // initial tetrahedron
+    int i0 = 0;
+    for (size_t i=1; i<n; ++i) if (P(i)(0)<P(i0)(0)) i0 = i;
+    int i1 = -1; double dmax = -1.0;
+    for (size_t i=0; i<n; ++i) if ((int)i!=i0)
+    {
+        Vec3_t d = D(i,i0);
+        double dd = norm(d);
+        if (dd>dmax) { dmax = dd; i1 = i; }
+    }
+    int i2 = -1; double amax = -1.0;
+    for (size_t i=0; i<n; ++i) if ((int)i!=i0 && (int)i!=i1)
+    {
+        Vec3_t cr = cross(D(i1,i0),D(i,i0));
+        double ar = norm(cr);
+        if (ar>amax) { amax = ar; i2 = i; }
+    }
+    if (amax<1.0e-14) throw new Fatal("Mesh::ConvexHull3D: All points are collinear");
+    int i3 = -1; double vmax = -1.0;
+    Vec3_t nrm = cross(D(i1,i0),D(i2,i0));
+    for (size_t i=0; i<n; ++i)
+    {
+        Vec3_t dd = D(i,i0);
+        double v = fabs(dot(nrm,dd));
+        if (v>vmax) { vmax = v; i3 = i; }
+    }
+    if (vmax<1.0e-14) throw new Fatal("Mesh::ConvexHull3D: All points are coplanar");
+
+    // centroid (always inside the hull)
+    Vec3_t center(0.0,0.0,0.0);
+    for (size_t i=0; i<n; ++i) center += P(i);
+    center = center/static_cast<double>(n);
+
+    // append a face and make it outward (the centroid is always inside the hull)
+    auto addFaceTo = [&](std::vector<std::array<int,3> > & Fv, int a, int b, int c)
+    {
+        Vec3_t ba = D(b,a);
+        Vec3_t ca = D(c,a);
+        Vec3_t nf = cross(ba,ca);
+        Vec3_t cm = center-P(a);
+        if (dot(nf,cm)>0.0) std::swap(b,c);
+        std::array<int,3> f = {{a,b,c}};
+        Fv.push_back(f);
+    };
+
+    std::vector<std::array<int,3> > F;
+    addFaceTo(F,i0,i1,i2);
+    addFaceTo(F,i0,i1,i3);
+    addFaceTo(F,i0,i2,i3);
+    addFaceTo(F,i1,i2,i3);
+
+    for (size_t iq=0; iq<n; ++iq)
+    {
+        int q = iq;
+        if (q==i0 || q==i1 || q==i2 || q==i3) continue;
+
+        // visible faces
+        std::vector<bool> vis(F.size(), false);
+        bool any = false;
+        for (size_t f=0; f<F.size(); ++f)
+        {
+            Vec3_t ba = D(F[f][1],F[f][0]);
+            Vec3_t ca = D(F[f][2],F[f][0]);
+            Vec3_t nf = cross(ba,ca);
+            Vec3_t qa = D(q,F[f][0]);
+            if (dot(nf,qa)>1.0e-12) { vis[f] = true; any = true; }
+        }
+        if (!any) continue;
+
+        // horizon edges
+        std::set<std::pair<int,int> > edges;
+        for (size_t f=0; f<F.size(); ++f) if (vis[f])
+        {
+            edges.insert(std::make_pair(F[f][0],F[f][1]));
+            edges.insert(std::make_pair(F[f][1],F[f][2]));
+            edges.insert(std::make_pair(F[f][2],F[f][0]));
+        }
+        std::vector<std::pair<int,int> > horizon;
+        for (std::set<std::pair<int,int> >::iterator p=edges.begin(); p!=edges.end(); ++p)
+        {
+            if (edges.find(std::make_pair(p->second,p->first))==edges.end()) horizon.push_back(*p);
+        }
+
+        // remove visible faces and add new ones
+        std::vector<std::array<int,3> > NF;
+        for (size_t f=0; f<F.size(); ++f) if (!vis[f]) NF.push_back(F[f]);
+        for (size_t h=0; h<horizon.size(); ++h) addFaceTo (NF, horizon[h].first, horizon[h].second, q);
+        F.swap(NF);
+    }
+
+    Faces = F;
 }
 
 
 /////////////////////////////////////////////////////////////////////////////////////////// Unstructured /////
 
-
 class Unstructured : public virtual Mesh::Generic
 {
 public:
-    // Constants
-    static size_t FEM2TriPoint[]; ///< Map MechSys/FEM nodes to JRS-Triangle points
-    static size_t FEM2TriEdge []; ///< Map MechSys/FEM nodes to JRS-Triangle edges
-    static size_t FEM2TetPoint[]; ///< Map MechSys/FEM nodes to HSI-Tetgen points
-    static size_t FEM2TetFace []; ///< Map MechSys/FEM nodes to HSI-Tetgen edges
-
     // Constructor
     Unstructured (int NDim);
 
     // Destructor
-    ~Unstructured () { TriDeallocateAll(Tin); }
+    ~Unstructured () {}
 
     /** 2D: Set Planar Straight Line Graph (PSLG)
      *  3D: Set Piecewise Linear Complex (PLC)
@@ -225,27 +350,45 @@ public:
     void Delaunay (Array<double> const & X, Array<double> const & Y, int Tag=-1); ///< Find Delaunay triangulation of a set of points
     void Delaunay (Array<double> const & X, Array<double> const & Y, Array<double> const & Z, int Tag=-1); ///< Find Delaunay tetrahedralization of a set of points in 3D
 
-    // Data
-    TriIO Tin; ///< Triangle structure: input PSLG
-    TetIO Pin; ///< Tetgen structure: input PLC
-
 #ifdef USE_BOOST_PYTHON
     void PySet (BPy::dict const & Dat);
 #endif
 
 private:
+    // Auxiliar read methods
+    void ReadGmsh     (std::map<int,int> const & EntReg, int DefTag);
+    void ReadBryTags  ();
+
     // Data
     bool _lst_reg_set; ///< Was the last region (NRegions-1) set ?
     bool _lst_hol_set; ///< Was the last hole (NHoles-1) set ?
     bool _lst_pnt_set; ///< Was the last point (NPoints-1) set ?
     bool _lst_seg_set; ///< Was the last segment (NSegmentsOrFacets-1) set ?
     bool _lst_fac_set; ///< Was the last face (NSegmentsOrFacets-1) set ?
-};
 
-size_t Unstructured::FEM2TriPoint[] = {0,1,2,5,3,4};
-size_t Unstructured::FEM2TriEdge [] = {0,1,2};
-size_t Unstructured::FEM2TetPoint[] = {0,1,2,3,4,5,6,7,8,9};
-size_t Unstructured::FEM2TetFace [] = {3,1,0,2};
+    // Input geometry
+    std::vector<double>                             _pnts;    ///< Points: x,y,z concatenated
+    std::vector<int>                                _ptag;    ///< Point tags
+    std::vector<int>                                _segL;    ///< Segments: left node
+    std::vector<int>                                _segR;    ///< Segments: right node
+    std::vector<int>                                _segtag;  ///< Segment tags
+    std::vector< std::vector< std::vector<int> > >  _facpoly; ///< Facets: list of polygons (vertex indices)
+    std::vector<int>                                _factag;  ///< Facet tags
+    struct Reg_t { int tag; double size; double x, y, z; };  ///< Region
+    struct Hol_t { double x, y, z; };                        ///< Hole
+    std::vector<Reg_t>                              _regs;    ///< Regions
+    std::vector<Hol_t>                              _hols;    ///< Holes
+
+    // Gmsh entity tags of the input boundary entities (for boundary (edge/face) tags)
+    std::vector<int>                                _seg_curve; ///< Curve tag of each input segment (2D)
+    std::vector<int>                                _fac_surf;  ///< Surface tag of each input facet (3D)
+
+    // Node tag => vertex index
+    std::map<size_t,int>                            _node2vert;
+
+    // Points to be embedded in the interior of the domain (used by Delaunay)
+    std::vector<int>                                _embed_pts;
+};
 
 
 /////////////////////////////////////////////////////////////////////////////////////////// PLC: Implementation /////
@@ -258,18 +401,11 @@ inline Unstructured::Unstructured (int NDim)
       _lst_seg_set  (false),
       _lst_fac_set  (false)
 {
-    TriSetAllToNull  (Tin);
-    Pin.deinitialize (); 
+    GmshEnsureInit ();
 }
 
 inline void Unstructured::Set (size_t NPoints, size_t NSegmentsOrFacets, size_t NRegions, size_t NHoles)
 {
-
-    //std::cout << "NRegions = " << NRegions << std::endl;
-    //std::cout << "NPoints = " << NPoints << std::endl;
-    //std::cout << "NFacets = " << NSegmentsOrFacets << std::endl;
-    //std::cout << "NHoles = " << NHoles << std::endl;
-
     // check
     if (NPoints<3)           throw new Fatal("Mesh::Unstructured::Set: The number of points must be greater than 2. (%d is invalid)",NPoints);
     if (NSegmentsOrFacets<3) throw new Fatal("Mesh::Unstructured::Set: The number of segments or faces must be greater than 2. (%d is invalid)",NSegmentsOrFacets);
@@ -282,157 +418,102 @@ inline void Unstructured::Set (size_t NPoints, size_t NSegmentsOrFacets, size_t 
     _lst_seg_set = false;
     _lst_fac_set = false;
 
+    // points
+    _pnts.assign (NPoints*3, 0.0);
+    _ptag.assign (NPoints, 0);
+    _embed_pts.clear();
+
+    // regions and holes
+    _regs.assign (NRegions, Reg_t{0,-1.0,0.0,0.0,0.0});
+    _hols.assign (NHoles,   Hol_t{0.0,0.0,0.0});
+
     if (NDim==2)
     {
-        // erase previous PSLG
-        TriDeallocateAll (Tin);
-
-        // allocate PSLG
-        TriAllocate (NPoints, NSegmentsOrFacets, NRegions, NHoles, Tin);
+        _segL.assign   (NSegmentsOrFacets, -1);
+        _segR.assign   (NSegmentsOrFacets, -1);
+        _segtag.assign (NSegmentsOrFacets,  0);
+        _seg_curve.assign (NSegmentsOrFacets, -1);
     }
     else if (NDim==3)
     {
-        // erase previous PLC
-        Pin.deinitialize ();
-
-        // allocate PLC
-        Pin.initialize ();
-        
-        // points
-        Pin.firstnumber     = 0;
-        Pin.numberofpoints  = NPoints;
-        Pin.pointlist       = new double [NPoints*3];
-        Pin.pointmarkerlist = new int [NPoints];
-
-        // facets
-        Pin.numberoffacets  = NSegmentsOrFacets;
-        Pin.facetlist       = new TetIO::facet [NSegmentsOrFacets];
-        Pin.facetmarkerlist = new int [NSegmentsOrFacets];
-
-        // regions
-        Pin.numberofregions = NRegions;
-        Pin.regionlist      = new double [NRegions*5];
-
-        // holes
-        Pin.numberofholes = NHoles;
-        Pin.holelist      = new double [NHoles*3];
+        _facpoly.assign (NSegmentsOrFacets, std::vector< std::vector<int> >());
+        _factag.assign  (NSegmentsOrFacets, 0);
+        _fac_surf.assign(NSegmentsOrFacets, -1);
     }
     else throw new Fatal("Unstructured::Set: NDim must be either 2 or 3. NDim==%d is invalid",NDim);
 }
 
 inline void Unstructured::SetReg (size_t iReg, int RTag, double MaxAreaOrVolume, double X, double Y, double Z)
 {
-    if (NDim==2)
-    {
-        Tin.regionlist[iReg*4  ] = X;
-        Tin.regionlist[iReg*4+1] = Y;
-        Tin.regionlist[iReg*4+2] = RTag;
-        Tin.regionlist[iReg*4+3] = MaxAreaOrVolume;
-        if ((int)iReg==Tin.numberofregions-1) _lst_reg_set = true;
-    }
-    else if (NDim==3)
-    {
-        Pin.regionlist[iReg*5  ] = X;
-        Pin.regionlist[iReg*5+1] = Y;
-        Pin.regionlist[iReg*5+2] = Z;
-        Pin.regionlist[iReg*5+3] = RTag;
-        Pin.regionlist[iReg*5+4] = MaxAreaOrVolume;
-        if ((int)iReg==Pin.numberofregions-1) _lst_reg_set = true;
-    }
+    _regs[iReg].tag  = RTag;
+    _regs[iReg].size = MaxAreaOrVolume;
+    _regs[iReg].x    = X;
+    _regs[iReg].y    = Y;
+    _regs[iReg].z    = Z;
+    if ((int)iReg==static_cast<int>(_regs.size())-1) _lst_reg_set = true;
 }
 
 inline void Unstructured::SetHol (size_t iHol, double X, double Y, double Z)
 {
-    if (NDim==2)
-    {
-        Tin.holelist[iHol*2  ] = X;
-        Tin.holelist[iHol*2+1] = Y;
-        if ((int)iHol==Tin.numberofholes-1) _lst_hol_set = true;
-    }
-    else if (NDim==3)
-    {
-        Pin.holelist[iHol*3  ] = X;
-        Pin.holelist[iHol*3+1] = Y;
-        Pin.holelist[iHol*3+2] = Z;
-        if ((int)iHol==Pin.numberofholes-1) _lst_hol_set = true;
-    }
+    _hols[iHol].x = X;
+    _hols[iHol].y = Y;
+    _hols[iHol].z = Z;
+    if ((int)iHol==static_cast<int>(_hols.size())-1) _lst_hol_set = true;
 }
 
 inline void Unstructured::SetPnt (size_t iPnt, int PTag, double X, double Y, double Z)
 {
-    if (NDim==2)
-    {
-        Tin.pointlist[iPnt*2  ]   = X;
-        Tin.pointlist[iPnt*2+1]   = Y;
-        Tin.pointmarkerlist[iPnt] = PTag;
-        if ((int)iPnt==Tin.numberofpoints-1) _lst_pnt_set = true;
-    }
-    else if (NDim==3)
-    {
-        Pin.pointlist[iPnt*3  ]   = X;
-        Pin.pointlist[iPnt*3+1]   = Y;
-        Pin.pointlist[iPnt*3+2]   = Z;
-        Pin.pointmarkerlist[iPnt] = PTag;
-        if ((int)iPnt==Pin.numberofpoints-1) _lst_pnt_set = true;
-    }
+    _pnts[iPnt*3  ] = X;
+    _pnts[iPnt*3+1] = Y;
+    _pnts[iPnt*3+2] = Z;
+    _ptag[iPnt]     = PTag;
+    if ((int)iPnt==static_cast<int>(_ptag.size())-1) _lst_pnt_set = true;
 }
 
 inline void Unstructured::SetSeg (size_t iSeg, int ETag, int L, int R)
 {
     if (NDim==3) throw new Fatal("Unstructured::SetSeg: This method must be called for 2D meshes only");
-    Tin.segmentlist[iSeg*2  ]   = L;
-    Tin.segmentlist[iSeg*2+1]   = R;
-    Tin.segmentmarkerlist[iSeg] = ETag;
-    if ((int)iSeg==Tin.numberofsegments-1) _lst_seg_set = true;
+    _segL[iSeg]   = L;
+    _segR[iSeg]   = R;
+    _segtag[iSeg] = ETag;
+    if ((int)iSeg==static_cast<int>(_segL.size())-1) _lst_seg_set = true;
 }
 
 inline void Unstructured::SetFac (size_t iFac, int FTag, Array<int> const & VertsOnFace)
 {
     if (NDim==2) throw new Fatal("Unstructured::SetSeg: This method must be called for 3D meshes only");
-
-    Pin.facetmarkerlist[iFac] = FTag;
-    TetIO::facet * f    = &Pin.facetlist[iFac];
-    f->numberofpolygons = 1;
-    f->polygonlist      = new TetIO::polygon [f->numberofpolygons];
-    f->numberofholes    = 0;
-    f->holelist         = NULL;
-
-    // read vertices
-    TetIO::polygon * p  = &f->polygonlist[0];
-    int npoints         = static_cast<int>(VertsOnFace.Size());
-    p->numberofvertices = npoints;
-    p->vertexlist       = new int [npoints];
-    for (int j=0; j<npoints; ++j) p->vertexlist[j] = VertsOnFace[j];
-
-    if ((int)iFac==Pin.numberoffacets-1) _lst_fac_set = true;
+    std::vector<int> poly (VertsOnFace.Size());
+    for (size_t j=0; j<VertsOnFace.Size(); ++j) poly[j] = VertsOnFace[j];
+    _facpoly[iFac].assign (1, poly);
+    _factag[iFac] = FTag;
+    if ((int)iFac==static_cast<int>(_facpoly.size())-1) _lst_fac_set = true;
 }
 
 inline void Unstructured::SetFac (size_t iFac, int FTag, Array<int> const & Polygon1, Array<int> const & Polygon2)
 {
     if (NDim==2) throw new Fatal("Unstructured::SetSeg: This method must be called for 3D meshes only");
+    _facpoly[iFac].resize (2);
+    _facpoly[iFac][0].resize (Polygon1.Size());
+    for (size_t j=0; j<Polygon1.Size(); ++j) _facpoly[iFac][0][j] = Polygon1[j];
+    _facpoly[iFac][1].resize (Polygon2.Size());
+    for (size_t j=0; j<Polygon2.Size(); ++j) _facpoly[iFac][1][j] = Polygon2[j];
+    _factag[iFac] = FTag;
+    if ((int)iFac==static_cast<int>(_facpoly.size())-1) _lst_fac_set = true;
+}
 
-    Pin.facetmarkerlist[iFac] = FTag;
-    TetIO::facet * f    = &Pin.facetlist[iFac];
-    f->numberofpolygons = 2;
-    f->polygonlist      = new TetIO::polygon [f->numberofpolygons];
-    f->numberofholes    = 0;
-    f->holelist         = NULL;
-
-    // read vertices of polygon 1
-    TetIO::polygon * p1  = &f->polygonlist[0];
-    int np1              = static_cast<int>(Polygon1.Size());
-    p1->numberofvertices = np1;
-    p1->vertexlist       = new int [np1];
-    for (int j=0; j<np1; ++j) p1->vertexlist[j] = Polygon1[j];
-
-    // read vertices of polygon 2
-    TetIO::polygon * p2  = &f->polygonlist[1];
-    int np2              = static_cast<int>(Polygon2.Size());
-    p2->numberofvertices = np2;
-    p2->vertexlist       = new int [np2];
-    for (int j=0; j<np2; ++j) p2->vertexlist[j] = Polygon2[j];
-
-    if ((int)iFac==Pin.numberoffacets-1) _lst_fac_set = true;
+inline bool Unstructured::IsSet () const
+{
+    if (NDim==2)
+    {
+        bool hol_ok = (_hols.size()>0 ? _lst_hol_set : true);
+        return (_lst_reg_set && hol_ok && _lst_pnt_set && _lst_seg_set);
+    }
+    if (NDim==3)
+    {
+        bool hol_ok = (_hols.size()>0 ? _lst_hol_set : true);
+        return (_lst_reg_set && hol_ok && _lst_pnt_set && _lst_fac_set);
+    }
+    return false;
 }
 
 inline void Unstructured::Generate (bool O2, double GlobalMaxArea, bool Quiet, double MinAngle)
@@ -443,149 +524,327 @@ inline void Unstructured::Generate (bool O2, double GlobalMaxArea, bool Quiet, d
     // info
     Util::Stopwatch stopwatch(/*activated*/WithInfo);
 
-    // parameters
-    String prms("pzA"); // Q=quiet, p=poly, q=quality, z=zero
-    if (Quiet)           prms.Printf("Q%s",   prms.CStr());
-    if (GlobalMaxArea>0) prms.Printf("%sa%f", prms.CStr(), GlobalMaxArea);
-    if (MinAngle>0)      prms.Printf("%sq%f", prms.CStr(), MinAngle);
-    else                 prms.Printf("%sq",   prms.CStr());
-    if (O2)              prms.Printf("%so2",  prms.CStr());
-    prms.Printf("%sa", prms.CStr());
+    // init gmsh
+    GmshEnsureInit ();
+    gmsh::clear();
+    gmsh::model::add ("mechsys");
+    gmsh::option::setNumber ("General.Terminal", Quiet ? 0 : 1);
+    gmsh::option::setNumber ("Mesh.ElementOrder", O2 ? 2 : 1);
+    gmsh::option::setNumber ("Mesh.MeshSizeExtendFromBoundary", 1);
+    gmsh::option::setNumber ("Mesh.MeshSizeFromPoints",         1);
+    gmsh::option::setNumber ("Mesh.MeshSizeFromCurvature",      0);
+    if (MinAngle>0)
+    {
+        gmsh::option::setNumber ("Mesh.Algorithm",   6); // Frontal-Delaunay for quads/quality
+        gmsh::option::setNumber ("Mesh.Algorithm3D", 4); // Frontal
+    }
+
+    // characteristic length
+    double lc = -1.0;
+    if (GlobalMaxArea>0) lc = (NDim==2 ? GmshSizeFromArea(GlobalMaxArea) : GmshSizeFromVolume(GlobalMaxArea));
+    for (size_t i=0; i<_regs.size(); ++i)
+    {
+        if (_regs[i].size>0)
+        {
+            double rl = (NDim==2 ? GmshSizeFromArea(_regs[i].size) : GmshSizeFromVolume(_regs[i].size));
+            if (lc<0.0 || rl<lc) lc = rl;
+        }
+    }
+    if (lc<=0.0)
+    {
+        // No size constraint given: emulate the old (unrefined) Triangle/Tetgen behaviour
+        // by asking Gmsh for a mesh without inserting additional points.
+        double xmin=DBL_MAX, ymin=DBL_MAX, zmin=DBL_MAX;
+        double xmax=-DBL_MAX, ymax=-DBL_MAX, zmax=-DBL_MAX;
+        for (size_t i=0; i<_ptag.size(); ++i)
+        {
+            xmin=std::min(xmin,_pnts[i*3  ]); xmax=std::max(xmax,_pnts[i*3  ]);
+            ymin=std::min(ymin,_pnts[i*3+1]); ymax=std::max(ymax,_pnts[i*3+1]);
+            zmin=std::min(zmin,_pnts[i*3+2]); zmax=std::max(zmax,_pnts[i*3+2]);
+        }
+        double diag = sqrt((xmax-xmin)*(xmax-xmin)+(ymax-ymin)*(ymax-ymin)+(zmax-zmin)*(zmax-zmin));
+        lc = 1.0e3*(diag>0.0 ? diag : 1.0);
+    }
+    gmsh::option::setNumber ("Mesh.MeshSizeMax", lc);
+
+    // default region tag
+    int def_tag = (_regs.size()>0 ? _regs[0].tag : 0);
+
+    // add points
+    size_t np = _ptag.size();
+    for (size_t i=0; i<np; ++i)
+        gmsh::model::geo::addPoint (_pnts[i*3], _pnts[i*3+1], _pnts[i*3+2], lc, static_cast<int>(i)+1);
+
+    // entity tag => region tag
+    std::map<int,int> ent_reg;
+    std::vector<int>  vol_tags; // 3D volume entity tags
 
     if (NDim==2)
     {
-        // generate
-        TriIO tou;
-        TriSetAllToNull (tou);
-        triangulate (prms.CStr(), &Tin, &tou, NULL);
+        size_t ns = _segL.size();
 
-        // verts
-        Verts.Resize (tou.numberofpoints);
-        for (size_t i=0; i<Verts.Size(); ++i)
+        // add curves (lines)
+        for (size_t k=0; k<ns; ++k)
+            _seg_curve[k] = gmsh::model::geo::addLine (_segL[k]+1, _segR[k]+1, static_cast<int>(k)+1);
+
+        // trace closed loops of the PSLG
+        std::map<int, std::vector<int> > inc;
+        for (size_t k=0; k<ns; ++k)
         {
-            Verts[i]      = new Vertex;
-            Verts[i]->ID  = i;
-            Verts[i]->Tag = 0;
-            Verts[i]->C   = tou.pointlist[i*2], tou.pointlist[i*2+1], 0.0;
-
-            /* tou.pointmarkerlist[ipoint] will be equal to:
-             * == edgeTag (<0) => on edge with tag <<<<<<<<<<<<<<<<<< REMOVED
-             * == 0            => internal vertex (not on boundary)
-             * == 1            => on boundary                   */
-            int mark = tou.pointmarkerlist[i];
-            if (mark<0)
-            {
-                Verts[i]->Tag = mark;
-                TgdVerts.Push (Verts[i]);
-            }
+            inc[_segL[k]].push_back (static_cast<int>(k));
+            inc[_segR[k]].push_back (static_cast<int>(k));
         }
-
-        // cells
-        Cells.Resize (tou.numberoftriangles);
-        for (size_t i=0; i<Cells.Size(); ++i)
+        struct Loop_t { std::vector<int> pts; std::vector<int> tags; double area; };
+        std::vector<Loop_t> loops;
+        std::vector<bool> used (ns, false);
+        for (size_t k0=0; k0<ns; ++k0)
         {
-            Cells[i]      = new Cell;
-            Cells[i]->ID  = i;
-            Cells[i]->Tag = tou.triangleattributelist[i*tou.numberoftriangleattributes];
-            Cells[i]->PartID = 0; // partition id (domain decomposition)
-            Cells[i]->V.Resize (tou.numberofcorners);
-            for (size_t j=0; j<Cells[i]->V.Size(); ++j)
+            if (used[k0]) continue;
+            int start = _segL[k0];
+            int node  = _segR[k0];
+            Loop_t L;
+            L.pts.push_back (start);
+            L.pts.push_back (node);
+            L.tags.push_back (static_cast<int>(k0)+1); // forward (line was created L->R)
+            used[k0] = true;
+            bool closed = (node==start);
+            for (size_t guard=0; guard<=ns && !closed; ++guard)
             {
-                Share sha = {Cells[i],j};
-                Cells[i]->V[j] = Verts[tou.trianglelist[i*tou.numberofcorners+FEM2TriPoint[j]]];
-                Cells[i]->V[j]->Shares.Push (sha);
-            }
-            bool has_bry_tag = false;
-            for (size_t j=0; j<3; ++j)
-            {
-                int edge_tag = tou.triedgemarks[i*3+FEM2TriEdge[j]];
-                if (edge_tag<0)
+                int nxt = -1; bool fwd = true;
+                std::vector<int> const & v = inc[node];
+                for (size_t a=0; a<v.size(); ++a)
                 {
-                    Cells[i]->BryTags[j] = edge_tag;
-                    has_bry_tag          = true;
+                    int kk = v[a];
+                    if (used[kk]) continue;
+                    nxt = kk;
+                    fwd = (_segL[kk]==node);
+                    break;
                 }
+                if (nxt<0) break;
+                used[nxt] = true;
+                node = (fwd ? _segR[nxt] : _segL[nxt]);
+                L.pts.push_back (node);
+                L.tags.push_back (fwd ? (nxt+1) : -(nxt+1));
+                if (node==start) closed = true;
             }
-            if (has_bry_tag) TgdCells.Push (Cells[i]);
+            if (closed)
+            {
+                L.area = PolyArea2D (L.pts, _pnts);
+                if (L.area<0.0) // make it counter-clockwise
+                {
+                    std::reverse (L.tags.begin(), L.tags.end());
+                    for (size_t t=0; t<L.tags.size(); ++t) L.tags[t] = -L.tags[t];
+                    L.area = -L.area;
+                }
+                loops.push_back (L);
+            }
+        }
+        if (loops.size()<1) throw new Fatal("Unstructured::Generate: Could not trace any closed loop from the given segments");
+
+        // classify holes: a hole loop contains a hole point and no region point
+        std::vector<bool> is_hole (loops.size(), false);
+        for (size_t i=0; i<loops.size(); ++i)
+        {
+            bool has_hol = false;
+            for (size_t h=0; h<_hols.size(); ++h)
+                if (PointInPoly2D (loops[i].pts, _pnts, _hols[h].x, _hols[h].y)) { has_hol = true; break; }
+            bool has_reg = false;
+            for (size_t r=0; r<_regs.size(); ++r)
+                if (PointInPoly2D (loops[i].pts, _pnts, _regs[r].x, _regs[r].y)) { has_reg = true; break; }
+            is_hole[i] = (has_hol && !has_reg);
         }
 
-        // clean up
-        /* After triangulate (with -p switch), tou.regionlist gets the content of Tin.regionlist and
-         * tou.holelist gets the content of Tin.holelist. Thus, these output variables must be set
-         * to NULL in order to tell TriDeallocateAll to ignore them and do not double-free memory. */
-        tou.regionlist      = NULL;
-        tou.numberofregions = 0;
-        tou.holelist        = NULL;
-        tou.numberofholes   = 0;
-        TriDeallocateAll (tou);
+        // create plane surfaces (exterior + holes)
+        std::vector<int> surf_tags;
+        for (size_t i=0; i<loops.size(); ++i)
+        {
+            if (is_hole[i]) continue;
+            std::vector<int> wires;
+            wires.push_back (gmsh::model::geo::addCurveLoop (loops[i].tags));
+            for (size_t j=0; j<loops.size(); ++j)
+            {
+                if (!is_hole[j]) continue;
+                if (loops[j].pts.size()<1) continue;
+                if (PointInPoly2D (loops[i].pts, _pnts, _pnts[loops[j].pts[0]*3], _pnts[loops[j].pts[0]*3+1]))
+                    wires.push_back (gmsh::model::geo::addCurveLoop (loops[j].tags));
+            }
+            int s = gmsh::model::geo::addPlaneSurface (wires);
+            surf_tags.push_back (s);
+
+            // region tag: first region point inside this loop
+            int rt = def_tag;
+            for (size_t r=0; r<_regs.size(); ++r)
+                if (PointInPoly2D (loops[i].pts, _pnts, _regs[r].x, _regs[r].y)) { rt = _regs[r].tag; break; }
+            ent_reg[s] = rt;
+        }
+        if (surf_tags.size()<1) throw new Fatal("Unstructured::Generate: Could not create any surface");
     }
-    else
+    else // NDim==3
     {
-        //for (size_t i=0; i<Pin.numberofpoints; ++i) std::cout << Util::_20_15 << Pin.pointlist[i*3] << " " << Util::_20_15 << Pin.pointlist[i*3+1] << " " << Util::_20_15 << Pin.pointlist[i*3+2] << std::endl;
+        size_t nf = _facpoly.size();
 
-        //prms = "CpJVVV"; // debug
+        // unique edges shared by facets
+        std::map<std::pair<int,int>,int> edge_curve;
+        std::map<int,std::vector<int> >   curve_facets;
 
-        // generate
-        prms.append("f");
-        char sw[prms.size()+1];
-        strcpy (sw, prms.CStr());
-        TetIO pou;
-        tetrahedralize (sw, &Pin, &pou);
-
-        // verts
-        Verts.Resize (pou.numberofpoints);
-        for (size_t i=0; i<Verts.Size(); ++i)
+        for (size_t i=0; i<nf; ++i)
         {
-            Verts[i]      = new Vertex;
-            Verts[i]->ID  = i;
-            Verts[i]->Tag = 0;
-            Verts[i]->C   = pou.pointlist[i*3], pou.pointlist[i*3+1], pou.pointlist[i*3+2];
-
-            /* pou.pointmarkerlist[ipoint] will be equal to:
-             * == faceTag (<0) => on face with tag <<<<<<<<<<<<<<<<<< REMOVED
-             * == 0            => internal vertex (not on boundary)
-             * == 1            => on boundary                   */
-            int mark = pou.pointmarkerlist[i];
-            if (mark<0)
+            std::vector<int> wires;
+            for (size_t p=0; p<_facpoly[i].size(); ++p)
             {
-                Verts[i]->Tag = mark;
-                TgdVerts.Push (Verts[i]);
-            }
-        }
-
-        // cells
-        Cells.Resize (pou.numberoftetrahedra);
-        for (size_t i=0; i<Cells.Size(); ++i)
-        {
-            Cells[i]      = new Cell;
-            Cells[i]->ID  = i;
-            Cells[i]->Tag = pou.tetrahedronattributelist[i*pou.numberoftetrahedronattributes];
-            Cells[i]->V.Resize (pou.numberofcorners);
-            for (size_t j=0; j<Cells[i]->V.Size(); ++j)
-            {
-                Share sha = {Cells[i],j};
-                Cells[i]->V[j] = Verts[pou.tetrahedronlist[i*pou.numberofcorners+FEM2TetPoint[j]]];
-                Cells[i]->V[j]->Shares.Push (sha);
-            }
-        }
-
-        // face tags
-        for (std::map<int,tetgenio::facemarkers>::const_iterator p=pou.tetfacemarkers.begin(); p!=pou.tetfacemarkers.end(); ++p)
-        {
-            int  icell       = p->first;
-            bool has_bry_tag = false;
-            for (size_t j=0; j<4; ++j)
-            {
-                int face_tag = p->second.m[FEM2TetFace[j]];
-                //std::cout << icell << " " << j << " " << face_tag << "\n";
-                if (face_tag<0)
+                std::vector<int> const & poly = _facpoly[i][p];
+                std::vector<int> wire;
+                size_t nvp = poly.size();
+                for (size_t j=0; j<nvp; ++j)
                 {
-                    Cells[icell]->BryTags[j] = face_tag;
-                    has_bry_tag              = true;
+                    int a = poly[j];
+                    int b = poly[(j+1)%nvp];
+                    int lo = std::min(a,b);
+                    int hi = std::max(a,b);
+                    std::pair<int,int> key (lo,hi);
+                    int ct;
+                    std::map<std::pair<int,int>,int>::iterator it = edge_curve.find (key);
+                    if (it==edge_curve.end())
+                    {
+                        ct = gmsh::model::geo::addLine (lo+1, hi+1);
+                        edge_curve[key] = ct;
+                        curve_facets[ct] = std::vector<int>();
+                    }
+                    else ct = it->second;
+                    curve_facets[ct].push_back (static_cast<int>(i));
+                    wire.push_back (a< b ? ct : -ct); // line goes from lo to hi
                 }
+                if (wire.size()>0) wires.push_back (gmsh::model::geo::addCurveLoop (wire));
             }
-            if (has_bry_tag) TgdCells.Push (Cells[icell]);
+            if (wires.size()<1) throw new Fatal("Unstructured::Generate: Facet %zd has no vertices",i);
+            _fac_surf[i] = gmsh::model::geo::addPlaneSurface (wires);
+        }
+
+        // connected components of facets (surfaces sharing a curve)
+        std::vector<int> par (nf);
+        for (size_t i=0; i<nf; ++i) par[i] = i;
+        std::function<int(int)> find = [&](int x)->int { while (par[x]!=x) { par[x]=par[par[x]]; x=par[x]; } return x; };
+        for (std::map<int,std::vector<int> >::iterator it=curve_facets.begin(); it!=curve_facets.end(); ++it)
+        {
+            std::vector<int> const & fs = it->second;
+            for (size_t a=1; a<fs.size(); ++a) par[find(fs[a])] = find(fs[0]);
+        }
+        std::map<int,std::vector<int> > comps;
+        for (size_t i=0; i<nf; ++i) comps[find(static_cast<int>(i))].push_back (static_cast<int>(i));
+
+        // create one surface loop per component, and keep its polygons/root
+        std::map<int,int>                                root2shell;
+        std::map<int,std::vector<std::vector<int> > >    comp_polys;
+        for (std::map<int,std::vector<int> >::iterator it=comps.begin(); it!=comps.end(); ++it)
+        {
+            std::vector<int> surfaces;
+            for (size_t a=0; a<it->second.size(); ++a)
+            {
+                surfaces.push_back (_fac_surf[it->second[a]]);
+                for (size_t p=0; p<_facpoly[it->second[a]].size(); ++p)
+                    comp_polys[it->first].push_back (_facpoly[it->second[a]][p]);
+            }
+            root2shell[it->first] = gmsh::model::geo::addSurfaceLoop (surfaces);
+        }
+
+        // classify each component: a hole contains a hole point and no region point
+        std::map<int,bool> is_hole;
+        for (std::map<int,std::vector<int> >::iterator it=comps.begin(); it!=comps.end(); ++it)
+        {
+            std::vector<std::vector<int> > const & polys = comp_polys[it->first];
+            bool has_reg = false;
+            for (size_t r=0; r<_regs.size() && !has_reg; ++r)
+                if (PointInPolyhedron (polys,_pnts,_regs[r].x,_regs[r].y,_regs[r].z)) has_reg = true;
+            bool has_hol = false;
+            for (size_t h=0; h<_hols.size() && !has_hol; ++h)
+                if (PointInPolyhedron (polys,_pnts,_hols[h].x,_hols[h].y,_hols[h].z)) has_hol = true;
+            is_hole[it->first] = (has_hol && !has_reg);
+        }
+
+        // create a volume per region component, punching the holes it contains
+        for (std::map<int,std::vector<int> >::iterator it=comps.begin(); it!=comps.end(); ++it)
+        {
+            if (is_hole[it->first]) continue;
+            std::vector<int> shells;
+            shells.push_back (root2shell[it->first]);
+            for (std::map<int,std::vector<int> >::iterator jt=comps.begin(); jt!=comps.end(); ++jt)
+            {
+                if (!is_hole[jt->first]) continue;
+                bool inside = false;
+                for (size_t h=0; h<_hols.size() && !inside; ++h)
+                {
+                    if (PointInPolyhedron (comp_polys[jt->first],_pnts,_hols[h].x,_hols[h].y,_hols[h].z) &&
+                        PointInPolyhedron (comp_polys[it->first],_pnts,_hols[h].x,_hols[h].y,_hols[h].z)) inside = true;
+                }
+                if (inside) shells.push_back (root2shell[jt->first]);
+            }
+            int vol = gmsh::model::geo::addVolume (shells);
+            vol_tags.push_back (vol);
+            ent_reg[vol] = def_tag;
         }
     }
+
+    // synchronize the geometry
+    gmsh::model::geo::synchronize ();
+
+    // 3D: assign region tags by checking which volume contains each region point
+    if (NDim==3 && _regs.size()>1)
+    {
+        for (size_t i=0; i<vol_tags.size(); ++i)
+        {
+            int vol = vol_tags[i];
+            for (size_t r=0; r<_regs.size(); ++r)
+            {
+                std::vector<double> c (3);
+                c[0]=_regs[r].x; c[1]=_regs[r].y; c[2]=_regs[r].z;
+                if (gmsh::model::isInside (3, vol, c)>0) { ent_reg[vol] = _regs[r].tag; break; }
+            }
+        }
+    }
+
+    // embed interior points (Delaunay)
+    if (_embed_pts.size()>0)
+    {
+        // do not let short boundary edges force a refined mesh
+        gmsh::option::setNumber ("Mesh.MeshSizeExtendFromBoundary", 0);
+        gmsh::option::setNumber ("Mesh.MeshSizeFromPoints",         0);
+        gmsh::option::setNumber ("Mesh.MeshSizeFromCurvature",      0);
+
+        std::vector<int> ptags (_embed_pts.size());
+        for (size_t i=0; i<_embed_pts.size(); ++i) ptags[i] = _embed_pts[i]+1;
+        gmsh::vectorpair ents;
+        gmsh::model::getEntities (ents, NDim);
+        for (size_t ie=0; ie<ents.size(); ++ie)
+            gmsh::model::mesh::embed (0, ptags, NDim, ents[ie].second);
+    }
+
+    // generate mesh
+    gmsh::model::mesh::generate (NDim);
+
+    // read mesh
+    ReadGmsh (ent_reg, def_tag);
+
+    // tag input points
+    for (size_t i=0; i<_ptag.size(); ++i)
+    {
+        if (_ptag[i]==0) continue;
+        std::vector<std::size_t> ntags;
+        std::vector<double> coord, param;
+        gmsh::model::mesh::getNodes (ntags, coord, param, 0, static_cast<int>(i)+1, false, false);
+        for (size_t j=0; j<ntags.size(); ++j)
+        {
+            std::map<size_t,int>::iterator it = _node2vert.find (ntags[j]);
+            if (it==_node2vert.end()) continue;
+            if (Verts[it->second]->Tag==0)
+            {
+                Verts[it->second]->Tag = _ptag[i];
+                TgdVerts.Push (Verts[it->second]);
+            }
+        }
+    }
+
+    // boundary (edge/face) tags
+    ReadBryTags ();
 
     // check
     if (Verts.Size()<1) throw new Fatal("Unstructured::Generate: Failed with %d vertices and %d cells", Verts.Size(), Cells.Size());
@@ -594,11 +853,166 @@ inline void Unstructured::Generate (bool O2, double GlobalMaxArea, bool Quiet, d
     // info
     if (WithInfo)
     {
-        printf("\n%s--- Unstructured Mesh Generation --- %dD --- O%d -------------------------------------%s\n",TERM_CLR1,NDim,(O2?2:1),TERM_RST);
-        printf("%s  %s    = %s%s\n",TERM_CLR4,(NDim==2?"Triangle command":"Tetgen command "),prms.CStr(),TERM_RST);
+        printf("\n%s--- Unstructured Mesh Generation (Gmsh) --- %dD --- O%d ---------------------%s\n",TERM_CLR1,NDim,(O2?2:1),TERM_RST);
+        printf("%s  Element order      = %s%d%s\n", TERM_CLR2, TERM_CLR4, (O2?2:1), TERM_RST);
         printf("%s  Num of cells       = %zd%s\n", TERM_CLR2, Cells.Size(), TERM_RST);
         printf("%s  Num of vertices    = %zd%s\n", TERM_CLR2, Verts.Size(), TERM_RST);
     }
+}
+
+inline void Unstructured::ReadGmsh (std::map<int,int> const & EntReg, int DefTag)
+{
+    // clear previous mesh
+    Erase ();
+
+    // nodes
+    std::vector<std::size_t> ntags;
+    std::vector<double> coord, param;
+    gmsh::model::mesh::getNodes (ntags, coord, param, -1, -1, false, false);
+    Verts.Resize (ntags.size());
+    _node2vert.clear();
+    for (size_t i=0; i<ntags.size(); ++i)
+    {
+        Verts[i]      = new Vertex;
+        Verts[i]->ID  = i;
+        Verts[i]->Tag = 0;
+        Verts[i]->C   = coord[i*3], coord[i*3+1], coord[i*3+2];
+        _node2vert[ntags[i]] = static_cast<int>(i);
+    }
+    TgdVerts.Resize (0);
+
+    // cells, grouped by entity (to recover the region tag)
+    gmsh::vectorpair ents;
+    gmsh::model::getEntities (ents, NDim);
+    for (size_t ie=0; ie<ents.size(); ++ie)
+    {
+        int etag = ents[ie].second;
+        int reg  = DefTag;
+        std::map<int,int>::const_iterator it = EntReg.find (etag);
+        if (it!=EntReg.end()) reg = it->second;
+
+        std::vector<int> types;
+        std::vector<std::vector<std::size_t> > etags, nodetags;
+        gmsh::model::mesh::getElements (types, etags, nodetags, NDim, etag);
+        for (size_t t=0; t<types.size(); ++t)
+        {
+            int nv = GmshNVerts (types[t]);
+            if (nv<0) continue;
+            size_t ne = etags[t].size();
+            for (size_t e=0; e<ne; ++e)
+            {
+                Cells.Push (static_cast<Cell*>(0));
+                size_t ic = Cells.Size()-1;
+                Cells[ic]        = new Cell;
+                Cells[ic]->ID    = ic;
+                Cells[ic]->Tag   = reg;
+                Cells[ic]->PartID= 0;
+                Cells[ic]->V.Resize (nv);
+                for (int j=0; j<nv; ++j)
+                {
+                    size_t nt = nodetags[t][e*nv+j];
+                    int    iv = _node2vert[nt];
+                    Share sha = {Cells[ic],static_cast<size_t>(j)};
+                    Cells[ic]->V[j] = Verts[iv];
+                    Verts[iv]->Shares.Push (sha);
+                }
+            }
+        }
+    }
+}
+
+inline void Unstructured::ReadBryTags ()
+{
+    // clear previous tagged cells
+    TgdCells.Resize (0);
+
+    if (NDim==2)
+    {
+        // map: sorted pair of vertex indices => (cell, local edge)
+        std::map<std::pair<int,int>, std::pair<int,int> > emap;
+        for (size_t ic=0; ic<Cells.Size(); ++ic)
+        {
+            size_t nv = Cells[ic]->V.Size();
+            size_t ne = NVertsToNEdges2D[nv];
+            for (size_t f=0; f<ne; ++f)
+            {
+                int a = Cells[ic]->V[NVertsToEdge2D[nv][f][0]]->ID;
+                int b = Cells[ic]->V[NVertsToEdge2D[nv][f][1]]->ID;
+                if (a>b) std::swap(a,b);
+                emap[std::make_pair(a,b)] = std::make_pair(static_cast<int>(ic),static_cast<int>(f));
+            }
+        }
+
+        for (size_t k=0; k<_seg_curve.size(); ++k)
+        {
+            if (_segtag[k]==0 || _seg_curve[k]<0) continue;
+            std::vector<int> types;
+            std::vector<std::vector<std::size_t> > etags, nodetags;
+            gmsh::model::mesh::getElements (types, etags, nodetags, 1, _seg_curve[k]);
+            for (size_t t=0; t<types.size(); ++t)
+            {
+                int nv = GmshNVerts (types[t]);
+                if (nv<2) continue;
+                size_t ne = etags[t].size();
+                for (size_t e=0; e<ne; ++e)
+                {
+                    int a = _node2vert[nodetags[t][e*nv  ]];
+                    int b = _node2vert[nodetags[t][e*nv+1]];
+                    if (a>b) std::swap(a,b);
+                    std::map<std::pair<int,int>, std::pair<int,int> >::iterator it = emap.find (std::make_pair(a,b));
+                    if (it==emap.end()) continue;
+                    Cells[it->second.first]->BryTags[it->second.second] = _segtag[k];
+                }
+            }
+        }
+    }
+    else // NDim==3
+    {
+        // map: sorted triple of vertex indices => (cell, local face)
+        std::map<std::array<int,3>, std::pair<int,int> > fmap;
+        for (size_t ic=0; ic<Cells.Size(); ++ic)
+        {
+            size_t nv = Cells[ic]->V.Size();
+            size_t nf = NVertsToNFaces3D[nv];
+            size_t npf= NVertsToNVertsPerFace3D[nv];
+            for (size_t f=0; f<nf; ++f)
+            {
+                std::array<int,3> key = {{-1,-1,-1}};
+                for (size_t q=0; q<npf; ++q)
+                    key[q] = Cells[ic]->V[NVertsToFace3D[nv][f][q]]->ID;
+                std::sort (key.begin(), key.end());
+                fmap[key] = std::make_pair(static_cast<int>(ic),static_cast<int>(f));
+            }
+        }
+
+        for (size_t k=0; k<_fac_surf.size(); ++k)
+        {
+            if (_factag[k]==0 || _fac_surf[k]<0) continue;
+            std::vector<int> types;
+            std::vector<std::vector<std::size_t> > etags, nodetags;
+            gmsh::model::mesh::getElements (types, etags, nodetags, 2, _fac_surf[k]);
+            for (size_t t=0; t<types.size(); ++t)
+            {
+                int nv = GmshNVerts (types[t]);
+                if (nv<3) continue;
+                size_t ne = etags[t].size();
+                for (size_t e=0; e<ne; ++e)
+                {
+                    std::array<int,3> key = {{ _node2vert[nodetags[t][e*nv  ]],
+                                               _node2vert[nodetags[t][e*nv+1]],
+                                               _node2vert[nodetags[t][e*nv+2]] }};
+                    std::sort (key.begin(), key.end());
+                    std::map<std::array<int,3>, std::pair<int,int> >::iterator it = fmap.find (key);
+                    if (it==fmap.end()) continue;
+                    Cells[it->second.first]->BryTags[it->second.second] = _factag[k];
+                }
+            }
+        }
+    }
+
+    // collect tagged cells
+    for (size_t ic=0; ic<Cells.Size(); ++ic)
+        if (Cells[ic]->BryTags.size()>0) TgdCells.Push (Cells[ic]);
 }
 
 inline void Unstructured::WritePLY (char const * FileKey, bool Blender)
@@ -618,62 +1032,52 @@ inline void Unstructured::WritePLY (char const * FileKey, bool Blender)
         oss << "msh = bpy.data.meshes.new('unstruct_poly')\n";
         oss << "obj = scn.objects.new(msh,'unstruct_poly')\n";
 
+        // points
+        oss << "pts = [";
+        for (size_t i=0; i<_ptag.size(); ++i)
+        {
+            oss << "[" << _pnts[i*3] << "," << _pnts[i*3+1] << "," << _pnts[i*3+2] << "]";
+            if (i==_ptag.size()-1) oss << "]\n";
+            else                   oss << ",\n       ";
+        }
+        oss << "\n";
+
+        // edges
+        oss << "edg = [";
         if (NDim==2)
         {
-            // points
-            oss << "pts = [";
-            for (int i=0; i<Tin.numberofpoints; ++i)
+            for (size_t i=0; i<_segL.size(); ++i)
             {
-                oss << "[" << Tin.pointlist[i*2];
-                oss << "," << Tin.pointlist[i*2+1] << ", 0.0]";
-                if (i==Tin.numberofpoints-1) oss << "]\n";
-                else                         oss << ",\n       ";
+                oss << "[" << _segL[i] << "," << _segR[i] << "]";
+                if (i==_segL.size()-1) oss << "]\n";
+                else                   oss << ",\n       ";
             }
-            oss << "\n";
-
-            // edges
-            oss << "edg = [";
-            for (int i=0; i<Tin.numberofsegments; ++i)
-            {
-                oss << "[" << Tin.segmentlist[i*2] << "," << Tin.segmentlist[i*2+1] << "]";
-                if (i==Tin.numberofsegments-1) oss << "]\n";
-                else                           oss << ",\n       ";
-            }
-            oss << "\n";
         }
         else
         {
-            // points
-            oss << "pts = [";
-            for (int i=0; i<Pin.numberofpoints; ++i)
+            bool first = true;
+            for (size_t i=0; i<_facpoly.size(); ++i)
             {
-                oss << "[" << Pin.pointlist[i*3];
-                oss << "," << Pin.pointlist[i*3+1];
-                oss << "," << Pin.pointlist[i*3+2] << "]";
-                if (i==Pin.numberofpoints-1) oss << "]\n";
-                else                         oss << ",\n       ";
-            }
-            oss << "\n";
-
-            // edges
-            oss << "edg = [";
-            for (int i=0; i<Pin.numberoffacets; ++i)
-            {
-                TetIO::facet * f = &Pin.facetlist[i];
-                for (int j=0; j<f->numberofpolygons; ++j)
+                for (size_t p=0; p<_facpoly[i].size(); ++p)
                 {
-                    TetIO::polygon * p  = &f->polygonlist[j];
-                    for (int k=1; k<p->numberofvertices; ++k)
+                    std::vector<int> const & poly = _facpoly[i][p];
+                    for (size_t k=1; k<poly.size(); ++k)
                     {
-                        oss << "[" << p->vertexlist[k-1] << "," << p->vertexlist[k] << "]";
-                        if (k==p->numberofvertices-1) oss << ",[" << p->vertexlist[k] << "," << p->vertexlist[0] << "]";
-                        if ((i==Pin.numberoffacets-1) && (j==f->numberofpolygons-1) && (k==p->numberofvertices-1)) oss << "]\n";
-                        else oss << ",\n       ";
+                        if (!first) oss << ",\n       ";
+                        oss << "[" << poly[k-1] << "," << poly[k] << "]";
+                        first = false;
+                    }
+                    if (poly.size()>1)
+                    {
+                        if (!first) oss << ",\n       ";
+                        oss << "[" << poly[poly.size()-1] << "," << poly[0] << "]";
+                        first = false;
                     }
                 }
             }
-            oss << "\n";
+            oss << "]\n";
         }
+        oss << "\n";
 
         // extend mesh
         oss << "msh.verts.extend(pts)\n";
@@ -689,12 +1093,12 @@ inline void Unstructured::WritePLY (char const * FileKey, bool Blender)
         // vertices and commands
         oss << "# vertices and commands\n";
         oss << "dat = []\n";
-        for (int i=0; i<Tin.numberofsegments; ++i)
+        for (size_t i=0; i<_segL.size(); ++i)
         {
-            int I = Tin.segmentlist[i*2];
-            int J = Tin.segmentlist[i*2+1];
-            oss << "dat.append((PH.MOVETO, (" << Tin.pointlist[I*2] << "," << Tin.pointlist[I*2+1] << ")))\n";
-            oss << "dat.append((PH.LINETO, (" << Tin.pointlist[J*2] << "," << Tin.pointlist[J*2+1] << ")))\n";
+            int I = _segL[i];
+            int J = _segR[i];
+            oss << "dat.append((PH.MOVETO, (" << _pnts[I*3] << "," << _pnts[I*3+1] << ")))\n";
+            oss << "dat.append((PH.LINETO, (" << _pnts[J*3] << "," << _pnts[J*3+1] << ")))\n";
         }
         oss << "\n";
 
@@ -703,26 +1107,22 @@ inline void Unstructured::WritePLY (char const * FileKey, bool Blender)
 
         // draw tags
         oss << "# draw tags\n";
-        for (int i=0; i<Tin.numberofpoints; ++i)
+        for (size_t i=0; i<_ptag.size(); ++i)
         {
-            int pt_tag = Tin.pointmarkerlist[i];
-            if (pt_tag<0) oss << "ax.text(" << Tin.pointlist[i*2] << "," << Tin.pointlist[i*2+1] << ", " << pt_tag << ", ha='center', va='center', fontsize=14, backgroundcolor=lyellow)\n";
+            if (_ptag[i]<0) oss << "ax.text(" << _pnts[i*3] << "," << _pnts[i*3+1] << ", " << _ptag[i] << ", ha='center', va='center', fontsize=14, backgroundcolor=lyellow)\n";
         }
-        for (int i=0; i<Tin.numberofsegments; ++i)
+        for (size_t i=0; i<_segL.size(); ++i)
         {
-            int edge_tag = Tin.segmentmarkerlist[i];
-            if (edge_tag<0)
-            {
-                int    I  = Tin.segmentlist[i*2];
-                int    J  = Tin.segmentlist[i*2+1];
-                double x0 = Tin.pointlist[I*2];
-                double y0 = Tin.pointlist[I*2+1];
-                double x1 = Tin.pointlist[J*2];
-                double y1 = Tin.pointlist[J*2+1];
-                double xm = (x0+x1)/2.0;
-                double ym = (y0+y1)/2.0;
-                oss << "ax.text(" << xm << "," << ym << ", " << edge_tag << ", ha='center', va='center', fontsize=14, backgroundcolor=pink)\n";
-            }
+            if (_segtag[i]>=0) continue;
+            int    I  = _segL[i];
+            int    J  = _segR[i];
+            double x0 = _pnts[I*3];
+            double y0 = _pnts[I*3+1];
+            double x1 = _pnts[J*3];
+            double y1 = _pnts[J*3+1];
+            double xm = (x0+x1)/2.0;
+            double ym = (y0+y1)/2.0;
+            oss << "ax.text(" << xm << "," << ym << ", " << _segtag[i] << ", ha='center', va='center', fontsize=14, backgroundcolor=pink)\n";
         }
         oss << "\n";
 
@@ -759,82 +1159,37 @@ inline void Unstructured::GenBox (bool O2, double MaxVolume, double Lx, double L
     Generate (O2);
 }
 
-inline bool Unstructured::IsSet () const
-{
-    if (NDim==2)
-    {
-        bool hol_ok = (Tin.numberofholes>0 ? _lst_hol_set : true);
-        return (_lst_reg_set && hol_ok && _lst_pnt_set && _lst_seg_set);
-    }
-    if (NDim==3)
-    {
-        bool hol_ok = (Pin.numberofholes>0 ? _lst_hol_set : true);
-        return (_lst_reg_set && hol_ok && _lst_pnt_set && _lst_fac_set);
-    }
-    return false;
-}
-
 inline void Unstructured::Delaunay (Array<double> const & X, Array<double> const & Y, int Tag)
 {
     // check
     if (NDim==3)            throw new Fatal("Unstructured::Delaunay: This method is only available for 2D");
     if (X.Size()!=Y.Size()) throw new Fatal("Unstructured::Delaunay: Size of X and Y arrays must be equal (%d!=%d)",X.Size(),Y.Size());
 
-    // erase previous PSLG
-    TriDeallocateAll (Tin);
+    // points
+    size_t n = X.Size();
+    std::vector<double> pts (n*3, 0.0);
+    for (size_t i=0; i<n; ++i) { pts[i*3]=X[i]; pts[i*3+1]=Y[i]; }
 
-    // allocate only the pointlist array inside Triangle's IO structure
-    size_t npoints = X.Size();
-	Tin.pointlist      = (double*)malloc(npoints*2*sizeof(double));
-	Tin.numberofpoints = npoints;
+    // convex hull
+    std::vector<int> hull;
+    ConvexHull2D (pts, hull);
+    if (hull.size()<3) throw new Fatal("Unstructured::Delaunay: Could not build a convex hull");
 
-    // set points
-    for (size_t i=0; i<npoints; ++i)
+    // set up the geometry and generate
+    Set (n, hull.size(), 1, 0);
+    std::vector<bool> on_hull (n, false);
+    for (size_t i=0; i<hull.size(); ++i) on_hull[hull[i]] = true;
+    for (size_t i=0; i<n; ++i)
     {
-        Tin.pointlist[0+i*2] = X[i];
-        Tin.pointlist[1+i*2] = Y[i];
+        SetPnt (i, 0, X[i], Y[i], 0.0);
+        if (!on_hull[i]) _embed_pts.push_back (static_cast<int>(i));
     }
-
-    // triangulate
-    TriIO tou;
-    TriSetAllToNull (tou);
-    triangulate ("Qz", &Tin, &tou, NULL); // Quiet, zero-based
-
-    // verts
-    Verts.Resize (tou.numberofpoints);
-    for (size_t i=0; i<Verts.Size(); ++i)
-    {
-        Verts[i]      = new Vertex;
-        Verts[i]->ID  = i;
-        Verts[i]->Tag = 0;
-        Verts[i]->C   = tou.pointlist[i*2], tou.pointlist[i*2+1], 0.0;
-    }
-
-    // cells
-    Cells.Resize (tou.numberoftriangles);
-    for (size_t i=0; i<Cells.Size(); ++i)
-    {
-        Cells[i]      = new Cell;
-        Cells[i]->ID  = i;
-        Cells[i]->Tag = Tag;
-        Cells[i]->V.Resize (tou.numberofcorners);
-        for (size_t j=0; j<Cells[i]->V.Size(); ++j)
-        {
-            Share sha = {Cells[i],j};
-            Cells[i]->V[j] = Verts[tou.trianglelist[i*tou.numberofcorners+FEM2TriPoint[j]]];
-            Cells[i]->V[j]->Shares.Push (sha);
-        }
-    }
-
-    // clean up
-    /* After triangulate (with -p switch), tou.regionlist gets the content of Tin.regionlist and
-     * tou.holelist gets the content of Tin.holelist. Thus, these output variables must be set
-     * to NULL in order to tell TriDeallocateAll to ignore them and do not double-free memory. */
-    //tou.regionlist      = NULL;
-    //tou.numberofregions = 0;
-    //tou.holelist        = NULL;
-    //tou.numberofholes   = 0;
-    TriDeallocateAll (tou);
+    for (size_t i=0; i<hull.size(); ++i) SetSeg (i, 0, hull[i], hull[(i+1)%hull.size()]);
+    double cx = 0.0, cy = 0.0;
+    for (size_t i=0; i<hull.size(); ++i) { cx += pts[hull[i]*3]; cy += pts[hull[i]*3+1]; }
+    cx /= hull.size(); cy /= hull.size();
+    SetReg (0, Tag, -1.0, cx, cy, 0.0);
+    Generate ();
 }
 
 inline void Unstructured::Delaunay (Array<double> const & X, Array<double> const & Y, Array<double> const & Z, int Tag)
@@ -845,79 +1200,34 @@ inline void Unstructured::Delaunay (Array<double> const & X, Array<double> const
     if (Z.Size()!=Y.Size()) throw new Fatal("Unstructured::Delaunay: Size of Z and Y arrays must be equal (%d!=%d)",Z.Size(),Y.Size());
 
     // points
-    Pin.deinitialize();
-    Pin.initialize();
-    size_t NPoints = X.Size();
-    Pin.firstnumber     = 0;
-    Pin.numberofpoints  = NPoints;
-    Pin.pointlist       = new double [NPoints*3];
-    Pin.pointmarkerlist = new int [NPoints];
+    size_t n = X.Size();
+    std::vector<double> pts (n*3, 0.0);
+    for (size_t i=0; i<n; ++i) { pts[i*3]=X[i]; pts[i*3+1]=Y[i]; pts[i*3+2]=Z[i]; }
 
-    for (size_t i=0; i<X.Size(); ++i)
+    // convex hull
+    std::vector<std::array<int,3> > faces;
+    ConvexHull3D (pts, faces);
+    if (faces.size()<4) throw new Fatal("Unstructured::Delaunay: Could not build a convex hull");
+
+    // set up the geometry and generate
+    Set (n, faces.size(), 1, 0);
+    std::vector<bool> on_hull (n, false);
+    for (size_t i=0; i<faces.size(); ++i)
+        on_hull[faces[i][0]] = on_hull[faces[i][1]] = on_hull[faces[i][2]] = true;
+    for (size_t i=0; i<n; ++i)
     {
-        Pin.pointlist[3*i  ] = X[i];
-        Pin.pointlist[3*i+1] = Y[i];
-        Pin.pointlist[3*i+2] = Z[i];
+        SetPnt (i, 0, X[i], Y[i], Z[i]);
+        if (!on_hull[i]) _embed_pts.push_back (static_cast<int>(i));
     }
-
-    TetIO pou;
-    tetrahedralize ((char*)"Qz", &Pin, &pou);
-
-    // verts
-    Verts.Resize (pou.numberofpoints);
-    for (size_t i=0; i<Verts.Size(); ++i)
+    for (size_t i=0; i<faces.size(); ++i)
     {
-        Verts[i]      = new Vertex;
-        Verts[i]->ID  = i;
-        Verts[i]->Tag = 0;
-        Verts[i]->C   = pou.pointlist[i*3], pou.pointlist[i*3+1], pou.pointlist[i*3+2];
-
-        /* pou.pointmarkerlist[ipoint] will be equal to:
-         * == faceTag (<0) => on face with tag <<<<<<<<<<<<<<<<<< REMOVED
-         * == 0            => internal vertex (not on boundary)
-         * == 1            => on boundary                   */
-        int mark = pou.pointmarkerlist[i];
-        if (mark<0)
-        {
-            Verts[i]->Tag = mark;
-            TgdVerts.Push (Verts[i]);
-        }
+        SetFac (i, 0, Array<int>(faces[i][0], faces[i][1], faces[i][2]));
     }
-
-    // cells
-    Cells.Resize (pou.numberoftetrahedra);
-    for (size_t i=0; i<Cells.Size(); ++i)
-    {
-        Cells[i]      = new Cell;
-        Cells[i]->ID  = i;
-        //Cells[i]->Tag = pou.tetrahedronattributelist[i*pou.numberoftetrahedronattributes];
-        Cells[i]->Tag = Tag-i;
-        Cells[i]->V.Resize (pou.numberofcorners);
-        for (size_t j=0; j<Cells[i]->V.Size(); ++j)
-        {
-            Share sha = {Cells[i],j};
-            Cells[i]->V[j] = Verts[pou.tetrahedronlist[i*pou.numberofcorners+FEM2TetPoint[j]]];
-            Cells[i]->V[j]->Shares.Push (sha);
-        }
-    }
-
-    // face tags
-    for (std::map<int,tetgenio::facemarkers>::const_iterator p=pou.tetfacemarkers.begin(); p!=pou.tetfacemarkers.end(); ++p)
-    {
-        int  icell       = p->first;
-        bool has_bry_tag = false;
-        for (size_t j=0; j<4; ++j)
-        {
-            int face_tag = p->second.m[FEM2TetFace[j]];
-            //std::cout << icell << " " << j << " " << face_tag << "\n";
-            if (face_tag<0)
-            {
-                Cells[icell]->BryTags[j] = face_tag;
-                has_bry_tag              = true;
-            }
-        }
-        if (has_bry_tag) TgdCells.Push (Cells[icell]);
-    }
+    double cx=0.0, cy=0.0, cz=0.0;
+    for (size_t i=0; i<n; ++i) { cx += X[i]; cy += Y[i]; cz += Z[i]; }
+    cx /= n; cy /= n; cz /= n;
+    SetReg (0, Tag, -1.0, cx, cy, cz);
+    Generate ();
 }
 
 

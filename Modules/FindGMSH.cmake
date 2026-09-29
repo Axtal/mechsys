@@ -18,29 +18,40 @@
 # Fifth Floor, Boston, MA 02110-1301, USA                                           #
 #####################################################################################
 
-SET(TRIANGLE_INCLUDE_SEARCH_PATH
-  $ENV{MECHSYS_ROOT}/pkg/triangle1.6
-  $ENV{HOME}/pkg/triangle1.6
+# Gmsh SDKs installed by MechSys under <root>/pkg/gmsh-* (built by the install script)
+SET(_gmsh_roots
+  "$ENV{MECHSYS_ROOT}/pkg/gmsh-4.15.2"
+  "$ENV{HOME}/pkg/gmsh-4.15.2")
+FILE(GLOB _gmsh_glob_roots
+  "$ENV{MECHSYS_ROOT}/pkg/gmsh-*"
+  "$ENV{HOME}/pkg/gmsh-*")
+LIST(SORT   _gmsh_glob_roots)
+LIST(REVERSE _gmsh_glob_roots) # newest version first
+LIST(APPEND _gmsh_roots ${_gmsh_glob_roots})
+
+SET(GMSH_INCLUDE_SEARCH_PATH
   /usr/include
   /usr/local/include)
-
-SET(TRIANGLE_LIBRARY_SEARCH_PATH
-  $ENV{MECHSYS_ROOT}/pkg/triangle1.6
-  $ENV{HOME}/pkg/triangle1.6
+SET(GMSH_LIBRARY_SEARCH_PATH
   /usr/lib
+  /usr/lib/x86_64-linux-gnu
   /usr/local/lib)
+FOREACH(_root ${_gmsh_roots})
+  LIST(APPEND GMSH_INCLUDE_SEARCH_PATH "${_root}/include" "${_root}/usr/include")
+  LIST(APPEND GMSH_LIBRARY_SEARCH_PATH "${_root}/lib"     "${_root}/usr/lib/x86_64-linux-gnu")
+ENDFOREACH(_root)
 
-FIND_PATH(TRIANGLE_TRIANGLE_H triangle.h ${TRIANGLE_INCLUDE_SEARCH_PATH})
-FIND_LIBRARY(TRIANGLE_TRIANGLE NAMES triangle PATHS ${TRIANGLE_LIBRARY_SEARCH_PATH})
+FIND_PATH(GMSH_GMSH_H gmsh.h ${GMSH_INCLUDE_SEARCH_PATH})
+FIND_LIBRARY(GMSH_GMSH NAMES gmsh PATHS ${GMSH_LIBRARY_SEARCH_PATH} PATH_SUFFIXES x86_64-linux-gnu)
 
-SET(TRIANGLE_FOUND 1)
-FOREACH(var TRIANGLE_TRIANGLE_H TRIANGLE_TRIANGLE)
+SET(GMSH_FOUND 1)
+FOREACH(var GMSH_GMSH_H GMSH_GMSH)
   IF(NOT ${var})
-	SET(TRIANGLE_FOUND 0)
+	SET(GMSH_FOUND 0)
   ENDIF(NOT ${var})
 ENDFOREACH(var)
 
-IF(TRIANGLE_FOUND)
-  SET(TRIANGLE_INCLUDE_DIRS ${TRIANGLE_TRIANGLE_H})
-  SET(TRIANGLE_LIBRARIES    ${TRIANGLE_TRIANGLE})
-ENDIF(TRIANGLE_FOUND)
+IF(GMSH_FOUND)
+  SET(GMSH_INCLUDE_DIRS ${GMSH_GMSH_H})
+  SET(GMSH_LIBRARIES    ${GMSH_GMSH})
+ENDIF(GMSH_FOUND)

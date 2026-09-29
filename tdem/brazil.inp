@@ -1,6 +1,6 @@
 2             RenderVideo?
-60            n_divisions;        
-5.0           thickness;          
+100            n_divisions;        
+2.0           thickness;          
 100.0          radius;
 1.0e5         Kn;                 
 1.0e5         Kt;                 

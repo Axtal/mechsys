@@ -15,7 +15,8 @@ sudo apt-get install \
     cmake opencl-headers ocl-icd-opencl-dev \
     nvidia-cuda-dev \
     nvidia-cuda-toolkit \
-    libblas-dev liblapack-dev 
+    libblas-dev liblapack-dev \
+    libgmsh-dev
     #libhdf5-serial-dev
     #python-tk python-numpy python-scipy python-matplotlib \
     #libvtk6-dev \

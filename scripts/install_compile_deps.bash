@@ -70,8 +70,7 @@ fi
 test -d $MECHSYS_ROOT/pkg || mkdir $MECHSYS_ROOT/pkg
 
 VER_BLITZ=0.9
-VER_TRIANGLE=1.6
-VER_TETGEN=1.4.3
+VER_GMSH=4.15.2
 #VER_VORO=0.3.1
 VER_VORO=0.4.5
 VER_IGRAPH=0.8.2
@@ -100,6 +99,7 @@ download_and_compile() {
     EXTRA_CONF=""
     EXTRA_CMD=""
     CONF_PRMS=""
+    CMAKE_PRMS=""
     IS_SVN=0
     DO_PATCH=0
     DO_CONF=0
@@ -116,15 +116,15 @@ download_and_compile() {
             DO_CONF=1
             DO_PATCH=1
             ;;
-        triangle)
-            PKG=triangle$VER_TRIANGLE
+        gmsh)
+            # Build the Gmsh shared library (libgmsh.so) from source into pkg
+            PKG=gmsh-$VER_GMSH-source
+            EXT=tgz
             LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
-            DO_PATCH=1
-            ;;
-        tetgen)
-            PKG=tetgen$VER_TETGEN
-            LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
-            DO_PATCH=1
+            DO_CMAKECONF=1
+            CMAKE_PRMS="-DCMAKE_INSTALL_PREFIX=$MECHSYS_ROOT/pkg/gmsh-$VER_GMSH -DDEFAULT=0 -DENABLE_MESH=1 -DENABLE_PARSER=1 -DENABLE_BUILD_SHARED=1 -DENABLE_BUILD_LIB=1 -DENABLE_EIGEN=0 -DENABLE_BLAS_LAPACK=1 -DENABLE_GMP=0 -DENABLE_OPENMP=0 -DENABLE_OCC=0"
+            DO_MAKE=1
+            EXTRA_CMD="make install"
             ;;
         voro)
             PKG=voro++-$VER_VORO
@@ -302,7 +302,7 @@ download_and_compile() {
         cd ..
         mkdir $PKG-build
         cd $PKG-build
-        cmake ../$PKG_DIR 2> /dev/null
+        cmake ../$PKG_DIR $CMAKE_PRMS 2> /dev/null
         #cd ../$PKG_DIR
     fi
 
@@ -331,8 +331,7 @@ download_and_compile() {
 }
 
 download_and_compile blitz
-download_and_compile triangle
-download_and_compile tetgen
+download_and_compile gmsh
 download_and_compile voro
 download_and_compile igraph
 #download_and_compile soplex
