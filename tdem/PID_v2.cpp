@@ -9,8 +9,6 @@
 
 using std::cout;
 
-namespace
-{
 
 struct PIDController
 {
@@ -150,14 +148,13 @@ void Report(DEM::Domain & dom, void * userData)
     if (data.renderVideo) dom.WriteXDMF("pid");
 }
 
+
 template <typename T>
 void ReadParameter(std::ifstream & input, T & value, char const * name)
 {
     if (!(input >> value)) throw new Fatal("PID_v2: missing or invalid parameter <%s>", name);
     input.ignore(200, '\n');
 }
-
-} // namespace
 
 int main(int argc, char ** argv) try
 {
@@ -176,32 +173,30 @@ int main(int argc, char ** argv) try
     double radius, rRatio, dt, dtOut, lx, ly, lz, density;
     double pressure, isotropicEnd, axialVelocity, shearEnd, pidKp, pidKi, pidKd;
     size_t renderVideo, seed;
-
-    ReadParameter(input, verlet,         "verlet");
-    ReadParameter(input, renderVideo,     "renderVideo");
-    ReadParameter(input, fraction,        "fraction");
-    ReadParameter(input, kn,              "Kn");
-    ReadParameter(input, kt,              "Kt");
-    ReadParameter(input, gn,              "Gn");
-    ReadParameter(input, gt,              "Gt");
-    ReadParameter(input, friction,        "Mu");
-    ReadParameter(input, radius,          "R");
-    ReadParameter(input, rRatio,          "RRatio");
-    ReadParameter(input, seed,            "seed");
-    ReadParameter(input, dt,              "dt");
-    ReadParameter(input, dtOut,           "dtOut");
-    ReadParameter(input, lx,              "Lx");
-    ReadParameter(input, ly,              "Ly");
-    ReadParameter(input, lz,              "Lz");
-    ReadParameter(input, density,         "rho");
-    ReadParameter(input, pressure,        "pressure");
-    ReadParameter(input, isotropicEnd,    "isotropicEnd");
-    ReadParameter(input, axialVelocity,   "axialVelocity");
-    ReadParameter(input, shearEnd,        "shearEnd");
-    ReadParameter(input, pidKp,           "pidKp");
-    ReadParameter(input, pidKi,           "pidKi");
-    ReadParameter(input, pidKd,           "pidKd");
-
+    ReadParameter(input, verlet, "verlet");
+    ReadParameter(input, renderVideo, "renderVideo");
+    ReadParameter(input, fraction, "fraction");
+    ReadParameter(input, kn, "Kn");
+    ReadParameter(input, kt, "Kt");
+    ReadParameter(input, gn, "Gn");
+    ReadParameter(input, gt, "Gt");
+    ReadParameter(input, friction, "Mu");
+    ReadParameter(input, radius, "R");
+    ReadParameter(input, rRatio, "RRatio");
+    ReadParameter(input, seed, "seed");
+    ReadParameter(input, dt, "dt");
+    ReadParameter(input, dtOut, "dtOut");
+    ReadParameter(input, lx, "Lx");
+    ReadParameter(input, ly, "Ly");
+    ReadParameter(input, lz, "Lz");
+    ReadParameter(input, density, "rho");
+    ReadParameter(input, pressure, "pressure");
+    ReadParameter(input, isotropicEnd, "isotropicEnd");
+    ReadParameter(input, axialVelocity, "axialVelocity");
+    ReadParameter(input, shearEnd, "shearEnd");
+    ReadParameter(input, pidKp, "pidKp");
+    ReadParameter(input, pidKi, "pidKi");
+    ReadParameter(input, pidKd, "pidKd");
 
     UserData data;
     data.renderVideo   = (renderVideo != 0);
@@ -226,8 +221,6 @@ int main(int argc, char ** argv) try
 
     dom.GenBoundingBox(-2, 0.02*radius, 1.3, false);
 
-    // This is a non-cohesive, non-rolling triaxial model. Those disabled
-    // properties are fixed here instead of being exposed as unused inputs.
     Dict properties;
     properties.Set(-1, "Kn Kt Gn Gt Mu Beta Eta Bn Bt Bm Eps",
                    kn, kt, gn, gt, friction, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
@@ -240,7 +233,7 @@ int main(int argc, char ** argv) try
 
     for (size_t i = 0; i < dom.Particles.Size(); ++i) dom.Particles[i]->Initialize(i);
 
-    cout << "\n--- Phase 1: isotropic compression ---\n";
+    cout << "Phase 1: isotropic compression.\n";
     data.shearStage = false;
     for (size_t axis = 0; axis < 3; ++axis)
     {
@@ -263,7 +256,7 @@ int main(int argc, char ** argv) try
               isotropicKey.CStr(), data.renderVideo, nproc);
     dom.Save(isotropicKey.CStr());
 
-    cout << "\n--- Phase 2: constant-velocity triaxial shear ---\n";
+    cout << "Phase 2: constant-velocity triaxial shear.\n";
     data.shearStage = true;
     for (size_t axis = 0; axis < 3; ++axis)
     {
@@ -286,7 +279,7 @@ int main(int argc, char ** argv) try
               shearKey.CStr(), data.renderVideo, nproc);
     dom.Save(shearKey.CStr());
 
-    cout << "\nPID_v2 finished successfully.\n";
+    cout << "PID_v2 finished successfully.\n";
     return 0;
 }
 MECHSYS_CATCH

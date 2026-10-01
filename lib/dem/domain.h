@@ -640,7 +640,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         omp_unset_lock(&Interactons[i]->P2->lck);
     }
 
-    if (MostlySpheres) CalcForceSphere();
+    if (MostlySpheres && ContactLaw==0) CalcForceSphere();
 
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t i = 0; i < Particles.Size(); i++) {
@@ -859,7 +859,7 @@ if (UseVelocityVerlet){
         omp_unset_lock(&Interactons[i]->P2->lck);
         }
 
-        if (MostlySpheres) CalcForceSphere();
+        if (MostlySpheres && ContactLaw==0) CalcForceSphere();
 
         // 3b. Reset per-thread max displacement before measuring
       //  #pragma omp parallel for schedule(static) num_threads(Nproc)
@@ -934,7 +934,7 @@ if (UseVelocityVerlet){
 
         }
 
-        if(MostlySpheres) CalcForceSphere();
+        if(MostlySpheres && ContactLaw==0) CalcForceSphere();
         #pragma omp parallel for schedule(static) num_threads(Nproc)
         for (size_t i=0;i<Nproc;i++)
         {
@@ -2679,7 +2679,7 @@ inline void Domain::ResetContacts()
             size_t hash = HashFunction(n,m);
             if (Particles[n]->Verts.Size()==1 && Particles[m]->Verts.Size()==1)
             {
-                if (!MostlySpheres) PairtoCInt[hash] = new CInteractonSphere(Particles[n],Particles[m],ContactLaw);
+                if (!MostlySpheres || ContactLaw==1) PairtoCInt[hash] = new CInteractonSphere(Particles[n],Particles[m],ContactLaw);
             }
             else
             {
@@ -3506,12 +3506,12 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first,bool updateState)
                 DIcu.Dmax1  = r1;
                 DIcu.Dmax2  = r2;
                 DIcu.Idx    = ii;
-                Vec3_t Ft   = OrthoSys::O;
-                if (norm(Cis->Fdvv)>0.0) Ft = Cis->Fdvv*Cis->Kt;
-                DIcu.Ft     = make_real3(Ft(0),Ft(1),Ft(2));
-                Ft          = OrthoSys::O;
-                if (norm(Cis->Fdr) >0.0) Ft = Cis->Fdr*Cis->Kt*Cis->beta;
-                DIcu.Fr     = make_real3(Ft(0),Ft(1),Ft(2));
+                double tangentialStiffness = Cis->Kt;
+                if (ContactLaw==1) tangentialStiffness *= sqrt(std::max(0.0,Cis->PrevDelta));
+                Vec3_t Ft = Cis->Fdvv*tangentialStiffness;
+                DIcu.Ft = make_real3(Ft(0),Ft(1),Ft(2));
+                Ft = ContactLaw==1 ? Cis->Fdr : Cis->Fdr*Cis->Kt*Cis->beta;
+                DIcu.Fr = make_real3(Ft(0),Ft(1),Ft(2));
                 DIcu.PrevDelta = Cis->PrevDelta;
                 DIcu.InContact = Cis->InContact;
 
@@ -3671,18 +3671,29 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t hash = HashFunction(i1,i2);
             DEM::CInteracton * Ci = PairtoCInt[hash];
             DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
-            Cis->Fdvv(0) = hDynInteractonsVV[ivv].Ft.x/Cis->Kt;
-            Cis->Fdvv(1) = hDynInteractonsVV[ivv].Ft.y/Cis->Kt;
-            Cis->Fdvv(2) = hDynInteractonsVV[ivv].Ft.z/Cis->Kt;
-            Cis->Fdr (0) = hDynInteractonsVV[ivv].Fr.x/Cis->Kt;
-            Cis->Fdr (1) = hDynInteractonsVV[ivv].Fr.y/Cis->Kt;
-            Cis->Fdr (2) = hDynInteractonsVV[ivv].Fr.z/Cis->Kt;
+            double tangentialStiffness = Cis->Kt;
+            if (ContactLaw==1)
+                tangentialStiffness *= sqrt(std::max(0.0,static_cast<double>(hDynInteractonsVV[ivv].PrevDelta)));
+            if (tangentialStiffness>0.0)
+            {
+                Cis->Fdvv(0) = hDynInteractonsVV[ivv].Ft.x/tangentialStiffness;
+                Cis->Fdvv(1) = hDynInteractonsVV[ivv].Ft.y/tangentialStiffness;
+                Cis->Fdvv(2) = hDynInteractonsVV[ivv].Ft.z/tangentialStiffness;
+            }
+            else Cis->Fdvv = OrthoSys::O;
+            if (ContactLaw==1)
+                Cis->Fdr = Vec3_t(hDynInteractonsVV[ivv].Fr.x,
+                                  hDynInteractonsVV[ivv].Fr.y,
+                                  hDynInteractonsVV[ivv].Fr.z);
+            else
+            {
+                Cis->Fdr(0) = hDynInteractonsVV[ivv].Fr.x/Cis->Kt;
+                Cis->Fdr(1) = hDynInteractonsVV[ivv].Fr.y/Cis->Kt;
+                Cis->Fdr(2) = hDynInteractonsVV[ivv].Fr.z/Cis->Kt;
+                if (fabs(Cis->beta)>0.0) Cis->Fdr/=Cis->beta;
+            }
             Cis->PrevDelta = hDynInteractonsVV[ivv].PrevDelta;
             Cis->InContact = hDynInteractonsVV[ivv].InContact;
-            if (fabs(Cis->beta)>0.0)
-            {
-                Cis->Fdr/=Cis->beta;
-            }
         }
 
         #pragma omp parallel for schedule(static) num_threads(Nc)
@@ -3752,7 +3763,7 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             Ci->Fther(0) = hComInteractons[ii].Fther.x;
             Ci->Fther(1) = hComInteractons[ii].Fther.y;
             Ci->Fther(2) = hComInteractons[ii].Fther.z;
-            if (ContactLaw == 0
+            if ((ContactLaw == 0 || ContactLaw == 1)
                 && Ci->P1->Verts.Size() == 1
                 && Ci->P2->Verts.Size() == 1)
             {

@@ -175,21 +175,15 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
         real3 vrel = (DPar[i1].v + cross(t1, x1)) - (DPar[i2].v + cross(t2, x2));
         real3 vt   = vrel - dotreal3(n, vrel) * n;
 
-        // elastic + viscous
         real3 Fn_elastic = Int[id].Kn * delta * n;
-        real3 Fn_dashpot    = Int[id].Gn * dotreal3(n, vrel) * n;
-        real3 Fn_total   = Fn_elastic + Fn_dashpot;
-
-        // always apply the tensile cutoff to the total normal force
-        if (dotreal3(Fn_total, n) < 0.0) {
+        real3 Fn_dashpot = Int[id].Gn * dotreal3(n, vrel) * n;
+        real3 Fn_total = Fn_elastic + Fn_dashpot;
+        if (demaux[0].sphereTensileCutoff && dotreal3(Fn_total, n) < 0.0) {
             Fn_total = make_real3(0.0, 0.0, 0.0);
             Fn_dashpot = -1.0 * Fn_elastic;
         }
-
-        // total normal force (now includes dashpot)
         DIntVV[ic].Fn = Fn_total;
 
-        // increment tangential displacement
         real dtTangential = demaux[0].dt;
         if (demaux[0].sphereFirstContactCorrection && newContact && prevDelta < 0.0 && delta > prevDelta) {
             real activationFraction = delta/(delta - prevDelta);
@@ -200,29 +194,41 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
         DIntVV[ic].Ft = DIntVV[ic].Ft + (Int[id].Kt * dtTangential) * vt;
         DIntVV[ic].Ft = DIntVV[ic].Ft - dotreal3(DIntVV[ic].Ft, n) * n;
 
-        real3 Ft_elastic_trial = DIntVV[ic].Ft;          // trial elastic tangential force
+        real3 Ft_elastic_trial = DIntVV[ic].Ft;
         real3 Ft_elastic = Ft_elastic_trial;
-        real3 Ft_dashpot = Int[id].Gt * vt;              // tangential dashpot force
+        real3 Ft_dashpot = Int[id].Gt * vt;
         real3 Ft_total = Ft_elastic + Ft_dashpot;
-
-        // The Coulomb limit is based on the total normal force and limits the
-        // total tangential force.  Keep the dashpot contribution in the
-        // capped force and update only the stored elastic history.
-        real friction_limit = Int[id].Mu * norm(Fn_total);
-        real ftTotalNorm = norm(Ft_total);
-        if (ftTotalNorm > friction_limit) {
-            real3 tan = Ft_total / ftTotalNorm;
-            real3 Ft_cap = friction_limit * tan;
-            Ft_elastic = Ft_cap - Ft_dashpot;
-            DIntVV[ic].Ft = Ft_elastic;
-            Ft_total = Ft_cap;
-
-            // The force history is Kt times the tangential displacement, so
-            // the plastic displacement is the trial-to-capped history change.
-            if (Int[id].Kt > 0.0) {
-                real3 plastic_disp = (Ft_elastic_trial - Ft_elastic) / Int[id].Kt;
-                CInt[id].dEfric = friction_limit * norm(plastic_disp);
+        size_t coulombMode = demaux[0].sphereCoulombMode;
+        if (coulombMode > 2) coulombMode = 0;
+        real friction_limit = Int[id].Mu
+            * (coulombMode == 2 ? norm(Fn_total) : norm(Fn_elastic));
+        bool sliding = false;
+        bool tangentialDashpotApplied = true;
+        if (coulombMode == 0 || coulombMode == 1) {
+            real ftElasticNorm = norm(Ft_elastic);
+            if (ftElasticNorm > friction_limit) {
+                sliding = true;
+                Ft_elastic = friction_limit * Ft_elastic / ftElasticNorm;
+                DIntVV[ic].Ft = Ft_elastic;
+                if (coulombMode == 1) {
+                    Ft_dashpot = make_real3(0.0, 0.0, 0.0);
+                    tangentialDashpotApplied = false;
+                }
             }
+            Ft_total = Ft_elastic + Ft_dashpot;
+        } else {
+            real ftTotalNorm = norm(Ft_total);
+            if (ftTotalNorm > friction_limit) {
+                sliding = true;
+                real3 Ft_cap = friction_limit * Ft_total / ftTotalNorm;
+                Ft_elastic = Ft_cap - Ft_dashpot;
+                DIntVV[ic].Ft = Ft_elastic;
+                Ft_total = Ft_cap;
+            }
+        }
+        if (sliding && Int[id].Kt > 0.0) {
+            real3 plastic_disp = (Ft_elastic_trial - Ft_elastic) / Int[id].Kt;
+            CInt[id].dEfric = friction_limit * norm(plastic_disp);
         }
 
         CInt[id].Epot = 0.5 * Int[id].Kn * delta * delta
@@ -230,7 +236,8 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
                            ? 0.5 * dotreal3(Ft_elastic, Ft_elastic) / Int[id].Kt
                            : 0.0);
         CInt[id].dEvis = (Int[id].Gn * dotreal3(vrel - vt, vrel - vt)
-                          + Int[id].Gt * dotreal3(vt, vt)) * demaux[0].dt;
+                          + (tangentialDashpotApplied ? Int[id].Gt * dotreal3(vt, vt) : 0.0))
+                         * demaux[0].dt;
 
         real3 vr = r1 * r2 * cross((t1 - t2), n) / (r1 + r2);
         DIntVV[ic].Fr = DIntVV[ic].Fr + (Int[id].Beta * Int[id].Kt * demaux[0].dt) * vr;
@@ -238,8 +245,8 @@ __global__ void CalcForceVV(InteractonCU const * Int, ComInteractonCU * CInt, Dy
 
         real3 tan = DIntVV[ic].Fr;
         if (norm(tan) > 0.0) tan = tan / norm(tan);
-        if (norm(DIntVV[ic].Fr) > Int[id].Eta * Int[id].Mu * norm(DIntVV[ic].Fn)) {
-            DIntVV[ic].Fr = Int[id].Eta * Int[id].Mu * norm(DIntVV[ic].Fn) * tan;
+        if (norm(DIntVV[ic].Fr) > Int[id].Eta * Int[id].Mu * norm(Fn_elastic)) {
+            DIntVV[ic].Fr = Int[id].Eta * Int[id].Mu * norm(Fn_elastic) * tan;
         }
 
         // total normal and tangential contact force
@@ -296,7 +303,6 @@ __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CI
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic >= demaux[0].nvvint) return;
-
     size_t id = DIntVV[ic].Idx;
     size_t i1 = CInt [id].I1;
     size_t i2 = CInt [id].I2;
@@ -305,40 +311,51 @@ __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CI
     real3  xi = DPar [i1].x;
     real3  xf = DPar [i2].x;
     real3  Branch;
-
-    if (Int[id].BothFree) BranchVec(xf,xi,Branch,demaux[0].Per);
-    else Branch = xi-xf;
+    if (Int[id].BothFree) BranchVec(xf, xi, Branch, demaux[0].Per);
+    else Branch = xi - xf;
 
     real dist  = norm(Branch);
     real delta = r1 + r2 - dist;
 
-    DIntVV[ic].Fn = make_real3(0.0,0.0,0.0);
+    DIntVV[ic].Fn = make_real3(0.0, 0.0, 0.0);
     if (delta <= 0.0) {
         DIntVV[ic].Ft = make_real3(0.0, 0.0, 0.0);
         DIntVV[ic].InContact = false;
         DIntVV[ic].PrevDelta = delta;
     }
 
-    if (delta>0.0)
+    if (delta > 0.0)
     {
         bool newContact = !DIntVV[ic].InContact;
         real prevDelta = DIntVV[ic].PrevDelta;
         DIntVV[ic].InContact = true;
-        real3  n   = -1.0*Branch/dist;
-        real   d   = (r1*r1-r2*r2+dist*dist)/(2.0*dist);
-        real3  x1c = xi+d*n;
-        real3  x2c = xf-(dist-d)*n;
 
-        real3 t1,t2,x1,x2;
-        Rotation(DPar[i1].w,DPar[i1].Q,t1);
-        Rotation(DPar[i2].w,DPar[i2].Q,t2);
-        x1 = x1c- xi;
-        x2 = x2c- xf;
-        real3 vrel = (DPar[i1].v+cross(t1,x1))-(DPar[i2].v+cross(t2,x2));
-        real3 vt   = vrel - dotreal3(n,vrel)*n;
+        real3  n   = -1.0 * Branch / dist;
+        real   d   = (r1*r1 - r2*r2 + dist*dist) / (2.0 * dist);
+        real3  x1c = xi + d * n;
+        real3  x2c = xf - (dist - d) * n;
 
-        real sqrtdelta = sqrt(delta);
-        DIntVV[ic].Fn  = Int[id].Kn*sqrtdelta*delta*n;
+        real3 t1, t2, x1, x2;
+        Rotation(DPar[i1].w, DPar[i1].Q, t1);
+        Rotation(DPar[i2].w, DPar[i2].Q, t2);
+        x1 = x1c - xi;
+        x2 = x2c - xf;
+        real3 vrel = (DPar[i1].v + cross(t1, x1)) - (DPar[i2].v + cross(t2, x2));
+        real3 vt   = vrel - dotreal3(n, vrel) * n;
+
+        real sqrtDelta = sqrt(delta);
+        real tangentialStiffness = Int[id].Kt * sqrtDelta;
+        real normalDamping = Int[id].Gn * sqrt(sqrtDelta);
+        real tangentialDamping = Int[id].Gt * sqrt(sqrtDelta);
+        real3 Fn_elastic = Int[id].Kn * sqrtDelta * delta * n;
+        real3 Fn_dashpot = normalDamping * dotreal3(n, vrel) * n;
+        real3 Fn_total = Fn_elastic + Fn_dashpot;
+        if (demaux[0].sphereTensileCutoff && dotreal3(Fn_total, n) < 0.0) {
+            Fn_total = make_real3(0.0, 0.0, 0.0);
+            Fn_dashpot = -1.0 * Fn_elastic;
+        }
+        DIntVV[ic].Fn = Fn_total;
+
         real dtTangential = demaux[0].dt;
         if (demaux[0].sphereFirstContactCorrection && newContact && prevDelta < 0.0 && delta > prevDelta) {
             real activationFraction = delta/(delta - prevDelta);
@@ -346,59 +363,115 @@ __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CI
             if (activationFraction > 1.0) activationFraction = 1.0;
             dtTangential *= activationFraction;
         }
-        DIntVV[ic].Ft  = DIntVV[ic].Ft + (Int[id].Kt*sqrtdelta*dtTangential)*vt;
-        DIntVV[ic].Ft  = DIntVV[ic].Ft - dotreal3(DIntVV[ic].Ft,n)*n;
+        // The CPU stores tangential displacement; the device stores elastic force.
+        // Rescale the old force when Hertz stiffness changes with overlap.
+        if (prevDelta > 0.0 && Int[id].Kt > 0.0)
+            DIntVV[ic].Ft = (sqrtDelta / sqrt(prevDelta)) * DIntVV[ic].Ft;
+        else
+            DIntVV[ic].Ft = make_real3(0.0, 0.0, 0.0);
+        DIntVV[ic].Ft = DIntVV[ic].Ft + (tangentialStiffness * dtTangential) * vt;
+        DIntVV[ic].Ft = DIntVV[ic].Ft - dotreal3(DIntVV[ic].Ft, n) * n;
 
-        real3 tan = DIntVV[ic].Ft;
-        if (norm(tan)>0.0) tan = tan/norm(tan);
-        if (norm(DIntVV[ic].Ft)>Int[id].Mu*norm(DIntVV[ic].Fn))
-        {
-            DIntVV[ic].Ft = Int[id].Mu*norm(DIntVV[ic].Fn)*tan;
+        real3 Ft_elastic_trial = DIntVV[ic].Ft;
+        real3 Ft_elastic = Ft_elastic_trial;
+        real3 Ft_dashpot = tangentialDamping * vt;
+        real3 Ft_total = Ft_elastic + Ft_dashpot;
+        size_t coulombMode = demaux[0].sphereCoulombMode;
+        if (coulombMode > 2) coulombMode = 0;
+        real friction_limit = Int[id].Mu
+            * (coulombMode == 2 ? norm(Fn_total) : norm(Fn_elastic));
+        bool sliding = false;
+        bool tangentialDashpotApplied = true;
+        if (coulombMode == 0 || coulombMode == 1) {
+            real ftElasticNorm = norm(Ft_elastic);
+            if (ftElasticNorm > friction_limit) {
+                sliding = true;
+                Ft_elastic = friction_limit * Ft_elastic / ftElasticNorm;
+                DIntVV[ic].Ft = Ft_elastic;
+                if (coulombMode == 1) {
+                    Ft_dashpot = make_real3(0.0, 0.0, 0.0);
+                    tangentialDashpotApplied = false;
+                }
+            }
+            Ft_total = Ft_elastic + Ft_dashpot;
+        } else {
+            real ftTotalNorm = norm(Ft_total);
+            if (ftTotalNorm > friction_limit) {
+                sliding = true;
+                real3 Ft_cap = friction_limit * Ft_total / ftTotalNorm;
+                Ft_elastic = Ft_cap - Ft_dashpot;
+                DIntVV[ic].Ft = Ft_elastic;
+                Ft_total = Ft_cap;
+            }
+        }
+        if (sliding && tangentialStiffness > 0.0) {
+            real3 plastic_disp = (Ft_elastic_trial - Ft_elastic) / tangentialStiffness;
+            CInt[id].dEfric = friction_limit * norm(plastic_disp);
         }
 
-        real3 vr = r1*r2*cross((t1 - t2),n)/(r1+r2);
-        DIntVV[ic].Fr  = DIntVV[ic].Fr + (Int[id].Beta*Int[id].Kt*sqrtdelta*demaux[0].dt)*vr;
-        DIntVV[ic].Fr  = DIntVV[ic].Fr - dotreal3(DIntVV[ic].Fr,n)*n;
+        CInt[id].Epot = 0.4 * Int[id].Kn * delta * delta * sqrtDelta
+                        + (tangentialStiffness > 0.0
+                           ? 0.5 * dotreal3(Ft_elastic, Ft_elastic) / tangentialStiffness
+                           : 0.0);
+        CInt[id].dEvis = (normalDamping * dotreal3(vrel - vt, vrel - vt)
+                          + (tangentialDashpotApplied ? tangentialDamping * dotreal3(vt, vt) : 0.0))
+                         * demaux[0].dt;
 
-        tan = DIntVV[ic].Fr;
-        if (norm(tan)>0.0) tan = tan/norm(tan);
-        if (norm(DIntVV[ic].Fr)>Int[id].Eta*Int[id].Mu*norm(DIntVV[ic].Fn))
-        {
-            DIntVV[ic].Fr = Int[id].Eta*Int[id].Mu*norm(DIntVV[ic].Fn)*tan;
+        real3 vr = r1 * r2 * cross((t1 - t2), n) / (r1 + r2);
+        DIntVV[ic].Fr = DIntVV[ic].Fr + (Int[id].Beta * tangentialStiffness * demaux[0].dt) * vr;
+        DIntVV[ic].Fr = DIntVV[ic].Fr - dotreal3(DIntVV[ic].Fr, n) * n;
+
+        real3 tan = DIntVV[ic].Fr;
+        if (norm(tan) > 0.0) tan = tan / norm(tan);
+        if (norm(DIntVV[ic].Fr) > Int[id].Eta * Int[id].Mu * norm(Fn_elastic)) {
+            DIntVV[ic].Fr = Int[id].Eta * Int[id].Mu * norm(Fn_elastic) * tan;
         }
-        
-        DIntVV[ic].F = DIntVV[ic].Fn + DIntVV[ic].Ft + Int[id].Gn*sqrt(sqrtdelta)*dotreal3(n,vrel)*n + Int[id].Gt*sqrt(sqrtdelta)*vt;
 
-        real3 T1,T2,T, Tt;
-        Tt = cross (x1,DIntVV[ic].F) + r1*cross(n,DIntVV[ic].Fr);
+        // total normal and tangential contact force
+        DIntVV[ic].F = Fn_total + Ft_total;
+
+        real3 T1, T2, T, Tt;
+        Tt = cross(x1, DIntVV[ic].F) + r1 * cross(n, DIntVV[ic].Fr);
         real4 q;
-        Conjugate (DPar[i1].Q,q);
-        Rotation  (Tt,q,T);
-        T1 = -1.0*T;
-        Tt = cross (x2,DIntVV[ic].F) + r2*cross(n,DIntVV[ic].Fr);
-        Conjugate (DPar[i2].Q,q);
-        Rotation  (Tt,q,T);
-        T2 =      T;
+        Conjugate(DPar[i1].Q, q);
+        Rotation(Tt, q, T);
+        T1 = -1.0 * T;
+        Tt = cross(x2, DIntVV[ic].F) + r2 * cross(n, DIntVV[ic].Fr);
+        Conjugate(DPar[i2].Q, q);
+        Rotation(Tt, q, T);
+        T2 = T;
 
-        atomicAdd(&CInt[id].Fnnet.x, DIntVV[ic].Fn.x);
-        atomicAdd(&CInt[id].Fnnet.y, DIntVV[ic].Fn.y);
-        atomicAdd(&CInt[id].Fnnet.z, DIntVV[ic].Fn.z);
-        atomicAdd(&CInt[id].Ftnet.x, DIntVV[ic].Ft.x);
-        atomicAdd(&CInt[id].Ftnet.y, DIntVV[ic].Ft.y);
-        atomicAdd(&CInt[id].Ftnet.z, DIntVV[ic].Ft.z);
+        // accumulate ELASTIC into contact net for output
+        atomicAdd(&CInt[id].Fnnet.x, Fn_elastic.x);
+        atomicAdd(&CInt[id].Fnnet.y, Fn_elastic.y);
+        atomicAdd(&CInt[id].Fnnet.z, Fn_elastic.z);
+        atomicAdd(&CInt[id].Ftnet.x, Ft_elastic.x);
+        atomicAdd(&CInt[id].Ftnet.y, Ft_elastic.y);
+        atomicAdd(&CInt[id].Ftnet.z, Ft_elastic.z);
 
-        atomicAdd(&DPar[i1].F.x,-DIntVV[ic].F .x);
-        atomicAdd(&DPar[i1].F.y,-DIntVV[ic].F .y);
-        atomicAdd(&DPar[i1].F.z,-DIntVV[ic].F .z);
-        atomicAdd(&DPar[i2].F.x, DIntVV[ic].F .x);
-        atomicAdd(&DPar[i2].F.y, DIntVV[ic].F .y);
-        atomicAdd(&DPar[i2].F.z, DIntVV[ic].F .z);
-        atomicAdd(& Par[i1].T.x,            T1.x);
-        atomicAdd(& Par[i1].T.y,            T1.y);
-        atomicAdd(& Par[i1].T.z,            T1.z);
-        atomicAdd(& Par[i2].T.x,            T2.x);
-        atomicAdd(& Par[i2].T.y,            T2.y);
-        atomicAdd(& Par[i2].T.z,            T2.z);
+        // accumulate DASHPOT into contact dpot for output
+        atomicAdd(&CInt[id].Fndpot.x, Fn_dashpot.x);
+        atomicAdd(&CInt[id].Fndpot.y, Fn_dashpot.y);
+        atomicAdd(&CInt[id].Fndpot.z, Fn_dashpot.z);
+        atomicAdd(&CInt[id].Ftdpot.x, Ft_dashpot.x);
+        atomicAdd(&CInt[id].Ftdpot.y, Ft_dashpot.y);
+        atomicAdd(&CInt[id].Ftdpot.z, Ft_dashpot.z);
+
+
+        // ignore the Fthermostat component, only updated if there is a thermostat active that overloads this function
+
+        atomicAdd(&DPar[i1].F.x, -DIntVV[ic].F.x);
+        atomicAdd(&DPar[i1].F.y, -DIntVV[ic].F.y);
+        atomicAdd(&DPar[i1].F.z, -DIntVV[ic].F.z);
+        atomicAdd(&DPar[i2].F.x,  DIntVV[ic].F.x);
+        atomicAdd(&DPar[i2].F.y,  DIntVV[ic].F.y);
+        atomicAdd(&DPar[i2].F.z,  DIntVV[ic].F.z);
+        atomicAdd(&Par[i1].T.x, T1.x);
+        atomicAdd(&Par[i1].T.y, T1.y);
+        atomicAdd(&Par[i1].T.z, T1.z);
+        atomicAdd(&Par[i2].T.x, T2.x);
+        atomicAdd(&Par[i2].T.y, T2.y);
+        atomicAdd(&Par[i2].T.z, T2.z);
         DIntVV[ic].PrevDelta = delta;
     }
 }
@@ -666,6 +739,15 @@ __global__ void CalcForceFV(size_t const * Faces, size_t const * Facid, real3 co
     }
 }
 
+
+/// Set the velocity of a single particle directly on the device.
+/// Needed for prescribed-motion boundary conditions: MechSys's only host->device
+/// state path is the full re-upload, which also overwrites the accelerations, so
+/// a per-step velocity prescription requires this one-line kernel.
+__global__ void SetVelocity (DynParticleCU * DPar, size_t idx, real3 v)
+{
+    DPar[idx].v = v;
+}
 
 __global__ void VerletStep1(real3 * Verts, ParticleCU const * Par, DynParticleCU * DPar,
                             real3 const * A, dem_aux const * demaux)
