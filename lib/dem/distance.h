@@ -47,6 +47,23 @@ inline void BranchVecDis(Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Branch, 
     Branch += S;
 }
 
+/// Lees-Edwards branch vector: standard periodic wrapping plus shear offset in x.
+/// strain = accumulated shear strain gamma = gamma_dot * t
+inline void BranchVec (Vec3_t const & V0, Vec3_t const & V1, Vec3_t & Branch, Vec3_t const & Per, double strain)
+{
+    Branch = V1-V0;
+    if (fabs(Per(0))>0.0) Branch(0) -= round(Branch(0)/Per(0))*Per(0);
+    if (fabs(Per(1))>0.0) Branch(1) -= round(Branch(1)/Per(1))*Per(1);
+    if (fabs(Per(2))>0.0) Branch(2) -= round(Branch(2)/Per(2))*Per(2);
+    // Apply shear offset to x-component if z-periodic
+    if (fabs(Per(2))>0.0 && strain != 0.0)
+    {
+        int nz = (int)round(Branch(2)/Per(2));
+        Branch(0) -= nz * strain * Per(2);
+    }
+}
+
+
 /// The Distance functions evaluate the distance between different goemetric features. They give the points Xi and Xf os the points of minimun
 /// distance between the geometric features
 

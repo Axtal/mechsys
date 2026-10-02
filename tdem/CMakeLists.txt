@@ -17,6 +17,7 @@
 ########################################################################
 
 SET(EXES
+  PID_v2
   nonconvex
   ttt
   test_periodic
@@ -32,6 +33,7 @@ SET(EXES
   brazil_test
   test_01
   test_02
+  test_2spheres
   GSD
 )
 
@@ -40,6 +42,7 @@ SET(CUDAPROGS
     test_cu_02
     test_cu_03
     test_cu_04
+    test_2spheres_gpu
 )
 
 FOREACH(var ${EXES})

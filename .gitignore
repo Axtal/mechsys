@@ -95,6 +95,9 @@ tdem/test_mesh
 tdem/test_cu_01
 tdem/test_cu_02
 tdem/test_cu_03
+tdem/PID.cpp
+tdem/PID_fixed.cpp
+tdem/PID_v2.cpp
 test/tplotxy
 tdoc/doc_vtk1
 test/models/fcrit
@@ -119,6 +122,7 @@ tmpm/tmpm03
 
 
 syntax: glob
+build/
 CTestTestfile.cmake
 Testing
 CMakeCache.txt

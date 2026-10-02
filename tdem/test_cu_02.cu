@@ -100,7 +100,7 @@ int main(int argc, char **argv) try
 
 
 
-    dom.Solve(/*final time*/30.0,/*time step*/dt,/*Output step*/0.1,NULL,&Report,/*file key*/"test_cu_02",/*Render video?*/2);
+    dom.Solve(/*final time*/1.0,/*time step*/dt,/*Output step*/0.1,NULL,&Report,/*file key*/"test_cu_02",/*Render video?*/2);
 
     return 0;
 }

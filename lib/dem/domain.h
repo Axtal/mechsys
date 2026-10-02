@@ -71,10 +71,26 @@
 #include <mechsys/dem/dem.cuh>
 #endif
 
+
+/*
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
+   if (code != cudaSuccess) {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+*/
+
 namespace DEM
 {
 
 struct MtData;
+
+
+// ----------------------------------------------------------------
+// Domain class with Velocity Verlet integration
+// ----------------------------------------------------------------
 
 class Domain
 {
@@ -181,6 +197,7 @@ public:
     bool                                              RotPar;                      ///< Check if particles should be rotated, useful if particle displacements are small
     bool                                              Finished;                    ///< Has the simulation finished
     bool                                              Dilate;                      ///< True if eroded particles should be dilated for visualization
+    bool                                              UseVelocityVerlet;       // use the updated velocity verlet method or the previous position verlet + leapfrog?
     Array<size_t>                                     FreePar;                     ///< Particles that are free
     Array<size_t>                                     NoFreePar;                   ///< Particles that are not free
     Array<Particle*>                                  Particles;                   ///< All particles in domain
@@ -201,6 +218,7 @@ public:
     double                                            Ymin;                        ///< Minimun distance along the Y axis (Periodic Boundary)
     double                                            Zmax;                        ///< Maximun distance along the Z axis (Periodic Boundary)
     double                                            Zmin;                        ///< Minimun distance along the Z axis (Periodic Boundary)
+    double                                            ThermostatInteractionRange;  ///< Just to output the contact data in case the thermostat is active
     Vec3_t                                            Per;                         ///< Periodic distance vector
     double                                            MaxDmax;                     ///< Maximun value for the radious of the spheres surronding each particle
     void *                                            UserData;                    ///< Some user data
@@ -208,7 +226,10 @@ public:
     size_t                                            Nproc;                       ///< Number of cores for multithreading
     size_t                                            idx_out;                     ///< Index of output
     size_t                                            iter;                        ///< Iteration counter
-    size_t                                            ContactLaw;                  ///< Contact law index                                                                                  
+    size_t                                            ContactLaw;                  ///< Contact law index
+    size_t                                            SphereCoulombMode;           ///< Sphere Coulomb mode: 0 elastic cap with dashpot, 1 elastic cap dashpot off sliding, 2 total force cap
+    bool                                              SphereTensileCutoff;         ///< Clamp tensile total normal force for sphere contacts
+    bool                                              SphereFirstContactCorrection;///< Scale the first active tangential history increment by contact activation fraction
     std::unordered_map<size_t,CInteracton *>          PairtoCInt;                  ///< A map to identify which interacton has a given pair
     Array<Array <int> >                               Listofclusters;              ///< List of particles belonging to bounded clusters (applies only for cohesion simulations)
     MtData *                                          MTD;                         ///< Multithread data
@@ -216,13 +237,19 @@ public:
     // Some utilities when the interactions are mainly between spheres
     bool                                              MostlySpheres;               ///< If the simulation is mainly between spheres this should be true
     FrictionMap_t                                     FricSpheres;                 ///< The friction value for spheres only
+    std::unordered_map<size_t,double>                 PrevSphereDelta;             ///< Previous signed overlap for sphere first-contact correction
     FrictionMap_t                                     RollSpheres;                 ///< Map storing the rolling resistance between spheres
     void     CalcForceSphere();                                                    ///< Calculate force between only spheres spheres
     
+    // --- VELOCITY VERLET: additional state vectors ---
+    Array<Vec3_t>                                     A;      // translational accelerations
+    Array<Vec3_t>                                     Wdot;  // body‑frame angular accelerations
+
+
     //CUDA Implementation
 #ifdef USE_CUDA
     size_t Nthread = 256;                                                   ///< Number of GPU threads 
-    void UpLoadDevice(size_t Nc=1, bool first = true);                      ///< Upload the domain to cuda device
+    void UpLoadDevice(size_t Nc=1, bool first = true, bool updatestate = true);                      ///< Upload the domain to cuda device
     void DnLoadDevice(size_t Nc=1, bool force = true);                      ///< Download the key data from device
     void UpdateContactsDevice();                                            ///< Update contacts lists in device
     thrust::device_vector<ParticleCU>      bParticlesCU;                    ///< device vector of particles
@@ -264,7 +291,23 @@ public:
     Translate_ptr_t    pTranslate;                                          ///< pointer to the translation function
     Rotate_ptr_t       pRotate;                                             ///< pointer to the rotation function
     Reset_ptr_t        pReset;                                              ///< pointer to the reset function
+    WrapZ_ptr_t        pWrapZ;                                             ///< pointer to the Lees-Edwards z-wrapping function
     void             * pExtraParams;                                        ///< pointer to a structure of extra parameters for force calculation
+    
+
+    // additional devices and pointers for verlet integration on the gpu
+    thrust::device_vector<real3> bA;            ///< device translational accelerations    
+    real3 * pA;                                 ///< pointer to bA
+    VerletStep1_ptr_t      pVerletStep1;
+    FinalizeVelocity_ptr_t pFinalizeVelocity;
+
+    thrust::device_vector<real3> bWdot;    // device angular accelerations
+    real3                     * pWdot;
+    OrientationUpdate_ptr_t     pOrientationUpdate;
+    FinalizeRotation_ptr_t      pFinalizeRotation;
+    EnforceAngularFixity_ptr_t  pEnforceAngularFixity;
+    ZeroFixedTorque_ptr_t       pZeroFixedTorque;
+    RecomputeAccelerations_ptr_t pRecomputeAccelerations;
 #endif
     
 };
@@ -293,6 +336,7 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     Initialized = false;
     Dilate = false;
     RotPar = true;
+    UseVelocityVerlet = true;
     Time = 0.0;
     iter = 0;
     Alpha = 0.05;
@@ -300,7 +344,11 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     UserData = UD;
     MostlySpheres = false;
     Xmax = Xmin = Ymax = Ymin = Zmax = Zmin =0.0;
+    ThermostatInteractionRange = 0.0;
     ContactLaw = contactlaw;
+    SphereCoulombMode = 0;
+    SphereTensileCutoff = true;
+    SphereFirstContactCorrection = false;
 #ifdef USE_OMP
     omp_init_lock(&lck);
 #endif
@@ -310,12 +358,21 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     pForceEE   = CalcForceEE;
     pForceVF   = CalcForceVF;
     pForceFV   = CalcForceFV;
-    pTranslate = Translate;
-    pRotate    = Rotate;
+    pTranslate = Translate;  // euler integration removed
+    pRotate    = Rotate;     // euler integration removed
     pReset     = Reset;
+    pWrapZ     = NULL;
+
+    pVerletStep1 = VerletStep1;
+    pFinalizeVelocity = FinalizeVelocity;
+    pOrientationUpdate = OrientationUpdate;
+    pFinalizeRotation  = FinalizeRotation;
     pExtraParams = NULL;
+    pEnforceAngularFixity = EnforceAngularFixity;
+    pRecomputeAccelerations = RecomputeAccelerations;
 #endif
 }
+
 
 inline Domain::~Domain ()
 {
@@ -404,6 +461,7 @@ inline void Domain::SetProps (Dict & D)
         it->second->UpdateParameters(ContactLaw);
     }
 }
+
 
 inline void Domain::Initialize (double dt)
 {
@@ -516,7 +574,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     if (Ymax-Ymin>1.0e-12)
     printf("%s  Periodic Boundary conditions in Y between =  %g and %g%s\n" ,TERM_CLR5, Ymin, Ymax                           , TERM_RST);
     if (Zmax-Zmin>1.0e-12)
-    printf("%s  Periodic Boundary conditions in Y between =  %g and %g%s\n" ,TERM_CLR5, Zmin, Zmax                           , TERM_RST);
+    printf("%s  Periodic Boundary conditions in Z between =  %g and %g%s\n" ,TERM_CLR5, Zmin, Zmax                           , TERM_RST);
 
 
     if (Alpha > 2.0*Beta*MaxDmax)
@@ -550,10 +608,71 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     }
     
     UpdateContacts();
+    
+
+    size_t iter_b = iter;
+    size_t iter_t = 0;
+    size_t numup  = 0;
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// VELOCITY VERLET: allocate and compute initial accelerations
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  A.Resize(Particles.Size());
+    Wdot.Resize(Particles.Size());
+
+    // Initial forces
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t i = 0; i < Particles.Size(); i++) {
+        Particles[i]->F = Particles[i]->Ff;
+        Particles[i]->T = Particles[i]->Tf;
+    }
+
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t i = 0; i < Interactons.Size(); i++) {
+        Interactons[i]->CalcForce(Dt, Per, iter, ContactLaw, SphereCoulombMode, SphereTensileCutoff, SphereFirstContactCorrection);
+        omp_set_lock  (&Interactons[i]->P1->lck);
+        Interactons[i]->P1->F += Interactons[i]->F1;
+        Interactons[i]->P1->T += Interactons[i]->T1;
+        omp_unset_lock(&Interactons[i]->P1->lck);
+        omp_set_lock  (&Interactons[i]->P2->lck);
+        Interactons[i]->P2->F += Interactons[i]->F2;
+        Interactons[i]->P2->T += Interactons[i]->T2;
+        omp_unset_lock(&Interactons[i]->P2->lck);
+    }
+
+    if (MostlySpheres && ContactLaw==0) CalcForceSphere();
+
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t i = 0; i < Particles.Size(); i++) {
+        Vec3_t Ft = Particles[i]->F;
+        if (Particles[i]->vxf) Ft(0) = 0.0;
+        if (Particles[i]->vyf) Ft(1) = 0.0;
+        if (Particles[i]->vzf) Ft(2) = 0.0;
+        Ft -= Particles[i]->Props.Gv * Particles[i]->Props.m * Particles[i]->v;
+        A[i] = Ft / Particles[i]->Props.m;
+
+        double Ix = Particles[i]->I(0), Iy = Particles[i]->I(1), Iz = Particles[i]->I(2);
+        Vec3_t Tt = Particles[i]->T;
+        Vec3_t w = Particles[i]->w;    // current body‑frame angular velocity
+        if (Particles[i]->wxf) Tt(0) = 0.0;
+        if (Particles[i]->wyf) Tt(1) = 0.0;
+        if (Particles[i]->wzf) Tt(2) = 0.0;
+        Tt -= Particles[i]->Props.Gm * Vec3_t(Ix*w(0), Iy*w(1), Iz*w(2));
+        Wdot[i](0) = (Tt(0) + (Iy - Iz) * w(1) * w(2)) / Ix;
+        Wdot[i](1) = (Tt(1) + (Iz - Ix) * w(0) * w(2)) / Iy;
+        Wdot[i](2) = (Tt(2) + (Ix - Iy) * w(0) * w(1)) / Iz;
+    }
+
+    bool px = (Xmax - Xmin) > Alpha;
+    bool py = (Ymax - Ymin) > Alpha;
+    bool pz = (Zmax - Zmin) > Alpha;
+
+
 #ifdef USE_CUDA
+
     //if (iter==0) UpLoadDevice(Nproc,true);
     //else         UpLoadDevice(Nproc,false);
-    UpLoadDevice(Nproc,true);
+    UpLoadDevice(Nproc,true,true);
     cudaDeviceProp prop;
     cudaGetDeviceProperties (&prop,0);
     std::cout 
@@ -564,9 +683,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         << "  Number of edges                           =  " << demaux.nedges/2 << TERM_RST << std::endl
         << "  Number of faces                           =  " << demaux.nfaces/2 << TERM_RST << std::endl;
 #endif
-    size_t iter_b = iter;
-    size_t iter_t = 0;
-    size_t numup  = 0;
+
     // run
     while (Time<tf)
     {
@@ -600,36 +717,64 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             tout += dtOut;
         }
 #ifdef USE_CUDA
-        //std::cout << "1" << std::endl;
-        //Initialize particles
-        pReset<<<(demaux.nparts+demaux.ncoint)/Nthread+1,Nthread>>>(pParticlesCU,pDynParticlesCU,pInteractons,pComInteractons,pdemaux,pExtraParams);
-        //cudaDeviceSynchronize();
-        //Calculate forces
-        pForceVV<<<demaux.nvvint/Nthread+1,Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "2" << std::endl;
-        //cudaDeviceSynchronize();
-        pForceEE<<<demaux.neeint/Nthread+1,Nthread>>>(pEdgesCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "3" << std::endl;
-        //cudaDeviceSynchronize();
-        pForceVF<<<demaux.nvfint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsVF, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "4" << std::endl;
-        //cudaDeviceSynchronize();
-        pForceFV<<<demaux.nfvint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "5" << std::endl;
-        //cudaDeviceSynchronize();
-        //Move Particles
-        pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "6" << std::endl;
-        //cudaDeviceSynchronize();
-        if (RotPar) pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "7" << std::endl;
-        //cudaDeviceSynchronize();
-        MaxD     <<<demaux.nverts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);
-        //std::cout << "8" << std::endl;
-        //cudaDeviceSynchronize();
+
+pReset<<<(demaux.nparts+demaux.ncoint)/Nthread+1, Nthread>>>(pParticlesCU, pDynParticlesCU, pInteractons, pComInteractons, pdemaux, pExtraParams);
+
+
+if (UseVelocityVerlet){
+// NEW CODE, VELOCITY VERLET FOR BOTH
+
+// 1. Half‑step updates (translational and rotational)
+pVerletStep1<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pA, pdemaux);
+pOrientationUpdate<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
+
+if (demaux.nvvint > 0) pForceVV<<<(demaux.nvvint+Nthread-1)/Nthread, Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.neeint > 0) pForceEE<<<(demaux.neeint+Nthread-1)/Nthread, Nthread>>>(pEdgesCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.nvfint > 0) pForceVF<<<(demaux.nvfint+Nthread-1)/Nthread, Nthread>>>(pFacesCU, pFacidCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsVF, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.nfvint > 0) pForceFV<<<(demaux.nfvint+Nthread-1)/Nthread, Nthread>>>(pFacesCU, pFacidCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+
+
+// 3. Finalise velocities (full step)
+pFinalizeVelocity<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pParticlesCU, pDynParticlesCU, pA, pdemaux);
+pFinalizeRotation<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
+
+}
+
+
+else {
+
+
+// OLD CODE, POSITION VERLET + LEAPFROG
+// 1. reset forces
+
+if (demaux.nvvint > 0) pForceVV<<<(demaux.nvvint+Nthread-1)/Nthread, Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.neeint > 0) pForceEE<<<(demaux.neeint+Nthread-1)/Nthread, Nthread>>>(pEdgesCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.nvfint > 0) pForceVF<<<(demaux.nvfint+Nthread-1)/Nthread, Nthread>>>(pFacesCU, pFacidCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsVF, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (demaux.nfvint > 0) pForceFV<<<(demaux.nfvint+Nthread-1)/Nthread, Nthread>>>(pFacesCU, pFacidCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+
+
+// 3. update positions/rotations
+    pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+if (RotPar) pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+
+    }        
+
+// Wrap particles and reset displacement reference for wrapped particles
+// This must be done after BOTH VelocityVerlet and old integration paths
+if (pWrapZ!=NULL) {
+    pWrapZ<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pDynParticlesCU, pParticlesCU, pdemaux);
+    ResetMaxD<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pParticlesCU, pDynParticlesCU, pdemaux);
+}
+
+// 4., calculate max displacement / recalculate the verlet list if needed
+MaxD<<<demaux.nverts/Nthread+1, Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);
+//cudaDeviceSynchronize();
+
+
         real maxdis = 0.0;
         thrust::device_vector<real>::iterator it=thrust::max_element(bMaxDCU.begin(),bMaxDCU.end());
         maxdis = *it;
+
         //std::cout << "9" << std::endl;
         //std::cout << iter << std::endl;
         //Update Pair lists
@@ -640,11 +785,114 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             //std::cout << iter << std::endl;
             numup++;
             iter_t+= iter - iter_b;
+            //printf("MaxDiplacement %g > %g (alpha), recalculating the Verlet list. Current step: %i, %i steps have passed since the list was last calculated.\n",maxdis,Alpha,iter,iter-iter_b);
+
             iter_b = iter;
             UpdateContactsDevice();
             //cudaDeviceSynchronize();
         }
+
+
 #else
+
+
+
+if (UseVelocityVerlet){
+// Velocity‑Verlet integration 
+
+
+        // 1. Half‑step updates using forces from previous timestep
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Particles.Size(); i++)
+        {
+        Particles[i]->UpdateVelocityHalf(Dt);
+        if (RotPar) Particles[i]->UpdateAngularVelocityHalf(Dt);
+        }
+
+        // 2. Position and orientation updates using half‑step velocities
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Particles.Size(); i++)
+        {
+        Particles[i]->TranslateVelVerlet(Dt);
+        if (RotPar) Particles[i]->RotateVelVerlet(Dt);
+        }
+/*
+        // 3. Check maximum displacement and rebuild contacts if needed
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Nproc; i++) MTD[i].Dmx = 0.0;
+
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Particles.Size(); i++)
+        {
+        double mpd = Particles[i]->MaxDisplacement();
+        if (mpd > MTD[omp_get_thread_num()].Dmx)
+        MTD[omp_get_thread_num()].Dmx = mpd;
+        }
+        double maxdis = 0.0;
+        for (size_t i = 0; i < Nproc; i++)
+        if (maxdis < MTD[i].Dmx) maxdis = MTD[i].Dmx;
+
+        if (maxdis > Alpha) UpdateContacts();
+*/
+        // 4. Compute forces using updated positions and HALF‑STEP velocities
+        //    (temporarily set particle velocities to half‑step values)
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Particles.Size(); i++)
+        {
+        Particles[i]->v = Particles[i]->v_half;
+        Particles[i]->w = Particles[i]->w_half;
+        Particles[i]->F = Particles[i]->Ff;
+        Particles[i]->T = Particles[i]->Tf;
+        }
+
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Interactons.Size(); i++)
+        {
+        Interactons[i]->CalcForce(Dt, Per, iter, ContactLaw, SphereCoulombMode, SphereTensileCutoff, SphereFirstContactCorrection);
+        omp_set_lock  (&Interactons[i]->P1->lck);
+        Interactons[i]->P1->F += Interactons[i]->F1;
+        Interactons[i]->P1->T += Interactons[i]->T1;
+        omp_unset_lock(&Interactons[i]->P1->lck);
+        omp_set_lock  (&Interactons[i]->P2->lck);
+        Interactons[i]->P2->F += Interactons[i]->F2;
+        Interactons[i]->P2->T += Interactons[i]->T2;
+        omp_unset_lock(&Interactons[i]->P2->lck);
+        }
+
+        if (MostlySpheres && ContactLaw==0) CalcForceSphere();
+
+        // 3b. Reset per-thread max displacement before measuring
+      //  #pragma omp parallel for schedule(static) num_threads(Nproc)
+     //   for (size_t i = 0; i < Nproc; i++) MTD[i].Dmx = 0.0;
+
+        // 5. Full‑step velocity updates using forces computed in step 4
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i = 0; i < Particles.Size(); i++){
+        Particles[i]->UpdateVelocityFull(Dt);
+        if (RotPar) Particles[i]->UpdateAngularVelocityFull(Dt);
+        if (Particles[i]->MaxDisplacement()>MTD[omp_get_thread_num()].Dmx)
+         MTD[omp_get_thread_num()].Dmx = Particles[i]->MaxDisplacement();
+            
+        }
+
+        double maxdis = 0.0;
+        for (size_t i=0;i<Nproc;i++)
+        {
+            if (maxdis<MTD[i].Dmx) maxdis = MTD[i].Dmx;
+        }
+
+        if (maxdis>Alpha)
+        {
+            UpdateContacts();
+        }
+
+}
+
+    else 
+    // old formulation (Position Verlet + Leapfrog)
+    {
+
+
         //Initialize particles
         #pragma omp parallel for schedule(static) num_threads(Nproc)
         for (size_t i=0; i<Particles.Size(); i++)
@@ -665,7 +913,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             
             //DEM::Interacton * p = Interactons[i];
             //std::cout << p->I1 << " " << p->I2 << std::endl;
-		    if (Interactons[i]->CalcForce(Dt,Per,iter,ContactLaw))
+		    if (Interactons[i]->CalcForce(Dt,Per,iter,ContactLaw,SphereCoulombMode,SphereTensileCutoff,SphereFirstContactCorrection))
             {
                 String f_error(FileKey+"_error");
                 Save     (f_error.CStr());
@@ -686,7 +934,7 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
         }
 
-        if(MostlySpheres) CalcForceSphere();
+        if(MostlySpheres && ContactLaw==0) CalcForceSphere();
         #pragma omp parallel for schedule(static) num_threads(Nproc)
         for (size_t i=0;i<Nproc;i++)
         {
@@ -723,6 +971,9 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         {
             UpdateContacts();
         }
+
+    }
+
 #endif
         Time += Dt;
         iter++;
@@ -757,20 +1008,32 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     printf("%s  Potential energy                                          = %g%s\n",TERM_CLR4, Epot, TERM_RST);
     printf("%s  Total energy                                              = %g%s\n",TERM_CLR2, Etot, TERM_RST);
 }
-
 inline void Domain::WriteBF (char const * FileKey)
 {
     size_t n_fn = 0;
     size_t n_rl = 0;
+    double delta = -1.0;
+    double fdvv_norm = -1.0;
 
-    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
-    {        
-        if (norm(it->second->Fnet)>1.0e-12)
-        {
-            n_fn++;
-            if (it->second->P1->Verts.Size()==1&&it->second->P2->Verts.Size()==1) n_rl++;
-        }
+for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
+{        
+    // Compute normal overlap
+    double dist = Distance(it->second->P1->x, it->second->P2->x, Per);
+    delta = it->second->P1->Props.R + it->second->P2->Props.R - dist;
+    // Tangential overlap magnitude (only for sphere-sphere contacts)
+    if (it->second->P1->Verts.Size()==1 && it->second->P2->Verts.Size()==1)
+    {
+        DEM::CInteractonSphere * Cis = dynamic_cast<DEM::CInteractonSphere*>(it->second);
+        fdvv_norm = norm(Cis->Fdvv);
     }
+    
+    // Only count if at last one overlap are above threshold
+    if (delta> 1e-12)
+    {
+        n_fn++;
+        if (it->second->P1->Verts.Size()==1 && it->second->P2->Verts.Size()==1) n_rl++;
+    }
+}
 
     if (n_fn==0) return;
     
@@ -782,8 +1045,12 @@ inline void Domain::WriteBF (char const * FileKey)
     float  *  Fnnet = new float[3*n_fn];
     float  *  Ftnet = new float[3*n_fn];
     float  *  Froll = new float[3*n_fn];
+    float  *  Fndpot = new float[3*n_fn];
+    float  *  Ftdpot = new float[3*n_fn];
     float  * Branch = new float[3*n_fn];
     float  *   Orig = new float[3*n_fn];
+    float  *   Fdvv = new float[3*n_fn];
+
     int    *    ID1 = new   int[  n_fn];
     int    *    ID2 = new   int[  n_fn];
 
@@ -793,7 +1060,10 @@ inline void Domain::WriteBF (char const * FileKey)
     for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
     {
         //if ((norm(CInteractons[i]->Fnet)>1.0e-12)&&(CInteractons[i]->P1->IsFree()&&CInteractons[i]->P2->IsFree()))
-        if (norm(it->second->Fnet)>1.0e-12)
+double dist = Distance(it->second->P1->x, it->second->P2->x, Per);
+double delta = it->second->P1->Props.R + it->second->P2->Props.R - dist;
+
+if (delta > 1e-12)
         {
             Fnnet [3*idx  ] = float(it->second->Fnet  (0));
             Fnnet [3*idx+1] = float(it->second->Fnet  (1));
@@ -801,12 +1071,35 @@ inline void Domain::WriteBF (char const * FileKey)
             Ftnet [3*idx  ] = float(it->second->Ftnet (0));
             Ftnet [3*idx+1] = float(it->second->Ftnet (1));
             Ftnet [3*idx+2] = float(it->second->Ftnet (2));
+            Fndpot[3*idx  ] = float(it->second->Fndpot (0));
+            Fndpot[3*idx+1] = float(it->second->Fndpot (1));
+            Fndpot[3*idx+2] = float(it->second->Fndpot (2));
+            Ftdpot[3*idx  ] = float(it->second->Ftdpot (0));
+            Ftdpot[3*idx+1] = float(it->second->Ftdpot (1));
+            Ftdpot[3*idx+2] = float(it->second->Ftdpot (2));
             if (n_rl>0)
             {
             Froll [3*idx  ] = float(it->second->Fn    (0));
             Froll [3*idx+1] = float(it->second->Fn    (1));
             Froll [3*idx+2] = float(it->second->Fn    (2));
             }
+        if (it->second->P1->Verts.Size()==1 && it->second->P2->Verts.Size()==1)
+        {
+            DEM::CInteractonSphere * Cis = dynamic_cast<DEM::CInteractonSphere*>(it->second);
+            Fdvv [3*idx  ] = float(Cis->Fdvv(0)); // retrieve the data from the interaction
+            Fdvv [3*idx+1] = float(Cis->Fdvv(1));
+            Fdvv [3*idx+2] = float(Cis->Fdvv(2));
+
+   //     printf("Normal overlap: %g, tangential: %g\n",delta,fdvv_norm);
+
+        }
+        else
+        {
+            Fdvv [3*idx  ] = 0.0f;
+            Fdvv [3*idx+1] = 0.0f;
+            Fdvv [3*idx+2] = 0.0f;
+        }
+
             //Branch[3*idx  ] = float(it->second->P1->x(0)-it->second->P2->x(0));
             //Branch[3*idx+1] = float(it->second->P1->x(1)-it->second->P2->x(1)); 
             //Branch[3*idx+2] = float(it->second->P1->x(2)-it->second->P2->x(2)); 
@@ -841,13 +1134,19 @@ inline void Domain::WriteBF (char const * FileKey)
     H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Branch);
     dsname.Printf("Position");
     H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Orig);
+    dsname.Printf("TangentialOverlap");
+    H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Fdvv );
+    dsname.Printf("DashpotForceNormal");
+    H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Fndpot );
+    dsname.Printf("DashpotForceTangential");
+    H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Ftdpot );
+
     dims[0] = n_fn;
     dsname.Printf("ID1");
     H5LTmake_dataset_int  (file_id,dsname.CStr(),1,dims,ID1   );
     dsname.Printf("ID2");
     H5LTmake_dataset_int  (file_id,dsname.CStr(),1,dims,ID2   );
-
-
+ 
     delete [] Fnnet;
     delete [] Ftnet;
     delete [] Froll;
@@ -855,6 +1154,11 @@ inline void Domain::WriteBF (char const * FileKey)
     delete [] Orig;
     delete [] ID1;
     delete [] ID2;
+
+    // new allocations to delete
+    delete [] Fdvv;
+    delete [] Fndpot;
+    delete [] Ftdpot;
 
     //Saving Cohesive forces
     if (BInteractons.Size()>0)
@@ -907,7 +1211,7 @@ inline void Domain::WriteBF (char const * FileKey)
     delete [] BVal ;
     delete [] BID1 ;
     delete [] BID2 ;
-
+    
 
     }
 
@@ -961,7 +1265,24 @@ inline void Domain::WriteBF (char const * FileKey)
     oss << "        " << fn.CStr() <<":/ID2 \n";
     oss << "       </DataItem>\n";
     oss << "     </Attribute>\n";
+
+    oss << "     <Attribute Name=\"Tangential Overlap\" AttributeType=\"Vector\" Center=\"Node\">\n";
+    oss << "       <DataItem Dimensions=\"" << n_fn << " 3\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n";
+    oss << "        " << fn.CStr() <<":/Tangential Overlap \n";
+    oss << "       </DataItem>\n";
+    oss << "     </Attribute>\n";
+
+    oss << "     <Attribute Name=\"Dashpot Force\" AttributeType=\"Vector\" Center=\"Node\">\n";
+    oss << "       <DataItem Dimensions=\"" << n_fn << " 3\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n";
+    oss << "        " << fn.CStr() <<":/Dashpot Force\n";
+    oss << "       </DataItem>\n";
+    oss << "     </Attribute>\n";
+
+
+
     oss << "   </Grid>\n";
+
+    
     if (BInteractons.Size()>0)
     {
     oss << "   <Grid Name=\"CohesiveForce\" GridType=\"Uniform\">\n";
@@ -1007,6 +1328,7 @@ inline void Domain::WriteBF (char const * FileKey)
     of << oss.str();
     of.close();
 }
+
 
 inline void Domain::WriteXDMF (char const * FileKey)
 {
@@ -1437,7 +1759,7 @@ inline void Domain::WriteFrac (char const * FileKey)
     float  * Verts   = new float [3*N_Verts];
     int    * FaceCon = new int   [3*N_Faces];
 
-    //Atributes
+    //Attributes
     int    * Tags    = new int   [  N_Faces];
        
     size_t n_verts = 0;
@@ -2163,7 +2485,6 @@ inline void Domain::ResetInteractons()
         }
     }
 }
-
 inline void Domain::ResetDisplacements()
 {
     #pragma omp parallel for schedule(static) num_threads(Nproc)
@@ -2175,25 +2496,34 @@ inline void Domain::ResetDisplacements()
     bool px = (Xmax-Xmin)>Alpha;
     bool py = (Ymax-Ymin)>Alpha;
     bool pz = (Zmax-Zmin)>Alpha;
+
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t i=0;i<Particles.Size();i++)
     {
-        Particles[i]->ResetDisplacements();
         if(Particles[i]->IsFree())
         {
-            //#ifndef USE_CUDA
-            if (px&&Particles[i]->x(0)>=Xmax) Particles[i]->Translate(Vec3_t(Xmin-Xmax,0.0,0.0));
-            if (px&&Particles[i]->x(0)< Xmin) Particles[i]->Translate(Vec3_t(Xmax-Xmin,0.0,0.0));
-            if (py&&Particles[i]->x(1)>=Ymax) Particles[i]->Translate(Vec3_t(0.0,Ymin-Ymax,0.0));
-            if (py&&Particles[i]->x(1)< Ymin) Particles[i]->Translate(Vec3_t(0.0,Ymax-Ymin,0.0));
-            if (pz&&Particles[i]->x(2)>=Zmax) Particles[i]->Translate(Vec3_t(0.0,0.0,Zmin-Zmax));
-            if (pz&&Particles[i]->x(2)< Zmin) Particles[i]->Translate(Vec3_t(0.0,0.0,Zmax-Zmin));
-            //#endif
+            // ------ do periodic wrap FIRST ------
+            if (px && Particles[i]->x(0) >= Xmax) Particles[i]->Translate(Vec3_t(Xmin-Xmax,0.0,0.0));
+            if (px && Particles[i]->x(0) <  Xmin) Particles[i]->Translate(Vec3_t(Xmax-Xmin,0.0,0.0));
+            if (py && Particles[i]->x(1) >= Ymax) Particles[i]->Translate(Vec3_t(0.0,Ymin-Ymax,0.0));
+            if (py && Particles[i]->x(1) <  Ymin) Particles[i]->Translate(Vec3_t(0.0,Ymax-Ymin,0.0));
+            if (pz && Particles[i]->x(2) >= Zmax) Particles[i]->Translate(Vec3_t(0.0,0.0,Zmin-Zmax));
+            if (pz && Particles[i]->x(2) <  Zmin) Particles[i]->Translate(Vec3_t(0.0,0.0,Zmax-Zmin));
+
+            // ------ NOW store reference vertices ------
+            Particles[i]->ResetDisplacements();
+
+            // linked cell placement
             iVec3_t idx;
             idx(0) = floor((Particles[i]->x(0)-LCxmin(0))/DxLC(0));
             idx(1) = floor((Particles[i]->x(1)-LCxmin(1))/DxLC(1));
             idx(2) = floor((Particles[i]->x(2)-LCxmin(2))/DxLC(2));
             MTD[omp_get_thread_num()].LLC.Push(std::make_pair(idx,i));
+        }
+        else
+        {
+            // non‑free particles never wrapped
+            Particles[i]->ResetDisplacements();
         }
     }
     for (size_t i=0;i<Nproc;i++)
@@ -2205,6 +2535,7 @@ inline void Domain::ResetDisplacements()
         }
     }
 }
+
 
 inline void Domain::UpdateLinkedCells()
 {
@@ -2221,9 +2552,9 @@ inline void Domain::UpdateLinkedCells()
         size_t i2 = std::max(FreePar[i],NoFreePar[j]);
         MTD[omp_get_thread_num()].LPP.Push(std::make_pair(i1,i2));
     }
-    bool px = (Xmax-Xmin)>Alpha;
-    bool py = (Ymax-Ymin)>Alpha;
-    bool pz = (Zmax-Zmin)>Alpha;
+    bool px = (Xmax-Xmin)>1.0e-12;
+    bool py = (Ymax-Ymin)>1.0e-12;
+    bool pz = (Zmax-Zmin)>1.0e-12;
     #pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t idx=0;idx<LinkedCell.Size();idx++)
     {
@@ -2348,7 +2679,7 @@ inline void Domain::ResetContacts()
             size_t hash = HashFunction(n,m);
             if (Particles[n]->Verts.Size()==1 && Particles[m]->Verts.Size()==1)
             {
-                if (!MostlySpheres) PairtoCInt[hash] = new CInteractonSphere(Particles[n],Particles[m],ContactLaw);
+                if (!MostlySpheres || ContactLaw==1) PairtoCInt[hash] = new CInteractonSphere(Particles[n],Particles[m],ContactLaw);
             }
             else
             {
@@ -2451,6 +2782,11 @@ inline void Domain::UpdateContacts()
 
 inline void Domain::CalcForceSphere()
 {
+    size_t sphereCoulombMode = SphereCoulombMode;
+    if (sphereCoulombMode > 2) sphereCoulombMode = 0;
+    bool sphereTensileCutoff = SphereTensileCutoff;
+    bool sphereFirstContactCorrection = SphereFirstContactCorrection;
+
     //std::cout << "Pairs size = " << ListPosPairs.Size() << std::endl;
     //std::set<std::pair<Particle *,Particle *> >::iterator it;
 #ifdef USE_OMP
@@ -2479,6 +2815,19 @@ inline void Domain::CalcForceSphere()
         Vec3_t xf = P2->x;
         double dist = norm(P1->x - P2->x);
         double delta = P1->Props.R + P2->Props.R - dist;
+        size_t p = HashFunction(i,j);
+        if (delta<=0.0 && sphereFirstContactCorrection)
+        {
+            FricSpheres.erase(p);
+        }
+        double prevDelta = 0.0;
+        if (sphereFirstContactCorrection)
+        {
+            auto prevIt = PrevSphereDelta.find(p);
+            if (prevIt != PrevSphereDelta.end()) prevDelta = prevIt->second;
+            PrevSphereDelta[p] = delta;
+        }
+
         if (delta>0)
         {
             //std::cout << "2" << std::endl;
@@ -2523,9 +2872,15 @@ inline void Domain::CalcForceSphere()
             Gt *= me;
 
             Vec3_t Fn = Kn*delta*n;
+            Vec3_t Fn_total = Fn + Gn*dot(n,vrel)*n;
+            if (sphereTensileCutoff && dot(Fn_total,n)<0.0)
+            {
+                Fn_total = OrthoSys::O;
+            }
+
             //std::pair<int,int> p;
             //p = std::make_pair(i,j);
-            size_t p = HashFunction(i,j);
+            bool newContact = FricSpheres.count(p)==0;
             if (FricSpheres.count(p)==0) 
             {             
 #ifdef USE_OMP
@@ -2536,15 +2891,59 @@ inline void Domain::CalcForceSphere()
                 omp_unset_lock(&lck);
 #endif
             }
-            FricSpheres[p] += vt*Dt;
-            FricSpheres[p] -= dot(FricSpheres[p],n)*n;
-            Vec3_t tan = FricSpheres[p];
-            if (norm(tan)>0.0) tan/=norm(tan);
-            if (norm(FricSpheres[p])>Mu*norm(Fn)/Kt)
+            double dtTangential = Dt;
+            if (sphereFirstContactCorrection && newContact && prevDelta<0.0 && delta>prevDelta)
             {
-                FricSpheres[p] = Mu*norm(Fn)/Kt*tan;
+                double activationFraction = delta/(delta-prevDelta);
+                if (activationFraction < 0.0) activationFraction = 0.0;
+                if (activationFraction > 1.0) activationFraction = 1.0;
+                dtTangential *= activationFraction;
             }
-            Vec3_t F = Fn + Kt*FricSpheres[p] + Gn*dot(n,vrel)*n + Gt*vt;
+            FricSpheres[p] += vt*dtTangential;
+            FricSpheres[p] -= dot(FricSpheres[p],n)*n;
+            Vec3_t FricSpheresTrial = FricSpheres[p];
+
+            Vec3_t Ft_elastic = Kt*FricSpheres[p];
+            Vec3_t Ft_dashpot = Gt*vt;
+            Vec3_t Ft_total = Ft_elastic + Ft_dashpot;
+            double friction_limit = Mu*norm(Fn);
+            if (sphereCoulombMode == 2)
+            {
+                friction_limit = Mu*norm(Fn_total);
+            }
+
+            Vec3_t FricSpheresNew = FricSpheresTrial;
+
+            if (sphereCoulombMode == 0 || sphereCoulombMode == 1)
+            {
+                double ftElasticNorm = norm(Ft_elastic);
+                if (ftElasticNorm > friction_limit)
+                {
+                    Vec3_t tan = Ft_elastic/ftElasticNorm;
+                    Ft_elastic = friction_limit*tan;
+                    FricSpheresNew = Kt>0.0 ? Ft_elastic/Kt : OrthoSys::O;
+                    if (sphereCoulombMode == 1)
+                    {
+                        Ft_dashpot = OrthoSys::O;
+                    }
+                }
+                Ft_total = Ft_elastic + Ft_dashpot;
+            }
+            else
+            {
+                double ftTotalNorm = norm(Ft_total);
+                if (ftTotalNorm > friction_limit)
+                {
+                    Vec3_t tan = Ft_total/ftTotalNorm;
+                    Vec3_t Ft_cap = friction_limit*tan;
+                    Ft_elastic = Ft_cap - Ft_dashpot;
+                    FricSpheresNew = Kt>0.0 ? Ft_elastic/Kt : OrthoSys::O;
+                    Ft_total = Ft_cap;
+                }
+            }
+            FricSpheres[p] = FricSpheresNew;
+
+            Vec3_t F = Fn_total + Ft_total;
             //Vec3_t F = Fn + P1->Props.Gn*dot(n,vrel)*n + P1->Props.Gt*vt;
             Vec3_t F1   = -F;
             Vec3_t F2   =  F;
@@ -2580,7 +2979,7 @@ inline void Domain::CalcForceSphere()
             }
             RollSpheres[p] += Vr*Dt;
             RollSpheres[p] -= dot(RollSpheres[p],Normal)*Normal;
-            tan = RollSpheres[p];
+            Vec3_t tan = RollSpheres[p];
             if (norm(tan)>0.0) tan/=norm(tan);
             double Kr = beta*Kt;
             if (norm(RollSpheres[p])>eta*Mu*norm(Fn)/Kr)
@@ -2850,7 +3249,7 @@ inline void Domain::GetParticles (int Tag, Array<Particle*> & P)
 
 #ifdef USE_CUDA
 //////////////////////////////////////////// CUDA IMPLEMENTATION ///////////////////////////////////////////
-inline void Domain::UpLoadDevice(size_t Nc, bool first)
+inline void Domain::UpLoadDevice(size_t Nc, bool first,bool updateState)
 {
     if (first)
     {
@@ -2968,9 +3367,51 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         pEdgesCU         = thrust::raw_pointer_cast(bEdgesCU       .data());
         pFacidCU         = thrust::raw_pointer_cast(bFacidCU       .data());
         pFacesCU         = thrust::raw_pointer_cast(bFacesCU       .data());
-
+        
     }
    
+
+ if (updateState){
+    thrust::host_vector<real3> hA(demaux.nparts);
+    for (size_t i = 0; i < demaux.nparts; i++)
+        hA[i] = make_real3(A[i](0), A[i](1), A[i](2));
+
+    bA.resize(hA.size());
+    thrust::copy(hA.begin(), hA.end(), bA.begin());
+    pA = thrust::raw_pointer_cast(bA.data());
+    //gpuErrchk(cudaGetLastError());
+
+    thrust::host_vector<real3> hWdot(demaux.nparts);
+    for (size_t i = 0; i < demaux.nparts; i++)
+        hWdot[i] = make_real3(Wdot[i](0), Wdot[i](1), Wdot[i](2));
+
+    bWdot.resize(hWdot.size());
+    thrust::copy(hWdot.begin(), hWdot.end(), bWdot.begin());
+    pWdot = thrust::raw_pointer_cast(bWdot.data());
+    //gpuErrchk(cudaGetLastError());
+}
+
+
+
+
+// upload the domain boundaries
+        demaux.Per.x  = Per(0);
+        demaux.Per.y  = Per(1);
+        demaux.Per.z  = Per(2);
+        demaux.Xmin   = Xmin;
+        demaux.Ymin   = Ymin;
+        demaux.Zmin   = Zmin;
+        demaux.Xmax   = Xmax;
+        demaux.Ymax   = Ymax;
+        demaux.Zmax   = Zmax;
+        demaux.px     = (Xmax-Xmin)>1e-12;
+        demaux.py     = (Ymax-Ymin)>1e-12;
+        demaux.pz     = (Zmax-Zmin)>1e-12;
+        demaux.sphereCoulombMode = SphereCoulombMode;
+        if (demaux.sphereCoulombMode > 2) demaux.sphereCoulombMode = 0;
+        demaux.sphereTensileCutoff = SphereTensileCutoff;
+        demaux.sphereFirstContactCorrection = SphereFirstContactCorrection;
+
     demaux.nvvint = 0;
     demaux.neeint = 0;
     demaux.nvfint = 0;
@@ -3050,6 +3491,9 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         Icu.Ftf     = make_real3(0.0,0.0,0.0);
         CIcu.I1     = i1;
         CIcu.I2     = i2;
+        CIcu.Epot   = 0.0;
+        CIcu.dEvis  = 0.0;
+        CIcu.dEfric = 0.0;
         if (Particles[i1]->Verts.Size()==1 && Particles[i2]->Verts.Size()==1)
         {
 
@@ -3062,12 +3506,14 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                 DIcu.Dmax1  = r1;
                 DIcu.Dmax2  = r2;
                 DIcu.Idx    = ii;
-                Vec3_t Ft   = OrthoSys::O;
-                if (norm(Cis->Fdvv)>0.0) Ft = Cis->Fdvv*Cis->Kt;
-                DIcu.Ft     = make_real3(Ft(0),Ft(1),Ft(2));
-                Ft          = OrthoSys::O;
-                if (norm(Cis->Fdr) >0.0) Ft = Cis->Fdr*Cis->Kt*Cis->beta;
-                DIcu.Fr     = make_real3(Ft(0),Ft(1),Ft(2));
+                double tangentialStiffness = Cis->Kt;
+                if (ContactLaw==1) tangentialStiffness *= sqrt(std::max(0.0,Cis->PrevDelta));
+                Vec3_t Ft = Cis->Fdvv*tangentialStiffness;
+                DIcu.Ft = make_real3(Ft(0),Ft(1),Ft(2));
+                Ft = ContactLaw==1 ? Cis->Fdr : Cis->Fdr*Cis->Kt*Cis->beta;
+                DIcu.Fr = make_real3(Ft(0),Ft(1),Ft(2));
+                DIcu.PrevDelta = Cis->PrevDelta;
+                DIcu.InContact = Cis->InContact;
 
                 hDynInteractonsVV[Ivv[2*ii]] = DIcu;
                 //hDynInteractonsVV[idvv] = DIcu;
@@ -3085,6 +3531,8 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                 DIcu.Idx     = ii;
                 DIcu.IF1     = if1 + Particles[i1]->Nei;
                 DIcu.IF2     = if2 + Particles[i2]->Nei;
+                DIcu.PrevDelta = 0.0;
+                DIcu.InContact = false;
 
                 size_t p    = HashFunction(if1,if2);
                 Vec3_t Ft   = OrthoSys::O;
@@ -3105,6 +3553,8 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                 DIcu.Idx     = ii;
                 DIcu.IF1     = if1 + Particles[i1]->Nvi;
                 DIcu.IF2     = if2 + Particles[i2]->Nfi;
+                DIcu.PrevDelta = 0.0;
+                DIcu.InContact = false;
 
                 size_t p    = HashFunction(if1,if2);
                 Vec3_t Ft   = OrthoSys::O;
@@ -3125,6 +3575,8 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
                 DIcu.Idx     = ii;
                 DIcu.IF1     = if1 + Particles[i1]->Nfi;
                 DIcu.IF2     = if2 + Particles[i2]->Nvi;
+                DIcu.PrevDelta = 0.0;
+                DIcu.InContact = false;
 
                 size_t p    = HashFunction(if1,if2);
                 Vec3_t Ft   = OrthoSys::O;
@@ -3169,7 +3621,9 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
     //if (!first) cudaFree  (pdemaux);
     if (iter!=0) cudaFree  (pdemaux);
     cudaMalloc(&pdemaux, sizeof(dem_aux));
+    //gpuErrchk( cudaGetLastError() ); 
     cudaMemcpy(pdemaux, &demaux, sizeof(dem_aux), cudaMemcpyHostToDevice);
+    //gpuErrchk( cudaGetLastError() );
     //std::cout << "4" << std::endl;
     //
 }
@@ -3217,16 +3671,29 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             size_t hash = HashFunction(i1,i2);
             DEM::CInteracton * Ci = PairtoCInt[hash];
             DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
-            Cis->Fdvv(0) = hDynInteractonsVV[ivv].Ft.x/Cis->Kt;
-            Cis->Fdvv(1) = hDynInteractonsVV[ivv].Ft.y/Cis->Kt;
-            Cis->Fdvv(2) = hDynInteractonsVV[ivv].Ft.z/Cis->Kt;
-            Cis->Fdr (0) = hDynInteractonsVV[ivv].Fr.x/Cis->Kt;
-            Cis->Fdr (1) = hDynInteractonsVV[ivv].Fr.y/Cis->Kt;
-            Cis->Fdr (2) = hDynInteractonsVV[ivv].Fr.z/Cis->Kt;
-            if (fabs(Cis->beta)>0.0)
+            double tangentialStiffness = Cis->Kt;
+            if (ContactLaw==1)
+                tangentialStiffness *= sqrt(std::max(0.0,static_cast<double>(hDynInteractonsVV[ivv].PrevDelta)));
+            if (tangentialStiffness>0.0)
             {
-                Cis->Fdr/=Cis->beta;
+                Cis->Fdvv(0) = hDynInteractonsVV[ivv].Ft.x/tangentialStiffness;
+                Cis->Fdvv(1) = hDynInteractonsVV[ivv].Ft.y/tangentialStiffness;
+                Cis->Fdvv(2) = hDynInteractonsVV[ivv].Ft.z/tangentialStiffness;
             }
+            else Cis->Fdvv = OrthoSys::O;
+            if (ContactLaw==1)
+                Cis->Fdr = Vec3_t(hDynInteractonsVV[ivv].Fr.x,
+                                  hDynInteractonsVV[ivv].Fr.y,
+                                  hDynInteractonsVV[ivv].Fr.z);
+            else
+            {
+                Cis->Fdr(0) = hDynInteractonsVV[ivv].Fr.x/Cis->Kt;
+                Cis->Fdr(1) = hDynInteractonsVV[ivv].Fr.y/Cis->Kt;
+                Cis->Fdr(2) = hDynInteractonsVV[ivv].Fr.z/Cis->Kt;
+                if (fabs(Cis->beta)>0.0) Cis->Fdr/=Cis->beta;
+            }
+            Cis->PrevDelta = hDynInteractonsVV[ivv].PrevDelta;
+            Cis->InContact = hDynInteractonsVV[ivv].InContact;
         }
 
         #pragma omp parallel for schedule(static) num_threads(Nc)
@@ -3287,6 +3754,23 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             Ci->Ftnet(0) = hComInteractons[ii].Ftnet.x;
             Ci->Ftnet(1) = hComInteractons[ii].Ftnet.y;
             Ci->Ftnet(2) = hComInteractons[ii].Ftnet.z;
+            Ci->Fndpot(0) = hComInteractons[ii].Fndpot.x;
+            Ci->Fndpot(1) = hComInteractons[ii].Fndpot.y;
+            Ci->Fndpot(2) = hComInteractons[ii].Fndpot.z;
+            Ci->Ftdpot(0) = hComInteractons[ii].Ftdpot.x;
+            Ci->Ftdpot(1) = hComInteractons[ii].Ftdpot.y;
+            Ci->Ftdpot(2) = hComInteractons[ii].Ftdpot.z;
+            Ci->Fther(0) = hComInteractons[ii].Fther.x;
+            Ci->Fther(1) = hComInteractons[ii].Fther.y;
+            Ci->Fther(2) = hComInteractons[ii].Fther.z;
+            if ((ContactLaw == 0 || ContactLaw == 1)
+                && Ci->P1->Verts.Size() == 1
+                && Ci->P2->Verts.Size() == 1)
+            {
+                Ci->Epot   = hComInteractons[ii].Epot;
+                Ci->dEvis  = hComInteractons[ii].dEvis;
+                Ci->dEfric = hComInteractons[ii].dEfric;
+            }
             if (Ci->BothFree) // I had to do this due to the two definitions for BranchVec function
             {
                 BranchVec(Ci->P2->x,Ci->P1->x,Ci->Branch,Per);
@@ -3307,8 +3791,52 @@ inline void Domain::UpdateContactsDevice()
 {
     ResetMaxD<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pParticlesCU, pDynParticlesCU, pdemaux);
     DnLoadDevice(Nproc,true);
+
+    // added to update box dimensions
+    dem_aux dev_aux;
+    cudaMemcpy(&dev_aux, pdemaux, sizeof(dem_aux), cudaMemcpyDeviceToHost);
+    // Update host-side domain box
+    Xmin = dev_aux.Xmin;
+    Xmax = dev_aux.Xmax;
+    Ymin = dev_aux.Ymin;
+    Ymax = dev_aux.Ymax;
+    Zmin = dev_aux.Zmin;
+    Zmax = dev_aux.Zmax;
+    Per = Vec3_t(Xmax - Xmin, Ymax - Ymin, Zmax - Zmin);
+
+    ResetMaxD<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pParticlesCU, pDynParticlesCU, pdemaux);
+
     UpdateContacts();
-    UpLoadDevice(Nproc,false);
+    // Re-upload particle dynamic state from host to device after host-side
+    // ResetDisplacements wrapping, so device positions/velocities match the host.
+    // Also re-upload A and Wdot (via updateState=true) from their current host values.
+    {
+        // Download static particle data from device (unchanged since initialization)
+        thrust::host_vector<ParticleCU> hParticlesCU = bParticlesCU;
+        thrust::host_vector<DynParticleCU> hDynParticlesCU_new(Particles.Size());
+        thrust::host_vector<real3>         hVertsCU_new(demaux.nverts);
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t ip = 0; ip < Particles.Size(); ip++)
+        {
+            UploadParticle(hDynParticlesCU_new[ip], hParticlesCU[ip], *Particles[ip]);
+            for (size_t iv = 0; iv < Particles[ip]->Verts.Size(); iv++)
+            {
+                size_t idv = Particles[ip]->Nvi + iv;
+                hVertsCU_new[idv].x = (*Particles[ip]->Verts[iv])(0);
+                hVertsCU_new[idv].y = (*Particles[ip]->Verts[iv])(1);
+                hVertsCU_new[idv].z = (*Particles[ip]->Verts[iv])(2);
+            }
+        }
+        thrust::copy(hDynParticlesCU_new.begin(), hDynParticlesCU_new.end(), bDynParticlesCU.begin());
+        thrust::copy(hVertsCU_new       .begin(), hVertsCU_new       .end(), bVertsCU       .begin());
+        thrust::copy(hVertsCU_new       .begin(), hVertsCU_new       .end(), bVertsoCU      .begin());
+    }
+    UpLoadDevice(Nproc,false,true);
+    // Zero out accelerations on device so VerletStep1 does not produce a large
+    // erroneous half-step from stale acceleration values
+    //ZeroAccel<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pA, pWdot, pDynParticlesCU, pdemaux);
+    RecomputeAccelerations<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>
+    (pParticlesCU, pDynParticlesCU, pA, pWdot, pdemaux);
 }
 #endif
 }; // namespace DEM
