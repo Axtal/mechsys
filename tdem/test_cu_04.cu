@@ -94,9 +94,10 @@ __global__ void MoveTopPar(size_t * TopPar,real3 * Verts, real3 * Vertso, DEM::P
     real  vel = UC[0].str*(UC[0].ztop-UC[0].zbot)*fmin(10.0*(demaux[0].Time-UC[0].T0)/(UC[0].Tf-UC[0].T0),1.0);
     DPar[ip].v.x  = vel;
     DPar[ip].xb.x = DPar[ip].x.x-vel*demaux[0].dt;
-    DPar[ip].v.z  = UC[0].Vz;
-    real3 trans = make_real3(0.0,0.0,UC[0].Dz);
-    Translate(Verts,Vertso,Par[ip],DPar[ip],trans);
+    // Prescribe the displacement once, through the selected Domain integrator.
+    // Moving the vertices here as well would double the VV boundary motion.
+    DPar[ip].v.z = UC[0].Dz/demaux[0].dt;
+    DPar[ip].xb.z = DPar[ip].x.z-UC[0].Dz;
 }
 
 __global__ void SetupSaw(real3 * Verts, real3 * Vertso, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, bool * pcrossed, UdCu * UC, DEM::dem_aux const * demaux)
@@ -444,7 +445,7 @@ int main(int argc, char **argv) try
     if (test=="sawtooth")
     {
         dat.L0   = dom.GetParticle(-5)->x(2) - dom.GetParticle(-4)->x(2);
-        UdCu UC;
+        UdCu UC = {};
         UC.Lz    = dom.GetParticle(-5)->x(2)-dom.GetParticle(-4)->x(2)-(dom.GetParticle(-5)->MinZ()-dom.GetParticle(-4)->MaxZ());
         UC.x0    = dom.GetParticle(-5)->x(0);
         UC.str   = str;
@@ -465,7 +466,7 @@ int main(int argc, char **argv) try
         dom.BoundingBox(Xmin,Xmax);
         double Ztop = Xmax(2);
         double Zbot = Xmin(2);
-        UdCu UC;
+        UdCu UC = {};
         UC.str   = str;
         UC.T0    = T0;
         UC.Tf    = Tf;
@@ -515,6 +516,8 @@ int main(int argc, char **argv) try
         dat.npbot   = hBotPar.size();
         UC .nptop   = hTopPar.size();
         UC .npbot   = hBotPar.size();
+        if (UC.nptop==0 || UC.npbot==0)
+            throw new Fatal("test_cu_04: both rough boundary layers must contain particles");
         dat.pTopPar = thrust::raw_pointer_cast(dat.TopPar.data());
         dat.pBotPar = thrust::raw_pointer_cast(dat.BotPar.data());
 

@@ -548,7 +548,14 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2, siz
         {
             if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
             Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-            Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            // Convert Gt only when it is supplied as a tangential restitution
+            // coefficient. Gt == 0 must remain zero: log(-0) produces an
+            // indeterminate damping coefficient and poisons the contact force.
+            if (Gt < 0.0)
+            {
+                if (fabs(Gt)>1.0) throw new Fatal("CInteractonSphere the tangential restitution coefficient is greater than 1");
+                Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            }
         }
         Gn *= me;
         Gt *= me;
@@ -985,7 +992,14 @@ inline void CInteractonSphere::UpdateParameters (size_t contactlaw)
         {
             if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
             Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-            Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            // Convert Gt only when it is supplied as a tangential restitution
+            // coefficient. Gt == 0 must remain zero: log(-0) produces an
+            // indeterminate damping coefficient and poisons the contact force.
+            if (Gt < 0.0)
+            {
+                if (fabs(Gt)>1.0) throw new Fatal("CInteractonSphere the tangential restitution coefficient is greater than 1");
+                Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            }
         }
         Gn *= me;
         Gt *= me;

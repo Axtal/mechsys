@@ -795,6 +795,7 @@ inline void Particle::UpdateVelocityFull(double dt) {
     if (vzf) Ft(2) = 0.0;
     Ft -= Props.Gv * Props.m * v_half;   // use v_half for damping
     v = v_half + (Ft / Props.m) * (dt * 0.5);
+    Ekin = 0.5*Props.m*dot(v,v);
 }
 
 inline void Particle::TranslateVelVerlet(double dt) {
@@ -826,21 +827,30 @@ inline void Particle::UpdateAngularVelocityFull(double dt) {
     if (wzf) Tt(2) = 0.0;
     if (norm(w_half) > 1.0e-12)
         Tt -= Props.Gm * Vec3_t(I(0)*w_half(0), I(1)*w_half(1), I(2)*w_half(2));
-    Vec3_t wa;
     wa(0) = (Tt(0) + (I(1)-I(2)) * w_half(1) * w_half(2)) / I(0);
     wa(1) = (Tt(1) + (I(2)-I(0)) * w_half(0) * w_half(2)) / I(1);
     wa(2) = (Tt(2) + (I(0)-I(1)) * w_half(0) * w_half(1)) / I(2);
     w = w_half + wa * (dt * 0.5);
+    Erot = 0.5*(I(0)*w(0)*w(0)+I(1)*w(1)*w(1)+I(2)*w(2)*w(2));
 }
 
 inline void Particle::RotateVelVerlet(double dt) {
     // Build quaternion from half-step angular velocity (body frame)
     Quaternion_t dq = Exp(w_half,dt);
-    // Body-frame derivative: Q = Q + Q * dq
-    
-    Quaternion_t qnew = Q * dq;
+    Quaternion_t qnew;
+    QuaternionProduct(Q,dq,qnew);
     double n = norm(qnew);
-    if (n > 1e-12) Q = qnew / n;
+    if (n > 1e-12)
+    {
+        qnew /= n;
+        // Update the world-space geometry as well as the orientation. Blitz
+        // TinyVector multiplication is component-wise, not a quaternion product.
+        Quaternion_t conjugateOld, spatialIncrement;
+        Conjugate(Q,conjugateOld);
+        QuaternionProduct(qnew,conjugateOld,spatialIncrement);
+        if (norm(w_half)>0.0) Rotate(spatialIncrement,x);
+        Q = qnew;
+    }
 }
 
 

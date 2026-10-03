@@ -251,6 +251,9 @@ public:
     size_t Nthread = 256;                                                   ///< Number of GPU threads 
     void UpLoadDevice(size_t Nc=1, bool first = true, bool updatestate = true);                      ///< Upload the domain to cuda device
     void DnLoadDevice(size_t Nc=1, bool force = true);                      ///< Download the key data from device
+#ifdef USE_CUDA
+    void SetVelocityDevice (size_t idx, double vx, double vy, double vz);   ///< Set one particle's velocity on the device (prescribed motion)
+#endif
     void UpdateContactsDevice();                                            ///< Update contacts lists in device
     thrust::device_vector<ParticleCU>      bParticlesCU;                    ///< device vector of particles
     thrust::device_vector<DynParticleCU>   bDynParticlesCU;                 ///< device vector of particles
@@ -726,7 +729,7 @@ if (UseVelocityVerlet){
 
 // 1. Half‑step updates (translational and rotational)
 pVerletStep1<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pA, pdemaux);
-pOrientationUpdate<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
+if (RotPar) pOrientationUpdate<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
 
 if (demaux.nvvint > 0) pForceVV<<<(demaux.nvvint+Nthread-1)/Nthread, Nthread>>>(pInteractons, pComInteractons, pDynInteractonsVV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
 if (demaux.neeint > 0) pForceEE<<<(demaux.neeint+Nthread-1)/Nthread, Nthread>>>(pEdgesCU, pVertsCU, pInteractons, pComInteractons, pDynInteractonsEE, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
@@ -736,7 +739,7 @@ if (demaux.nfvint > 0) pForceFV<<<(demaux.nfvint+Nthread-1)/Nthread, Nthread>>>(
 
 // 3. Finalise velocities (full step)
 pFinalizeVelocity<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pParticlesCU, pDynParticlesCU, pA, pdemaux);
-pFinalizeRotation<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
+if (RotPar) pFinalizeRotation<<<(demaux.nparts+Nthread-1)/Nthread, Nthread>>>(pParticlesCU, pDynParticlesCU, pWdot, pdemaux);
 
 }
 
@@ -862,8 +865,7 @@ if (UseVelocityVerlet){
         if (MostlySpheres && ContactLaw==0) CalcForceSphere();
 
         // 3b. Reset per-thread max displacement before measuring
-      //  #pragma omp parallel for schedule(static) num_threads(Nproc)
-     //   for (size_t i = 0; i < Nproc; i++) MTD[i].Dmx = 0.0;
+        for (size_t i = 0; i < Nproc; i++) MTD[i].Dmx = 0.0;
 
         // 5. Full‑step velocity updates using forces computed in step 4
         #pragma omp parallel for schedule(static) num_threads(Nproc)
@@ -981,10 +983,10 @@ if (UseVelocityVerlet){
 
     // last output
     Finished = true;
-    if (ptReport!=NULL) (*ptReport) ((*this), UserData);
 #ifdef USE_CUDA
     DnLoadDevice(Nproc,true);
 #endif
+    if (ptReport!=NULL) (*ptReport) ((*this), UserData);
 
     // save energy data
     //if (TheFileKey!=NULL)
@@ -3048,10 +3050,11 @@ inline double Domain::CalcEnergy (double & Ekin, double & Epot)
     Ekin = 0.0;
     for (size_t i=0; i<Particles.Size(); i++)
     {
-        Ekin += 0.5*Particles[i]->Props.m*dot(Particles[i]->v,Particles[i]->v)
-                + 0.5*(Particles[i]->I(0)*Particles[i]->w(0)*Particles[i]->w(0)
-                      +Particles[i]->I(1)*Particles[i]->w(1)*Particles[i]->w(1)
-                      +Particles[i]->I(2)*Particles[i]->w(2)*Particles[i]->w(2));
+        Particles[i]->Ekin = 0.5*Particles[i]->Props.m*dot(Particles[i]->v,Particles[i]->v);
+        Particles[i]->Erot = 0.5*(Particles[i]->I(0)*Particles[i]->w(0)*Particles[i]->w(0)
+                                +Particles[i]->I(1)*Particles[i]->w(1)*Particles[i]->w(1)
+                                +Particles[i]->I(2)*Particles[i]->w(2)*Particles[i]->w(2));
+        Ekin += Particles[i]->Ekin + Particles[i]->Erot;
     }
 
     // potential energy
@@ -3628,6 +3631,14 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first,bool updateState)
     //
 }
 
+#ifdef USE_CUDA
+inline void Domain::SetVelocityDevice (size_t idx, double vx, double vy, double vz)
+{
+    real3 v = make_real3(vx,vy,vz);
+    SetVelocity<<<1,1>>>(pDynParticlesCU, idx, v);
+}
+#endif
+
 inline void Domain::DnLoadDevice(size_t Nc, bool force)
 {
     thrust::host_vector<DynParticleCU> hDynParticlesCU = bDynParticlesCU;
@@ -3763,14 +3774,9 @@ inline void Domain::DnLoadDevice(size_t Nc, bool force)
             Ci->Fther(0) = hComInteractons[ii].Fther.x;
             Ci->Fther(1) = hComInteractons[ii].Fther.y;
             Ci->Fther(2) = hComInteractons[ii].Fther.z;
-            if ((ContactLaw == 0 || ContactLaw == 1)
-                && Ci->P1->Verts.Size() == 1
-                && Ci->P2->Verts.Size() == 1)
-            {
-                Ci->Epot   = hComInteractons[ii].Epot;
-                Ci->dEvis  = hComInteractons[ii].dEvis;
-                Ci->dEfric = hComInteractons[ii].dEfric;
-            }
+            Ci->Epot   = hComInteractons[ii].Epot;
+            Ci->dEvis  = hComInteractons[ii].dEvis;
+            Ci->dEfric = hComInteractons[ii].dEfric;
             if (Ci->BothFree) // I had to do this due to the two definitions for BranchVec function
             {
                 BranchVec(Ci->P2->x,Ci->P1->x,Ci->Branch,Per);

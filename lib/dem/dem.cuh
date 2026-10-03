@@ -476,6 +476,43 @@ __global__ void CalcForceVV_Hertz(InteractonCU const * Int, ComInteractonCU * CI
     }
 }
 
+// Linear feature contacts (edge-edge, vertex-face and face-vertex) share the
+// CPU force decomposition, tensile clamp and elastic/dissipative diagnostics.
+__device__ inline real3 FeatureContactForce(InteractonCU const & law,
+        ComInteractonCU & common, real delta, real3 const & n,
+        real3 const & vrel, real3 const & vt, real3 const & fn,
+        real3 & ft, real dt)
+{
+    ft = ft + (law.Kt*dt)*vt;
+    ft = ft - dotreal3(ft,n)*n;
+    const real limit = law.Mu*norm(fn);
+    const real magnitude = norm(ft);
+    if (magnitude>limit)
+    {
+        ft = (limit/magnitude)*ft;
+        atomicAdd(&common.dEfric,dotreal3(ft,vt)*dt);
+    }
+    real3 normalDashpot = law.Gn*dotreal3(n,vrel)*n;
+    const real3 tangentialDashpot = law.Gt*vt;
+    real3 normalTotal = fn + normalDashpot;
+    if (dotreal3(normalTotal,n)<0.0)
+    {
+        normalTotal = make_real3(0.0,0.0,0.0);
+        normalDashpot = -1.0*fn;
+    }
+    atomicAdd(&common.Epot,0.5*law.Kn*delta*delta
+              + (law.Kt>0.0 ? 0.5*dotreal3(ft,ft)/law.Kt : 0.0));
+    atomicAdd(&common.dEvis,(law.Gn*dotreal3(vrel-vt,vrel-vt)
+                           +law.Gt*dotreal3(vt,vt))*dt);
+    atomicAdd(&common.Fndpot.x,normalDashpot.x);
+    atomicAdd(&common.Fndpot.y,normalDashpot.y);
+    atomicAdd(&common.Fndpot.z,normalDashpot.z);
+    atomicAdd(&common.Ftdpot.x,tangentialDashpot.x);
+    atomicAdd(&common.Ftdpot.y,tangentialDashpot.y);
+    atomicAdd(&common.Ftdpot.z,tangentialDashpot.z);
+    return normalTotal + ft + tangentialDashpot;
+}
+
 __global__ void CalcForceEE(size_t const * Edges, real3 const * Verts, InteractonCU const * Int, ComInteractonCU * CInt, DynInteractonCU * DIntEE,
         ParticleCU * Par, DynParticleCU * DPar, dem_aux const * demaux, void * extraparams)
 {
@@ -517,17 +554,8 @@ __global__ void CalcForceEE(size_t const * Edges, real3 const * Verts, Interacto
         real3 vt   = vrel - dotreal3(n,vrel)*n;
 
         DIntEE[ic].Fn  = Int[id].Kn*delta*n;
-        DIntEE[ic].Ft  = DIntEE[ic].Ft + (Int[id].Kt*demaux[0].dt)*vt;
-        DIntEE[ic].Ft  = DIntEE[ic].Ft - dotreal3(DIntEE[ic].Ft,n)*n;
-
-        real3 tan = DIntEE[ic].Ft;
-        if (norm(tan)>0.0) tan = tan/norm(tan);
-        if (norm(DIntEE[ic].Ft)>Int[id].Mu*norm(DIntEE[ic].Fn))
-        {
-            DIntEE[ic].Ft = Int[id].Mu*norm(DIntEE[ic].Fn)*tan;
-        }
-
-        DIntEE[ic].F = DIntEE[ic].Fn + DIntEE[ic].Ft + Int[id].Gn*dotreal3(n,vrel)*n + Int[id].Gt*vt;
+        DIntEE[ic].F = FeatureContactForce(Int[id],CInt[id],delta,n,vrel,vt,
+                                          DIntEE[ic].Fn,DIntEE[ic].Ft,demaux[0].dt);
 
         real3 T1,T2,T, Tt;
         Tt = cross (x1,DIntEE[ic].F);
@@ -605,17 +633,8 @@ __global__ void CalcForceVF(size_t const * Faces, size_t const * Facid, real3 co
         real3 vt   = vrel - dotreal3(n,vrel)*n;
 
         DIntVF[ic].Fn  = Int[id].Kn*delta*n;
-        DIntVF[ic].Ft  = DIntVF[ic].Ft + (Int[id].Kt*demaux[0].dt)*vt;
-        DIntVF[ic].Ft  = DIntVF[ic].Ft - dotreal3(DIntVF[ic].Ft,n)*n;
-
-        real3 tan = DIntVF[ic].Ft;
-        if (norm(tan)>0.0) tan = tan/norm(tan);
-        if (norm(DIntVF[ic].Ft)>Int[id].Mu*norm(DIntVF[ic].Fn))
-        {
-            DIntVF[ic].Ft = Int[id].Mu*norm(DIntVF[ic].Fn)*tan;
-        }
-
-        DIntVF[ic].F = DIntVF[ic].Fn + DIntVF[ic].Ft + Int[id].Gn*dotreal3(n,vrel)*n + Int[id].Gt*vt;
+        DIntVF[ic].F = FeatureContactForce(Int[id],CInt[id],delta,n,vrel,vt,
+                                          DIntVF[ic].Fn,DIntVF[ic].Ft,demaux[0].dt);
 
         real3 T1,T2,T, Tt;
         Tt = cross (x1,DIntVF[ic].F);
@@ -692,17 +711,8 @@ __global__ void CalcForceFV(size_t const * Faces, size_t const * Facid, real3 co
         real3 vt   = vrel - dotreal3(n,vrel)*n;
 
         DIntFV[ic].Fn  = Int[id].Kn*delta*n;
-        DIntFV[ic].Ft  = DIntFV[ic].Ft + (Int[id].Kt*demaux[0].dt)*vt;
-        DIntFV[ic].Ft  = DIntFV[ic].Ft - dotreal3(DIntFV[ic].Ft,n)*n;
-
-        real3 tan = DIntFV[ic].Ft;
-        if (norm(tan)>0.0) tan = tan/norm(tan);
-        if (norm(DIntFV[ic].Ft)>Int[id].Mu*norm(DIntFV[ic].Fn))
-        {
-            DIntFV[ic].Ft = Int[id].Mu*norm(DIntFV[ic].Fn)*tan;
-        }
-
-        DIntFV[ic].F = DIntFV[ic].Fn + DIntFV[ic].Ft + Int[id].Gn*dotreal3(n,vrel)*n + Int[id].Gt*vt;
+        DIntFV[ic].F = FeatureContactForce(Int[id],CInt[id],delta,n,vrel,vt,
+                                          DIntFV[ic].Fn,DIntFV[ic].Ft,demaux[0].dt);
 
  
         

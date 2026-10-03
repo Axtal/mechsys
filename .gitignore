@@ -119,6 +119,16 @@ tmpm/tmpm01
 tmpm/tmpm02
 tmpm/tmpm03
 
+# Local DEM regression scaffolding and validation artifacts
+PROJECT_STATE.md
+validation/integrators/
+tdem/regression_options.h
+tdem/test_01_gpu.cu
+tdem/test_02_gpu.cu
+tdem/test_cu_04_reduced.inp
+tdem/test_verlet_regression.cpp
+tdem/test_verlet_regression_gpu.cu
+
 
 
 syntax: glob
