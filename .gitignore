@@ -95,9 +95,6 @@ tdem/test_mesh
 tdem/test_cu_01
 tdem/test_cu_02
 tdem/test_cu_03
-tdem/PID.cpp
-tdem/PID_fixed.cpp
-tdem/PID_v2.cpp
 test/tplotxy
 tdoc/doc_vtk1
 test/models/fcrit
@@ -128,6 +125,7 @@ tdem/test_02_gpu.cu
 tdem/test_cu_04_reduced.inp
 tdem/test_verlet_regression.cpp
 tdem/test_verlet_regression_gpu.cu
+scripts/sync_to_local.sh
 
 
 

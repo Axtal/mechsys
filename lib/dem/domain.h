@@ -339,7 +339,7 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     Initialized = false;
     Dilate = false;
     RotPar = true;
-    UseVelocityVerlet = true;
+    UseVelocityVerlet = false;
     Time = 0.0;
     iter = 0;
     Alpha = 0.05;
@@ -350,7 +350,7 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     ThermostatInteractionRange = 0.0;
     ContactLaw = contactlaw;
     SphereCoulombMode = 0;
-    SphereTensileCutoff = true;
+    SphereTensileCutoff = false;
     SphereFirstContactCorrection = false;
 #ifdef USE_OMP
     omp_init_lock(&lck);

@@ -59,7 +59,7 @@ struct dem_aux
     real   vZmin = 0.0;    ///< Velocity of Zmin boundary (for contact-wrapping compression)
     real   vZmax = 0.0;    ///< Velocity of Zmax boundary (for contact-wrapping compression)
     size_t sphereCoulombMode = 0;       ///< Sphere Coulomb mode: 0 elastic cap with dashpot, 1 elastic cap dashpot off sliding, 2 total force cap
-    bool   sphereTensileCutoff = true;  ///< Clamp tensile total normal force for sphere contacts
+    bool   sphereTensileCutoff = false; ///< Clamp tensile total normal force for sphere contacts
     bool   sphereFirstContactCorrection = false; ///< Scale first active tangential increment by contact activation fraction
 
 };

@@ -48,7 +48,7 @@ public:
 
     // Methods
     virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0) =0;    ///< Update contacts by verlet algorithm
-    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=true, bool sphereFirstContactCorrection=false) =0; ///< Calculates the contact force between particles
+    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=false, bool sphereFirstContactCorrection=false) =0; ///< Calculates the contact force between particles
     virtual void UpdateParameters (size_t contactlaw=0) =0;                ///< Update the parameters
 
     // Data
@@ -71,7 +71,7 @@ public:
 
     // Methods
     virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contaclaw = 0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=true, bool sphereFirstContactCorrection=false); ///< Calculates the contact force between particles
+    virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contaclaw = 0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=false, bool sphereFirstContactCorrection=false); ///< Calculates the contact force between particles
     virtual void UpdateParameters (size_t contactlaw=0);              ///< Update the parameters
 
     // Data
@@ -123,7 +123,7 @@ public:
     // Methods 
     CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                 ///< Update contacts by verlet algorithm
-    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=true, bool sphereFirstContactCorrection=false);    ///< Calculates the contact force between particles
+    bool CalcForce (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=false, bool sphereFirstContactCorrection=false);    ///< Calculates the contact force between particles
     void UpdateParameters (size_t contactlaw=0);                           ///< Update the parameters
 
     // Data
@@ -150,7 +150,7 @@ public:
 
     // Methods
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=true, bool sphereFirstContactCorrection=false); ///< Calculates the force between particles
+    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0, size_t sphereCoulombMode=0, bool sphereTensileCutoff=false, bool sphereFirstContactCorrection=false); ///< Calculates the force between particles
     void UpdateParameters (size_t contactlaw=0);              ///< Update the parameters in case they change
 
     // Data
