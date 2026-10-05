@@ -30,6 +30,7 @@ OPTION(A_MAKE_TERM_NOCOLORS  "Don't use colors when printing to terminal ?"     
 OPTION(A_MAKE_STDVECTOR      "Use std::vector instead of own implemenatation ?"                             ON )
 OPTION(A_MAKE_CHECK_OVERLAP  "Check for maximun overlapping in DEM simulations"                             ON )
 OPTION(A_MAKE_USE_GPU_DOUBLE "Use double precision numbers in GPU computation"                              ON )
+OPTION(A_MAKE_CUDA_NATIVE    "Build CUDA for this machine's GPU only (OFF = build for all major architectures)" ON )
 OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"                                OFF)
 #OPTION(A_MAKE_USE_IBB        "Use Immersed Bounce Back instead of Gamma Method for DEM-LBM simulations"     OFF)
 #OPTION(A_MAKE_USE_LADD       "Use Ladd instead of Gamma Method for DEM-LBM simulations"                     OFF)

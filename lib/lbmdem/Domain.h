@@ -585,6 +585,59 @@ void Domain::WriteXDMF(char const * FileKey)
 {
 }
 
+#ifdef USE_CUDA
+// The number of discrete velocities is a run-time property of the lattice but
+// it is known for the whole simulation, so the hot kernels are instantiated for
+// the usual lattices and selected once per launch. This lets the compiler fully
+// unroll the population loops (no local-memory spill of NonEq[]) instead of
+// paying for a dynamic loop bound on every cell.
+inline void LaunchCollideSC (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real * F, real * Ftemp, real3 * BForce,
+        real3 * Vel, real * Rho, real * Gamma, real * Omeis, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaCollideSCDEM< 5,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case  9: cudaCollideSCDEM< 9,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case 15: cudaCollideSCDEM<15,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case 19: cudaCollideSCDEM<19,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        default: cudaCollideSCDEM< 0,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+    }
+}
+
+inline void LaunchCollideMP (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real * F, real * Ftemp, real3 * BForce,
+        real3 * Vel, real * Rho, real * Gamma, real * Omeis, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaCollideMPDEM< 5,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case  9: cudaCollideMPDEM< 9,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case 15: cudaCollideMPDEM<15,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        case 19: cudaCollideMPDEM<19,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+        default: cudaCollideMPDEM< 0,true><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,Gamma,Omeis,lbmaux); break;
+    }
+}
+
+// FLBM::cudaTick advances the device side Time/iter counters; it used to be a
+// branch of the streaming kernel, which is why it now needs its own launch.
+inline void LaunchTick (FLBM::lbm_aux * lbmaux)
+{
+    FLBM::cudaTick<<<1,1>>>(lbmaux);
+}
+
+inline void LaunchFusedStreamMacro (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real const * Gamma, real * Omeis,
+        real const * Fpost, real * F, real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaFusedStreamMacro< 5><<<Nblk,Nthread>>>(IsSolid,Gamma,Omeis,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case  9: cudaFusedStreamMacro< 9><<<Nblk,Nthread>>>(IsSolid,Gamma,Omeis,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case 15: cudaFusedStreamMacro<15><<<Nblk,Nthread>>>(IsSolid,Gamma,Omeis,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case 19: cudaFusedStreamMacro<19><<<Nblk,Nthread>>>(IsSolid,Gamma,Omeis,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        default: cudaFusedStreamMacro< 0><<<Nblk,Nthread>>>(IsSolid,Gamma,Omeis,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+    }
+}
+#endif
+
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
                           char const * TheFileKey, bool RenderVideo, size_t TheNproc)
 {
@@ -783,7 +836,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 #ifdef USE_CUDA
         //auto start = std::chrono::high_resolution_clock::now();
 
-        cudaReset<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGammaf,pGamma,pOmeis,LBMDOM.plbmaux);
+        // Note: cudaReset only acts on ic<Ncells, so the Nl factor that used to
+        // be in the grid size only launched idle blocks.
+        cudaReset<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGammaf,pGamma,pOmeis,LBMDOM.plbmaux);
 
         DEMDOM.pReset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pInteractons,DEMDOM.pComInteractons,DEMDOM.pdemaux,DEMDOM.pExtraParams);
         DEMDOM.pForceVV<<<DEMDOM.demaux.nvvint/Nthread+1,Nthread>>>(DEMDOM.pInteractons,DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVV, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
@@ -845,7 +900,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
                 cudaApplyForcesSC<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,pGamma,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
             }
              
-            cudaCollideSCDEM<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
+            LaunchCollideSC (LBMDOM.Nneigh,LBMDOM.Ncells/Nthread+1,Nthread,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         }
         else
         {
@@ -854,17 +909,21 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
                 cudaApplyForcesSCMP<<<LBMDOM.NCellPairs/Nthread+1,Nthread>>>(LBMDOM.pCellPairs,LBMDOM.pIsSolid,pGamma,LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.plbmaux);
             }
 
-            cudaCollideMPDEM<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(pfBn,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
+            LaunchCollideMP (LBMDOM.Nneigh,LBMDOM.Ncells/Nthread+1,Nthread,LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.plbmaux);
         }
+        // Streaming + macroscopic update in a single fused pass.  After the two
+        // pointers are swapped pF holds the post-collision populations and
+        // pFtemp is the destination the fused kernel streams into; swapping back
+        // afterwards leaves pF post-stream, exactly as the old
+        // collide/Stream1/Stream2 sequence did.
         real * tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
-        FLBM::cudaStream1<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.plbmaux);
+        LaunchFusedStreamMacro (LBMDOM.Nneigh,LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread,LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
         tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
-        //FLBM::cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
-        cudaStream2<<<LBMDOM.Nl*LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGamma,pOmeis,LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.pBForce,LBMDOM.pVel,LBMDOM.pRho,LBMDOM.plbmaux);
+        LaunchTick(LBMDOM.plbmaux);
 
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();

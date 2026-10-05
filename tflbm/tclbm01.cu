@@ -39,18 +39,22 @@ __global__ void Left_BC(real * VBC, bool * IsSolid, real * F, real3 * Vel, real 
     if (!IsSolid[ib])
     {
         //" Initialize(ib,F,Rho,Vel,1.0,(real3)(VBC[ic],0.0,0.0),lbmaux); \n"
-        size_t iv = ib*lbmaux[0].Nneigh;
-        real * f = F + iv;
+        // F is direction-major now (FLBM::FIDX in flbm/lbm.cuh), so the
+        // populations of a cell are not contiguous: gather them first and
+        // scatter them back once the boundary values have been computed.
+        real f[27];
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++) f[k] = F[FLBM::FIDX(lbmaux[0].Ncells,lbmaux[0].Nneigh,0,k,ib)];
 	    real rho = (f[0]+f[2]+f[4] + 2.0*(f[3]+f[6]+f[7]))/(1.0-VBC[ic]);
 	    f[1] = f[3] + (2.0/3.0)*rho*VBC[ic];
 	    f[5] = f[7] + (1.0/6.0)*rho*VBC[ic] - 0.5*(f[2]-f[4]);
 	    f[8] = f[6] + (1.0/6.0)*rho*VBC[ic] + 0.5*(f[2]-f[4]);
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++) F[FLBM::FIDX(lbmaux[0].Ncells,lbmaux[0].Nneigh,0,k,ib)] = f[k];
         Rho   [ib] = 0.0;
         Vel   [ib] = make_real3(0.0,0.0,0.0);
         for(size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
-            Rho[ib] += F[iv + k];
-            Vel[ib] = Vel[ib] + F[iv + k]*lbmaux[0].C[k];
+            Rho[ib] += f[k];
+            Vel[ib] = Vel[ib] + f[k]*lbmaux[0].C[k];
         }
         Vel[ib] = (1.0/Rho[ib])*Vel[ib];
     }
@@ -65,19 +69,20 @@ __global__ void Right_BC(bool * IsSolid, real * F, real3 * Vel, real * Rho, FLBM
     if (!IsSolid[ib])
     {
         //" Initialize(ib,F,Rho,Vel,1.0,Vel[ib],lbmaux); \n"
-        size_t iv  = ib*lbmaux[0].Nneigh;
-        real * f = F + iv;
+        real f[27];
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++) f[k] = F[FLBM::FIDX(lbmaux[0].Ncells,lbmaux[0].Nneigh,0,k,ib)];
         real rho = 1.0;
 	    real vx = -1.0 + (f[0]+f[2]+f[4] + 2.0f*(f[1]+f[5]+f[8]))/rho;
 	    f[3] = f[1] - (2.0/3.0)*rho*vx; 
 	    f[7] = f[5] - (1.0/6.0)*rho*vx + 0.5*(f[2]-f[4]);
 	    f[6] = f[8] - (1.0/6.0)*rho*vx - 0.5*(f[2]-f[4]);
-        Rho   [ib] = 0.0f;
+        for (size_t k=0;k<lbmaux[0].Nneigh;k++) F[FLBM::FIDX(lbmaux[0].Ncells,lbmaux[0].Nneigh,0,k,ib)] = f[k];
+        Rho   [ib] = 0.0;
         Vel   [ib] = make_real3(0.0,0.0,0.0);
         for(size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
-            Rho[ib] += F[iv + k];
-            Vel[ib] = Vel[ib] + F[iv + k]*lbmaux[0].C[k];
+            Rho[ib] += f[k];
+            Vel[ib] = Vel[ib] + f[k]*lbmaux[0].C[k];
         }
         Vel[ib] = (1.0/Rho[ib])*Vel[ib];
     }

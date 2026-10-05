@@ -2036,7 +2036,8 @@ inline void Domain::Save(char const *FileKey)
     for (size_t n = 0; n < Ndim(0); n++)
     for (size_t k = 0; k < Nneigh ; k++)
     {
-        size_t Nn = k + n * Nneigh + l * Ndim(0) * Nneigh + m * Ndim(1) *Ndim(0) * Nneigh + j * Ncells * Nneigh;
+        // bF is direction-major, F[j][n][l][m][k] is cell-contiguous.
+        size_t Nn = (j*Nneigh + k)*Ncells + (size_t)n + (size_t)l*Ndim(0) + (size_t)m*Ndim(0)*Ndim(1);
         F[j][n][l][m][k] = hF[Nn];
     }
 #endif
@@ -2298,7 +2299,9 @@ inline void Domain::UpLoadDevice(size_t Nc)
                     //Nm++;
                     for (size_t nn=0;nn<Nneigh;nn++)
                     {
-                        size_t Nn = nn + nx*Nneigh + ny*Ndim(0)*Nneigh + nz*Ndim(1)*Ndim(0)*Nneigh + il*Ncells*Nneigh; 
+                        // direction-major device layout; the host array and the
+                        // on-disk format stay cell-contiguous (see FLBM::FIDX)
+                        size_t Nn = (il*Nneigh + nn)*Ncells + (size_t)nx + (size_t)ny*Ndim(0) + (size_t)nz*Ndim(1)*Ndim(0); 
                         hF    [Nn] = F    [il][nx][ny][nz][nn];
                         hFtemp[Nn] = Ftemp[il][nx][ny][nz][nn];
                         //Nn++;
@@ -2370,6 +2373,65 @@ inline void Domain::DnLoadDevice(size_t Nc)
 
     
 
+}
+#endif
+
+#ifdef USE_CUDA
+// The number of discrete velocities is a run-time property of the lattice, but
+// it is fixed for the whole simulation, so the hot kernels are instantiated for
+// the usual lattices and selected once per launch.  This lets the compiler fully
+// unroll the population loops (no local-memory spill of NonEq[], no dynamic trip
+// count) instead of paying for a run-time loop bound on every cell.
+inline void LaunchCollideSC (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real * F, real * Ftemp,
+        real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaCollideSC< 5><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case  9: cudaCollideSC< 9><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 15: cudaCollideSC<15><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 19: cudaCollideSC<19><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        default: cudaCollideSC< 0><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+    }
+}
+
+inline void LaunchCollideMP (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real * F, real * Ftemp,
+        real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaCollideMP< 5><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case  9: cudaCollideMP< 9><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 15: cudaCollideMP<15><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 19: cudaCollideMP<19><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        default: cudaCollideMP< 0><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+    }
+}
+
+inline void LaunchCollideAD (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real * F, real * Ftemp,
+        real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaCollideAD< 5><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case  9: cudaCollideAD< 9><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 15: cudaCollideAD<15><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        case 19: cudaCollideAD<19><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+        default: cudaCollideAD< 0><<<Nblk,Nthread>>>(IsSolid,F,Ftemp,BForce,Vel,Rho,lbmaux); break;
+    }
+}
+
+inline void LaunchFusedStreamMacro (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real const * Fpost,
+        real * F, real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
+{
+    switch (Nneigh)
+    {
+        case  5: cudaFusedStreamMacro< 5><<<Nblk,Nthread>>>(IsSolid,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case  9: cudaFusedStreamMacro< 9><<<Nblk,Nthread>>>(IsSolid,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case 15: cudaFusedStreamMacro<15><<<Nblk,Nthread>>>(IsSolid,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        case 19: cudaFusedStreamMacro<19><<<Nblk,Nthread>>>(IsSolid,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+        default: cudaFusedStreamMacro< 0><<<Nblk,Nthread>>>(IsSolid,Fpost,F,BForce,Vel,Rho,lbmaux); break;
+    }
 }
 #endif
 
@@ -2490,7 +2552,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
                     //cudaDeviceSynchronize();
                 }
                 //cudaCollideSC_MRT<<<Nl*Ncells/256+1,256>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
-                cudaCollideSC<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+                LaunchCollideSC(Nneigh,Nl*Ncells/Nthread+1,Nthread,pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
                 //cudaDeviceSynchronize();
             }
             else 
@@ -2501,13 +2563,13 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
                     //cudaDeviceSynchronize();
                 }
 
-                cudaCollideMP<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+                LaunchCollideMP(Nneigh,Ncells/Nthread+1,Nthread,pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
                 //cudaDeviceSynchronize();
             }
         }
         else if (Solver==AdvectionDiffusion)
         {
-            cudaCollideAD<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            LaunchCollideAD(Nneigh,Ncells/Nthread+1,Nthread,pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
         }
         else if (Solver==PhaseFieldIce)
         {
@@ -2525,27 +2587,43 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         real * tmp = pF;
         pF = pFtemp;
         pFtemp = tmp;
-        cudaStream1<<<Nl*Ncells/Nthread+1,Nthread>>>(pF,pFtemp,pBForce,plbmaux);
-        //cudaDeviceSynchronize();
+        if (Solver==PhaseFieldIce||Solver==PhaseField||Solver==ShallowWater)
+        {
+            // These solvers have their own macroscopic update, so the streaming
+            // stays a separate pass here.
+            cudaStream1<<<Nl*Ncells/Nthread+1,Nthread>>>(pF,pFtemp,pBForce,plbmaux);
+            //cudaDeviceSynchronize();
 
-        tmp = pF;
-        pF = pFtemp;
-        pFtemp = tmp;
-        if (Solver==PhaseFieldIce)
-        {
-            cudaStreamPFI2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
-        }
-        else if (Solver==PhaseField)
-        {
-            cudaStreamPF2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
-        }
-        else if (Solver==ShallowWater)
-        {
-            cudaStreamSW2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            tmp = pF;
+            pF = pFtemp;
+            pFtemp = tmp;
+            if (Solver==PhaseFieldIce)
+            {
+                cudaStreamPFI2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            }
+            else if (Solver==PhaseField)
+            {
+                cudaStreamPF2<<<Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            }
+            else
+            {
+                cudaStreamSW2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            }
         }
         else
         {
-            cudaStream2<<<Nl*Ncells/Nthread+1,Nthread>>>(pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            // Streaming + Rho/Vel/BForce update in a single fused pass.  After
+            // the swap pF holds the post-collision populations and pFtemp is the
+            // destination the fused kernel streams into; swapping back afterwards
+            // leaves pF post-stream, exactly as the old
+            // Stream1 / swap / Stream2 sequence did.
+            LaunchFusedStreamMacro(Nneigh,Nl*Ncells/Nthread+1,Nthread,pIsSolid,pF,pFtemp,pBForce,pVel,pRho,plbmaux);
+            tmp = pF;
+            pF = pFtemp;
+            pFtemp = tmp;
+            // cudaStream2 used to bump Time/iter from thread 0; the fused kernel
+            // takes lbmaux as const, so the counters live in their own kernel.
+            cudaTick<<<1,1>>>(plbmaux);
         }
         //cudaDeviceSynchronize();
         #else

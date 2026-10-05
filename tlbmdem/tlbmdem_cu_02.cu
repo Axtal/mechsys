@@ -80,6 +80,7 @@ int main(int argc, char **argv) try
     double dt = 1.6e-2;
     double R = 1.8;
     LBMDEM::Domain dom(D3Q15,nu,iVec3_t(nx,ny,nz),dx,dt);
+    dom.Nthread = nthread;
     UserData dat;
     dom.UserData = &dat;
     dat.R  = R;

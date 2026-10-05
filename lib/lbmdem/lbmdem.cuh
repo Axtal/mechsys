@@ -29,6 +29,11 @@
 namespace LBMDEM
 {
 
+// The distribution buffers here share FLBM's direction-major layout (see the
+// comment on FLBM::FIDX in flbm/lbm.cuh); bring the index helper into scope so
+// the kernels below read the same way they did when that layout was implicit.
+using FLBM::FIDX;
+
 struct lbmdem_aux
 {
     size_t nvc;  ///< number of vertex cell pairs
@@ -124,13 +129,14 @@ __device__ real cudaSphereCube(real3 & Xs, real3 & Xc, real R, real dx)
     return len;
 }
 
-__global__ void cudaReset(bool const * IsSolid, real * Gammaf, real * Gamma, real * Omeis,FLBM::lbm_aux * lbmaux)
+__global__ void cudaReset(bool const * __restrict__ IsSolid, real const * __restrict__ Gammaf, real * __restrict__ Gamma, real * __restrict__ Omeis, FLBM::lbm_aux * __restrict__ lbmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
     if (IsSolid[ic])  Gamma[ic] = 1.0;
     else              Gamma[ic] = Gammaf[ic];
 }
+
 /*
 //#ifdef USE_IBB
 __global__ void cudaCheckOutsideVC(size_t const * PaCeV, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, real * Gamma, 
@@ -192,6 +198,11 @@ __global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real
     size_t ice = threadIdx.x + blockIdx.x * blockDim.x;
     if (ice>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
 
+    const size_t Ncells = lbmaux[0].Ncells;
+    const size_t Nn     = lbmaux[0].Nneigh;
+    const size_t icl    = ice/Ncells;
+    const size_t ice0   = ice - icl*Ncells;
+
     size_t icx =  ice%lbmaux[0].Nx;
     size_t icy = (ice/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ice/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
@@ -201,7 +212,7 @@ __global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real
     {
         for (size_t k = 0; k < lbmaux[0].Nneigh ; k++)
         {
-            F[ice*lbmaux[0].Nneigh + k] = 0.0;
+            F[FIDX(Ncells,Nn,icl,k,ice0)] = 0.0;
         }
         size_t naem = 0;
         for (size_t k = 1; k < lbmaux[0].Nneigh ; k++)
@@ -221,9 +232,9 @@ __global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real
             real rhom = 0.0;
             for (size_t kt = 0; kt < lbmaux[0].Nneigh ; kt++)
             {
-                F[ice*lbmaux[0].Nneigh + kt] += 2.0*F[in*lbmaux[0].Nneigh + kt] - F[im*lbmaux[0].Nneigh + kt];
-                rhon += F[in*lbmaux[0].Nneigh + kt];
-                rhom += F[im*lbmaux[0].Nneigh + kt];
+                F[FIDX(Ncells,Nn,icl,kt,ice0)] += 2.0*F[FIDX(Ncells,Nn,0,kt,in)] - F[FIDX(Ncells,Nn,0,kt,im)];
+                rhon += F[FIDX(Ncells,Nn,0,kt,in)];
+                rhom += F[FIDX(Ncells,Nn,0,kt,im)];
             }
             naem++;
             //if (ice==3740896&&lbmaux[0].iter==1)
@@ -246,7 +257,7 @@ __global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real
             real3 VelP   = DPar[ip].v + cross(tmp,B);
             for (size_t k = 1; k < lbmaux[0].Nneigh ; k++)
             {
-                F[ice*lbmaux[0].Nneigh + k] = FeqFluid(k,rho,VelP,lbmaux);
+                F[FIDX(Ncells,Nn,icl,k,ice0)] = FeqFluid(k,rho,VelP,lbmaux);
             }
             naem = 1;
         }
@@ -260,9 +271,9 @@ __global__ void cudaRefill(DEM::ParticleCU * Par, DEM::DynParticleCU * DPar,real
         Vel[ice] = make_real3(0.0,0.0,0.0);
         for (size_t k = 0; k < lbmaux[0].Nneigh ; k++)
         {
-            F[ice*lbmaux[0].Nneigh + k] = fabs(F[ice*lbmaux[0].Nneigh + k])/naem;
-            Rho[ice] += F[ice*lbmaux[0].Nneigh + k];
-            Vel[ice] = Vel[ice] + F[ice*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
+            F[FIDX(Ncells,Nn,icl,k,ice0)] = fabs(F[FIDX(Ncells,Nn,icl,k,ice0)])/naem;
+            Rho[ice] += F[FIDX(Ncells,Nn,icl,k,ice0)];
+            Vel[ice] = Vel[ice] + F[FIDX(Ncells,Nn,icl,k,ice0)]*lbmaux[0].C[k];
         }
         Vel[ice] = lbmaux[0].Cs/Rho[ice]*Vel[ice];
         //if (ice==3740896&&lbmaux[0].iter==1)
@@ -283,6 +294,10 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
     size_t icx =  ice%lbmaux[0].Nx;
     size_t icy = (ice/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ice/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+    const size_t Ncells_ = lbmaux[0].Ncells;
+    const size_t Nn_     = lbmaux[0].Nneigh;
+    const size_t icl_    = ice/Ncells_;
+    const size_t ice0_   = ice - icl_*Ncells_;
 
     size_t ip  = PaCeV[2*ic+1];
 
@@ -305,8 +320,8 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
         //{
             //real Fvpp    = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
             //real Fvp     = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
-            //real Omega   = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
-            //Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
+            //real Omega   = F[FIDX(Ncells_,Nn_,icl_,lbmaux[0].Op[k],ice0_)] - Fvpp - (F[FIDX(Ncells_,Nn_,icl_,k,ice0_)] - Fvp);
+            //Omeis[FIDX(Ncells_,Nn_,icl_,k,ice0_)] = Omega;
         //}
         //return;
     //}
@@ -357,14 +372,14 @@ __global__ void cudaImprintLatticeVC(size_t const * PaCeV, DEM::ParticleCU * Par
         real3 VelP   = DPar[ip].v + cross(tmp,Xw);
         
         //MPM IBB
-        F[ice*lbmaux[0].Nneigh + ko] = (r*F[ife*lbmaux[0].Nneigh + ko] + (1.0-r)*F[ice*lbmaux[0].Nneigh + k] 
-                + r*F[ine*lbmaux[0].Nneigh + k] + 6.0*rho*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[ko],VelP)/Cs)/(1.0+r);
+        F[FIDX(Ncells_,Nn_,icl_,ko,ice0_)] = (r*F[FIDX(Ncells_,Nn_,0,ko,ife)] + (1.0-r)*F[FIDX(Ncells_,Nn_,icl_,k,ice0_)] 
+                + r*F[FIDX(Ncells_,Nn_,0,k,ine)] + 6.0*rho*lbmaux[0].W[k]*dotreal3(lbmaux[0].C[ko],VelP)/Cs)/(1.0+r);
 
 
-        //F[ine*lbmaux[0].Nneigh + k]  = F[ice*lbmaux[0].Nneigh + k];
+        //F[FIDX(Ncells_,Nn_,0,k,ine)]  = F[FIDX(Ncells_,Nn_,icl_,k,ice0_)];
 
-        Flbm = Flbm + ld*ld*Cs*(F[ine*lbmaux[0].Nneigh + k]*(Cs*lbmaux[0].C[k]-VelP) - F[ice*lbmaux[0].Nneigh + ko]*(Cs*lbmaux[0].C[ko]-VelP));
-        //Flbm = Flbm + ld*ld*Cs*(F[ine*lbmaux[0].Nneigh + k]*(Cs*lbmaux[0].C[k]) - F[ice*lbmaux[0].Nneigh + ko]*(Cs*lbmaux[0].C[ko]));
+        Flbm = Flbm + ld*ld*Cs*(F[FIDX(Ncells_,Nn_,0,k,ine)]*(Cs*lbmaux[0].C[k]-VelP) - F[FIDX(Ncells_,Nn_,icl_,ko,ice0_)]*(Cs*lbmaux[0].C[ko]-VelP));
+        //Flbm = Flbm + ld*ld*Cs*(F[FIDX(Ncells_,Nn_,0,k,ine)]*(Cs*lbmaux[0].C[k]) - F[FIDX(Ncells_,Nn_,icl_,ko,ice0_)]*(Cs*lbmaux[0].C[ko]));
     }
 
     real3 Tlbm,Tt;
@@ -403,44 +418,171 @@ __device__ FuncBn_ptr d_fBnSmooth = BnSmooth;
 
 __device__ FuncBn_ptr d_fBnLadd   = BnLadd;
 
-template <typename FuncBn>
-__global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real * Omeis,
-        FLBM::lbm_aux const * lbmaux)
+// ---------------------------------------------------------------------------
+// Fused streaming + macroscopic update.
+//
+// The original per-step sequence was
+//     FLBM::cudaStream1(...)   // scatter: Ftemp[ic + C[k]][k] = F[ic][k]
+//     swap(F,Ftemp)
+//     LBMDEM::cudaStream2(...) // Rho, Vel, reset BForce/Omeis
+// which streams the whole distribution array in two extra full passes.
+//
+// Streaming is a pure lattice translation, so the scatter done by cudaStream1
+// is exactly equivalent to the gather done here:
+//     F[ic][k] = Fpost[ic - C[k]][k]
+// Doing the gather allows the streaming, the density/velocity accumulation and
+// the per-step resets to share a single pass over memory, removing one full
+// read plus one full write of the distribution array per time step.
+//
+// The Omeis reset is additionally restricted to cells with Gamma>0. Only
+// ImprintLattice* ever writes a non-zero Omeis, and it always leaves Gamma>0
+// on those same cells, so "Omeis==0 wherever Gamma==0" is preserved by
+// induction and the bulk of the grid no longer needs to be zeroed.
+// ---------------------------------------------------------------------------
+template <size_t NN>
+__global__ void cudaFusedStreamMacro (bool const * __restrict__ IsSolid, real const * __restrict__ Gamma, real * __restrict__ Omeis,
+        real const * __restrict__ Fpost, real * __restrict__ F, real3 * __restrict__ BForce, real3 * __restrict__ Vel,
+        real * __restrict__ Rho, FLBM::lbm_aux const * __restrict__ lbmaux)
 {
+    const size_t Nneigh = (NN>0) ? NN : lbmaux[0].Nneigh;
+    const size_t Nx     = lbmaux[0].Nx;
+    const size_t Ny     = lbmaux[0].Ny;
+    const size_t Nz     = lbmaux[0].Nz;
+    const size_t Ncells = lbmaux[0].Ncells;
+    const size_t Nxy    = Nx*Ny;
+    const real   Cs     = lbmaux[0].Cs;
+
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=lbmaux[0].Nl*Ncells) return;
+
+    size_t icx =  ic%Nx;
+    size_t icy = (ic/Nx)%Ny;
+    size_t icz = (ic/Nxy)%Nz;
+    size_t icl =  ic/Ncells;
+
+    BForce[ic] = make_real3(0.0,0.0,0.0);
+    Rho    [ic] = 0.0;
+    Vel    [ic] = make_real3(0.0,0.0,0.0);
+
+    const size_t ic0 = ic - icl*Ncells;
+    real  rho = 0.0;
+    real3 vel = make_real3(0.0,0.0,0.0);
+
+    #pragma unroll
+    for (size_t k=0;k<Nneigh;k++)
+    {
+        // Periodic wrap.  (icx - Cx) lies in (-Nx, 2Nx) for every supported
+        // lattice, so at most one adjustment per axis is needed.  An integer
+        // modulo by a run-time divisor costs ~20 instructions and this loop runs
+        // three of them per discrete velocity, i.e. 45 per cell; the conditional
+        // form is exact and replaces each with a predictably-predicated add.
+        int inx = (int)icx - (int)lbmaux[0].C[k].x;
+        int iny = (int)icy - (int)lbmaux[0].C[k].y;
+        int inz = (int)icz - (int)lbmaux[0].C[k].z;
+        if (inx<0) inx += (int)Nx; else if (inx>=(int)Nx) inx -= (int)Nx;
+        if (iny<0) iny += (int)Ny; else if (iny>=(int)Ny) iny -= (int)Ny;
+        if (inz<0) inz += (int)Nz; else if (inz>=(int)Nz) inz -= (int)Nz;
+        size_t in0 = (size_t)inx + (size_t)iny*Nx + (size_t)inz*Nxy;
+        real   f   = Fpost[FIDX(Ncells,Nneigh,icl,k,in0)];
+        F[FIDX(Ncells,Nneigh,icl,k,ic0)] = f;
+        rho        += f;
+        vel         = vel + f*lbmaux[0].C[k];
+    }
+
+    if (!IsSolid[ic])
+    {
+        Rho[ic] = rho;
+        Vel[ic] = Cs/rho*vel;
+        if (Gamma[ic]>1.0e-12)
+        {
+            #pragma unroll
+            for (size_t k=0;k<Nneigh;k++) Omeis[FIDX(Ncells,Nneigh,icl,k,ic0)] = 0.0;
+        }
+    }
+}
+
+// cudaCollideSCDEM<NN,Smooth>
+//
+// NN     : number of discrete velocities, known at compile time so that the
+//          population loops are fully unrolled and NonEq[] is kept in
+//          registers instead of being spilled to local memory.
+//          NN==0 keeps the previous run-time bounded behaviour.
+// Smooth : selects BnSmooth (true) or BnLadd (false). This used to be a
+//          __device__ function pointer passed as a kernel argument, which the
+//          compiler had to turn into an indirect call (no inlining, forced
+//          register spilling around the call) for every single cell.
+template <size_t NN, bool Smooth>
+__global__ void cudaCollideSCDEM(bool const * __restrict__ IsSolid, real * __restrict__ F, real * __restrict__ Ftemp,
+        real3 const * __restrict__ BForce, real3 const * __restrict__ Vel, real const * __restrict__ Rho,
+        real const * __restrict__ Gamma, real const * __restrict__ Omeis, FLBM::lbm_aux const * __restrict__ lbmaux)
+{
+    const size_t Nneigh = (NN>0) ? NN : lbmaux[0].Nneigh;
+    const size_t Ncells = lbmaux[0].Ncells;
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
 
     if (!IsSolid[ic])
     {
-        real3 vel   = Vel[ic]+lbmaux[0].dt*(lbmaux[0].Tau[0]/Rho[ic])*BForce[ic];
-        real  rho   = Rho[ic];
-        real  tau   = lbmaux[0].Tau[0];
-        real  gamma = Gamma[ic];
-        real Bn = fBn(gamma,tau);
-        //real Bn = BnSmooth(gamma,tau);
-        //if (ic==0) printf("Bn = %g \n",Bn);
-//#ifndef USE_LADD
-        //real  Bn    = (gamma*(tau-0.5))/((1.0-gamma)+(tau-0.5));
-        //real Bn = gamma;
-//#else
-        //real Bn = floor(gamma);
-//#endif
+        const real  dt     = lbmaux[0].dt;
+        const real  Cs     = lbmaux[0].Cs;
+        const real  Cs2    = Cs*Cs;
+        const real  tau0   = lbmaux[0].Tau[0];
+        const real  Sc     = lbmaux[0].Sc;
+        const real  rho    = Rho[ic];
+        const real  gamma  = Gamma[ic];
 
-        real  NonEq[27];
-        //real  Feq  [27];
+        real3 vel   = Vel[ic]+dt*(tau0/rho)*BForce[ic];
+        real  tau   = tau0;
+        real  Bn    = Smooth ? BnSmooth(gamma,tau) : BnLadd(gamma,tau);
+
+        real  NonEq[(NN>0)?NN:27];
         real  Q = 0.0;
 
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        // Loop invariants of the equilibrium distribution. Fc is exactly the
+        // sub-expression the compiler used to hoist out of FLBM::FeqFluid, so
+        // keeping it explicit costs nothing and stays bit-for-bit identical.
+        const real VdotV = dotreal3(vel,vel);
+        const real Fc    = 1.5*VdotV/Cs2;
+        // The two per-direction divisions are replaced by products with the
+        // loop-invariant reciprocals.  Not bit-for-bit identical with the
+        // literal division (each quotient may move by <=1 ulp), but it removes
+        // 2 double divisions per discrete velocity per cell, which is a real
+        // cost on GPUs that run FP64 at a reduced rate.
+        const real iCs   = 1.0/Cs;
+        const real iCs2  = 1.0/Cs2;
+        #pragma unroll
+        for (size_t k=0;k<Nneigh;k++)
         {
-            //real VdotC = dot(vel,lbmaux[0].C[k]);
-            //Feq  [k]     = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
-            //Feq[k]       = FeqFluid(k,rho,vel,lbmaux);
-            //NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - Feq[k];
-            NonEq[k]     = F[ic*lbmaux[0].Nneigh + k] - FLBM::FeqFluid(k,rho,vel,lbmaux);
-            Q           += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
+            // Same as FLBM::FeqFluid(k,rho,vel,lbmaux) with the loop invariants
+            // hoisted out (identical arithmetic ordering).
+            real VdotC = dotreal3(vel,lbmaux[0].C[k]);
+            real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC*iCs + 4.5*VdotC*VdotC*iCs2 - Fc);
+            NonEq[k]   = F[FIDX(Ncells,Nneigh,0,k,ic)] - Feq;
+            Q         += NonEq[k]*NonEq[k]*lbmaux[0].EEk[k];
         }
         Q = sqrt(2.0*Q);
-        tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*lbmaux[0].Sc/rho));
+        tau = 0.5*(tau+sqrt(tau*tau + 6.0*Q*Sc/rho));
+        // tau is fixed for this cell, so a single reciprocal replaces the Nneigh
+        // divisions below (`x/tau` -> `x*itau`; each quotient may move <=1 ulp).
+        const real itau = 1.0/tau;
+
+        // Fold the (constant during the fixed point iteration) non-equilibrium
+        // term into NonEq[] once. The original recomputed
+        //     noneq = (1-Bn)*NonEq[k]/tau - Bn*Omeis[k]
+        // from NonEq[] and Omeis[] on every pass of the loop below; since Bn,
+        // tau, NonEq[] and Omeis[] do not change inside the loop the value is
+        // identical, so the recomputation and the extra Omeis reads are free to
+        // drop.
+        #pragma unroll
+        for (size_t k=0;k<Nneigh;k++)
+        {
+            // The bulk of the grid has gamma==0 hence Bn==0, for which the
+            // Omeis term vanishes exactly. Skipping the load keeps a 15x wider
+            // read of Omeis out of the whole interior of the domain.
+            real Ome = 0.0;
+            if (Bn!=0.0) Ome = Omeis[FIDX(Ncells,Nneigh,0,k,ic)];
+            NonEq[k] = (1.0 - Bn)*NonEq[k]*itau - Bn*Ome;
+        }
 
         bool valid = true;
         real alpha = 1.0;
@@ -448,16 +590,13 @@ __global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real
         while (valid&&numit<2)
         {
             valid = false;
-            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+            #pragma unroll
+            for (size_t k=0;k<Nneigh;k++)
             {
-                real Ome   = Omeis[ic*lbmaux[0].Nneigh + k];
-                real noneq = (1.0 - Bn)*NonEq[k]/tau-Bn*Ome;
-                Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + k] - alpha*(noneq);
-                //if((ic==555||ic==556||ic==557||ic==558)&&(k==1)) printf("ic %lu Ftk %g Fk %g iter %lu \n",ic,Ftemp[ic*lbmaux[0].Nneigh + k],F[ic*lbmaux[0].Nneigh + k],lbmaux[0].iter); 
-                if (Ftemp[ic*lbmaux[0].Nneigh + k]<0.0)
+                Ftemp[FIDX(Ncells,Nneigh,0,k,ic)] = F[FIDX(Ncells,Nneigh,0,k,ic)] - alpha*(NonEq[k]);
+                if (Ftemp[FIDX(Ncells,Nneigh,0,k,ic)]<0.0)
                 {
-                    //real temp = F[ic*lbmaux[0].Nneigh + k]/(NonEq[k]/tau - Fk);
-                    real temp = F[ic*lbmaux[0].Nneigh + k]/noneq;
+                    real temp = F[FIDX(Ncells,Nneigh,0,k,ic)]/NonEq[k];
                     if (temp<alpha) alpha = temp;
                     valid = true;
                 }
@@ -467,21 +606,22 @@ __global__ void cudaCollideSCDEM(FuncBn fBn,bool const * IsSolid, real * F, real
     }
     else
     {
-        for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+        #pragma unroll
+        for (size_t k=0;k<Nneigh;k++)
         {
-            Ftemp[ic*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+            Ftemp[FIDX(Ncells,Nneigh,0,k,ic)] = F[FIDX(Ncells,Nneigh,0,lbmaux[0].Op[k],ic)]; 
         }
     }
-    //for (size_t k=0;k<lbmaux[0].Nneigh;k++)
-    //{
-        //F[ic*lbmaux[0].Nneigh + k] = Ftemp[ic*lbmaux[0].Nneigh + k]; 
-    //}
 }
 
-template <typename FuncBn>
-__global__ void cudaCollideMPDEM(FuncBn fBn, bool const * IsSolid, real * F, real * Ftemp, real3 * BForce, real3 * Vel, real * Rho, real * Gamma, real
-        * Omeis, FLBM::lbm_aux const * lbmaux)
+template <size_t NN, bool Smooth>
+__global__ void cudaCollideMPDEM(bool const * __restrict__ IsSolid, real * __restrict__ F, real * __restrict__ Ftemp,
+        real3 const * __restrict__ BForce, real3 const * __restrict__ Vel, real const * __restrict__ Rho,
+        real const * __restrict__ Gamma, real const * __restrict__ Omeis, FLBM::lbm_aux const * __restrict__ lbmaux)
 {
+    const size_t Nneigh = (NN>0) ? NN : lbmaux[0].Nneigh;
+    const size_t Ncells = lbmaux[0].Ncells;
+    const real   Cs0    = lbmaux[0].Cs;
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
 
@@ -503,7 +643,11 @@ __global__ void cudaCollideMPDEM(FuncBn fBn, bool const * IsSolid, real * F, rea
             real3 vel   = Vmix + (lbmaux[0].dt*lbmaux[0].Tau[il]/rho)*BForce[ic+il*lbmaux[0].Ncells];
             real  VdotV = dotreal3(vel,vel);
             real  tau   = lbmaux[0].Tau[il];
-            real  Bn    = fBn(gamma,tau);
+            // tau is fixed for this cell, so a single reciprocal replaces the Nneigh
+            // divisions below (`x/tau` -> `x*itau`; each quotient may move <=1 ulp).
+            const real itau = 1.0/tau;
+            real  Bn    = Smooth ? BnSmooth(gamma,tau) : BnLadd(gamma,tau);
+            const real Fc = 1.5*VdotV/(Cs0*Cs0);
             bool valid = true;
             real alphal = 1.0;
             real alphat = 1.0;
@@ -513,14 +657,16 @@ __global__ void cudaCollideMPDEM(FuncBn fBn, bool const * IsSolid, real * F, rea
                 numit++;
                 valid = false;
                 alphal = alphat;
-                for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+                #pragma unroll
+                for (size_t k=0;k<Nneigh;k++)
                 {
                     real VdotC = dotreal3(vel,lbmaux[0].C[k]);
-                    real Cs    = lbmaux[0].Cs;
-                    real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC/Cs + 4.5*VdotC*VdotC/(Cs*Cs) - 1.5*VdotV/(Cs*Cs));
-                    size_t idx = ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k;
+                    const real iCs   = 1.0/Cs0;
+                    const real iCs2  = 1.0/(Cs0*Cs0);
+                    real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC*iCs + 4.5*VdotC*VdotC*iCs2 - Fc);
+                    size_t idx = FIDX(Ncells,Nneigh,il,k,ic);
                     real Ome   = Omeis[idx];
-                    real NonEq = (1.0-Bn)*(F[idx]-Feq)/tau - Bn*Ome;
+                    real NonEq = (1.0-Bn)*(F[idx]-Feq)*itau - Bn*Ome;
                     Ftemp[idx] = F[idx] - alphal*NonEq;
                     if (Ftemp[idx]<0.0&&numit<2)
                     {
@@ -537,9 +683,10 @@ __global__ void cudaCollideMPDEM(FuncBn fBn, bool const * IsSolid, real * F, rea
         }
         else
         {
-            for (size_t k=0;k<lbmaux[0].Nneigh;k++)
+            #pragma unroll
+            for (size_t k=0;k<Nneigh;k++)
             {
-                Ftemp[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + k] = F[ic*lbmaux[0].Nneigh + il*lbmaux[0].Ncells*lbmaux[0].Nneigh + lbmaux[0].Op[k]]; 
+                Ftemp[FIDX(Ncells,Nneigh,il,k,ic)] = F[FIDX(Ncells,Nneigh,il,lbmaux[0].Op[k],ic)]; 
             }
         }
     } 
@@ -556,6 +703,10 @@ __global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::Part
     size_t icx =  ice%lbmaux[0].Nx;
     size_t icy = (ice/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ice/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+    const size_t Ncells_ = lbmaux[0].Ncells;
+    const size_t Nn_     = lbmaux[0].Nneigh;
+    const size_t icl_    = ice/Ncells_;
+    const size_t ice0_   = ice - icl_*Ncells_;
 
     size_t ip  = PaCeV[2*ic+1];
 
@@ -587,8 +738,8 @@ __global__ void cudaImprintLatticeVC(FuncBn fBn, size_t const * PaCeV, DEM::Part
         {
             real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
             real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
-            real Omega    = F[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + k] - Fvp);
-            Omeis[ice*lbmaux[0].Nneigh + il*lbmaux[0].Nneigh*lbmaux[0].Ncells + k] = Omega;
+            real Omega    = F[FIDX(Ncells_,Nn_,icl_+il,lbmaux[0].Op[k],ice0_)] - Fvpp - (F[FIDX(Ncells_,Nn_,icl_+il,k,ice0_)] - Fvp);
+            Omeis[FIDX(Ncells_,Nn_,icl_+il,k,ice0_)] = Omega;
             Flbm = Flbm - lbmdemaux[0].Fconv*Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
         }
     }
@@ -619,6 +770,10 @@ __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * 
     size_t icx =  ice%lbmaux[0].Nx;
     size_t icy = (ice/lbmaux[0].Nx)%lbmaux[0].Ny;
     size_t icz = (ice/(lbmaux[0].Nx*lbmaux[0].Ny))%lbmaux[0].Nz;
+    const size_t Ncells_ = lbmaux[0].Ncells;
+    const size_t Nn_     = lbmaux[0].Nneigh;
+    const size_t icl_    = ice/Ncells_;
+    const size_t ice0_   = ice - icl_*Ncells_;
 
     size_t ip  = PaCe[ic].Ip;
 
@@ -685,8 +840,8 @@ __global__ void cudaImprintLatticeFC(ParCellPairCU const * PaCe, size_t const * 
         {
             real Fvpp     = FLBM::FeqFluid(lbmaux[0].Op[k],rho,VelP,lbmaux);
             real Fvp      = FLBM::FeqFluid(k              ,rho,VelP,lbmaux);
-            real Omega    = F[ice*lbmaux[0].Nneigh + lbmaux[0].Op[k]] - Fvpp - (F[ice*lbmaux[0].Nneigh + k] - Fvp);
-            Omeis[ice*lbmaux[0].Nneigh + k] = Omega;
+            real Omega    = F[FIDX(Ncells_,Nn_,icl_,lbmaux[0].Op[k],ice0_)] - Fvpp - (F[FIDX(Ncells_,Nn_,icl_,k,ice0_)] - Fvp);
+            Omeis[FIDX(Ncells_,Nn_,icl_,k,ice0_)] = Omega;
             Flbm = Flbm - Bn*Omega*lbmaux[0].Cs*lbmaux[0].Cs*lbmaux[0].dx*lbmaux[0].dx*lbmaux[0].C[k];
         }
     }
@@ -854,6 +1009,10 @@ __global__ void cudaStream2(bool const * IsSolid, real * Gamma, real * Omeis, re
         lbmaux[0].Time += lbmaux[0].dt;
         lbmaux[0].iter++;
     }
+    const size_t NcellsD = lbmaux[0].Ncells;
+    const size_t NnD     = lbmaux[0].Nneigh;
+    const size_t iclD    = ic/NcellsD;
+    const size_t ic0D    = ic - iclD*NcellsD;
     BForce[ic] = make_real3(0.0,0.0,0.0);
     Rho   [ic] = 0.0;
     Vel   [ic] = make_real3(0.0,0.0,0.0);
@@ -861,9 +1020,9 @@ __global__ void cudaStream2(bool const * IsSolid, real * Gamma, real * Omeis, re
     {
         for (size_t k=0;k<lbmaux[0].Nneigh;k++)
         {
-            Omeis[ic*lbmaux[0].Nneigh + k] = 0.0;
-            Rho[ic] += F[ic*lbmaux[0].Nneigh + k];
-            Vel[ic] = Vel[ic] + F[ic*lbmaux[0].Nneigh + k]*lbmaux[0].C[k];
+            Omeis[FIDX(NcellsD,NnD,iclD,k,ic0D)] = 0.0;
+            Rho[ic] += F[FIDX(NcellsD,NnD,iclD,k,ic0D)];
+            Vel[ic] = Vel[ic] + F[FIDX(NcellsD,NnD,iclD,k,ic0D)]*lbmaux[0].C[k];
         }
         Vel[ic] = lbmaux[0].Cs/Rho[ic]*Vel[ic];
     }
