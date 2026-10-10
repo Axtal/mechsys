@@ -117,12 +117,18 @@ download_and_compile() {
             DO_PATCH=1
             ;;
         gmsh)
-            # Build the Gmsh shared library (libgmsh.so) from source into pkg
+            # Build Gmsh from source into pkg: both the shared library
+            # (libgmsh.so) and the static one (libgmsh.a).  MechSys links the
+            # static archive by default (see A_USE_GMSH_STATIC), so binaries do
+            # not depend on libgmsh.so at run time.  Release, not the default
+            # RelWithDebInfo: debug information in a static archive is carried
+            # into every binary that links it, and libgmsh.a grows from about
+            # 17 MB to 300 MB for nothing.
             PKG=gmsh-$VER_GMSH-source
             EXT=tgz
             LOCATION=https://raw.githubusercontent.com/Axtal/files-for-mechsys/refs/heads/main/$PKG.$EXT
             DO_CMAKECONF=1
-            CMAKE_PRMS="-DCMAKE_INSTALL_PREFIX=$MECHSYS_ROOT/pkg/gmsh-$VER_GMSH -DDEFAULT=0 -DENABLE_MESH=1 -DENABLE_PARSER=1 -DENABLE_BUILD_SHARED=1 -DENABLE_BUILD_LIB=1 -DENABLE_EIGEN=0 -DENABLE_BLAS_LAPACK=1 -DENABLE_GMP=0 -DENABLE_OPENMP=0 -DENABLE_OCC=0"
+            CMAKE_PRMS="-DCMAKE_INSTALL_PREFIX=$MECHSYS_ROOT/pkg/gmsh-$VER_GMSH -DCMAKE_BUILD_TYPE=Release -DDEFAULT=0 -DENABLE_MESH=1 -DENABLE_PARSER=1 -DENABLE_BUILD_SHARED=1 -DENABLE_BUILD_LIB=1 -DENABLE_EIGEN=0 -DENABLE_BLAS_LAPACK=1 -DENABLE_GMP=0 -DENABLE_OPENMP=0 -DENABLE_OCC=0"
             DO_MAKE=1
             EXTRA_CMD="make install"
             ;;
