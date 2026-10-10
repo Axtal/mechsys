@@ -133,6 +133,7 @@ public:
     void WriteXDMF         (char const * FileKey);                                                              ///< Save a xdmf file for visualization
     void Save              (char const * FileKey);                                                              ///< Save the current domain
     void Load              (char const * FileKey);                                                              ///< Load the domain form a file
+
 #endif
 
     void UpdateLinkedCells ();                                                                                  ///< Update the linked cells
@@ -628,7 +629,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         //std::cout << "8" << std::endl;
         //cudaDeviceSynchronize();
         real maxdis = 0.0;
-        thrust::device_vector<real>::iterator it=thrust::max_element(bMaxDCU.begin(),bMaxDCU.end());
+        // MaxD now writes one entry per block, so scan only those (was: the whole
+        // per-vertex array).  Entries past the block count are never read.
+        size_t nmaxblocks = demaux.nverts/Nthread+1;
+        thrust::device_vector<real>::iterator it=thrust::max_element(bMaxDCU.begin(),bMaxDCU.begin()+nmaxblocks);
         maxdis = *it;
         //std::cout << "9" << std::endl;
         //std::cout << iter << std::endl;
@@ -667,9 +671,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
             //std::cout << p->I1 << " " << p->I2 << std::endl;
 		    if (Interactons[i]->CalcForce(Dt,Per,iter,ContactLaw))
             {
-                String f_error(FileKey+"_error");
-                Save     (f_error.CStr());
-                WriteXDMF(f_error.CStr());
+                // NOTE: this used to dump Save(FileKey+"_error") + WriteXDMF here.  Solve no
+                // longer writes anything by itself -- saving is the caller's decision, and an
+                // automatic dump is especially unwelcome now that a saved file also carries
+                // the friction maps and can be very large.
                 std::cout << "Maximun overlap detected between particles at time " << Time << std::endl;
                 std::cout << "Iteration number                                   " << iter << std::endl;
                 sleep(1);
@@ -1635,6 +1640,13 @@ inline void Domain::Save (char const * FileKey)
     perdat[0]=Zmin;
     H5LTmake_dataset_double(file_id,"/Zmin",1,dims,perdat);
     
+    // Simulation clock.  Without these a reloaded run would restart at t=0 and the
+    // simulation would not actually continue where it left off.
+    perdat[0]=Time;
+    H5LTmake_dataset_double(file_id,"/Time",1,dims,perdat);
+    data[0]=(int)iter;
+    H5LTmake_dataset_int(file_id,"/Iter",1,dims,data);
+    
 
 
     for (size_t i=0; i<Particles.Size(); i++)
@@ -1712,6 +1724,36 @@ inline void Domain::Save (char const * FileKey)
         cq[3]=Particles[i]->Q(3);
         H5LTmake_dataset_double(group_id,"Q",1,dd,cq);
 
+        // The fixed external force and torque.  These are how a caller applies gravity or any
+        // other body force (tdem/test_01 drives its sliding block with Ff = 0,0,-m*g), and they
+        // are part of the state: without them a reloaded domain loses its driving force and
+        // silently evolves differently while every particle field still looks correct.
+        double cf[3];
+        dd[0] = 3;
+        cf[0]=Particles[i]->Ff(0);
+        cf[1]=Particles[i]->Ff(1);
+        cf[2]=Particles[i]->Ff(2);
+        H5LTmake_dataset_double(group_id,"Ff",1,dd,cf);
+
+        cf[0]=Particles[i]->Tf(0);
+        cf[1]=Particles[i]->Tf(1);
+        cf[2]=Particles[i]->Tf(2);
+        H5LTmake_dataset_double(group_id,"Tf",1,dd,cf);
+
+        // The kinematic constraint flags.  FixVeloc()/FixPos() work entirely by setting these
+        // booleans, and IsFree() reads them, so a particle restored without them comes back
+        // FREE -- a fixed wall or a clamped boundary silently starts moving.  Eroded, Closed
+        // and Cluster are per-particle state that the contact and cohesion code reads.
+        int fl[10];
+        fl[0]=Particles[i]->vxf?1:0;  fl[1]=Particles[i]->vyf?1:0;  fl[2]=Particles[i]->vzf?1:0;
+        fl[3]=Particles[i]->wxf?1:0;  fl[4]=Particles[i]->wyf?1:0;  fl[5]=Particles[i]->wzf?1:0;
+        fl[6]=Particles[i]->FixFree?1:0;
+        fl[7]=Particles[i]->Eroded?1:0;
+        fl[8]=Particles[i]->Closed?1:0;
+        fl[9]=Particles[i]->Cluster;
+        hsize_t df[1]; df[0]=10;
+        H5LTmake_dataset_int(group_id,"Flags",1,df,fl);
+
 
 
 
@@ -1734,6 +1776,7 @@ inline void Domain::Save (char const * FileKey)
             dim[0]=3;
             H5LTmake_dataset_double(gv_id,parv.CStr(),1,dim,cod);
         }
+        H5Gclose(gv_id);
 
         // Number of edges of the particle
         data[0] = Particles[i]->Edges.Size();
@@ -1752,6 +1795,7 @@ inline void Domain::Save (char const * FileKey)
             dim[0] =2;
             H5LTmake_dataset_int(gv_id,parv.CStr(),1,dim,co);
         }
+        H5Gclose(gv_id);
         
         // Number of faces of the particle
         data[0] = Particles[i]->Faces.Size();
@@ -1776,51 +1820,228 @@ inline void Domain::Save (char const * FileKey)
             }
             H5LTmake_dataset_int(gv_id,parv.CStr(),1,dim,co);
         }
-        
+        H5Gclose(gv_id);
+
+        // Close the particle group.  Without this the file keeps an open object for every
+        // particle, H5Fclose() then fails (and its result is ignored here), the file handle
+        // is never actually released, and a later Save() to the same file key dies in
+        // H5Fcreate() with "unable to truncate a file which is already open".  That makes
+        // repeated checkpointing to one key impossible.
+        H5Gclose(group_id);
     }
-/*
-    for (size_t ii=0;ii<Interactons.Size();ii++)
+    // Contact properties for every particle, as one flat (NP,13) array rather than one
+    // dataset per particle: the per-particle form costs ~0.6 kB of HDF5 header each, which
+    // was megabytes of pure overhead for data that is 8 bytes per field.
     {
-        size_t i1 = Interactons[ii]->I1;
-        size_t i2 = Interactons[ii]->I2;
-        size_t hash = HashFunction(i1,i2);
-        DEM::CInteracton * Ci = CInteractons[PairtoCInt[hash]];
-
-        if (norm(Ci->Ftnet)<1.0e-12) continue;
-
-        hid_t group_id;
-        String inter;
-        inter.Printf("/Interacton_%08d",ii);
-        group_id = H5Gcreate(file_id, inter.CStr(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        dims[0] = 1;
-        int datint[1];
-        datint[0] = i1;
-        H5LTmake_dataset_int(group_id,"I1",1,dims,datint);
-        datint[0] = i2;
-        H5LTmake_dataset_int(group_id,"I2",1,dims,datint);
-
-        if (Particles[i1]->Verts.Size()==1 && Particles[i2]->Verts.Size()==1)
+        size_t NPp = Particles.Size();
+        double * pr = new double[13*NPp];
+        for (size_t i=0;i<NPp;i++)
         {
-            DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
-            dims[0] = 3;
-            double cod[3];
-            Vec3_t Ft;
-            String intfvv;
-            intfvv.Printf("Fvv");
-            Ft = Cis->Fdvv*Cis->Kt;
-            cod[0] = Ft(0);
-            cod[1] = Ft(1);
-            cod[2] = Ft(2);
-            H5LTmake_dataset_double(group_id,intfvv.CStr(),1,dims,cod);
-            intfvv.Printf("Fdr");
-            Ft = Cis->Fdr*Cis->Kt*Cis->beta;
-            cod[0] = Ft(0);
-            cod[1] = Ft(1);
-            cod[2] = Ft(2);
-            H5LTmake_dataset_double(group_id,intfvv.CStr(),1,dims,cod);
+            pr[13*i+0]  = Particles[i]->Props.Kn;
+            pr[13*i+1]  = Particles[i]->Props.Kt;
+            pr[13*i+2]  = Particles[i]->Props.Bn;
+            pr[13*i+3]  = Particles[i]->Props.Bt;
+            pr[13*i+4]  = Particles[i]->Props.Bm;
+            pr[13*i+5]  = Particles[i]->Props.Gn;
+            pr[13*i+6]  = Particles[i]->Props.Gt;
+            pr[13*i+7]  = Particles[i]->Props.Gv;
+            pr[13*i+8]  = Particles[i]->Props.Gm;
+            pr[13*i+9]  = Particles[i]->Props.Mu;
+            pr[13*i+10] = Particles[i]->Props.eps;
+            pr[13*i+11] = Particles[i]->Props.Beta;
+            pr[13*i+12] = Particles[i]->Props.Eta;
+        }
+        hsize_t dp[2]; dp[0]=NPp; dp[1]=13;
+        H5LTmake_dataset_double(file_id,"/ContactProps",2,dp,pr);
+        delete [] pr;
+    }
+
+    // The per-tag-pair friction coefficient overrides.  ResetContacts applies these only when
+    // it CREATES a pair, and Load creates the restored pairs itself, so unless they are saved
+    // a reloaded domain silently runs with the particle-derived Mu instead -- exactly the
+    // silent-wrong-physics failure this whole feature exists to prevent.
+    if (FricCoeff.size()>0)
+    {
+        size_t nf = FricCoeff.size();
+        int    * ft1 = new int   [nf];
+        int    * ft2 = new int   [nf];
+        double * fm  = new double[nf];
+        size_t   k   = 0;
+        for (std::map<std::pair<int,int>,double>::const_iterator it=FricCoeff.begin();it!=FricCoeff.end();++it,++k)
+        {
+            ft1[k] = it->first.first;
+            ft2[k] = it->first.second;
+            fm [k] = it->second;
+        }
+        hsize_t df[1]; df[0]=nf;
+        H5LTmake_dataset_int   (file_id,"/FricCoeffTag1",1,df,ft1);
+        H5LTmake_dataset_int   (file_id,"/FricCoeffTag2",1,df,ft2);
+        H5LTmake_dataset_double(file_id,"/FricCoeffMu"  ,1,df,fm );
+        delete [] ft1; delete [] ft2; delete [] fm;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Friction maps (the contact history)
+    //
+    // Solve() ends with DnLoadDevice(), which copies the per-contact tangential and rolling
+    // displacements off the GPU back into the CInteracton friction maps -- Fdee/Fdvf/Fdfv for
+    // polyhedra and Fdvv/Fdr for spheres (see DnLoadDevice).  Those maps are the whole
+    // history-dependent state of a contact, and UpLoadDevice seeds the GPU from them on the way
+    // back (see UpLoadDevice).  They are therefore both the right thing to persist and enough
+    // to restart from: restoring them and letting the normal upload run resumes the dynamics
+    // without a discontinuity.
+    //
+    // Layout: ONE group holding flat arrays, not one group per pair.  A pair-per-group layout
+    // costs ~10 HDF5 dataset headers each, which on a 136k-pair case added over a gigabyte of
+    // pure metadata.  The entries are stored as (hash, displacement) parallel arrays with a
+    // per-pair count, so the offsets are recovered by prefix sum on load.
+    //
+    // A contact whose displacement is exactly zero is omitted.  That is lossless because both
+    // UpLoadDevice and the force routines treat an absent key exactly like a zero one
+    // ("if (FMap.count(p)==0) FMap[p] = OrthoSys::O;").
+    // ---------------------------------------------------------------------------------------
+    {
+        Array<size_t> keep;                       // pairs that carry any friction state
+        for (auto it=PairtoCInt.begin(); it!=PairtoCInt.end(); ++it)
+        {
+            DEM::CInteracton * Ci = it->second;
+            if (Ci==NULL) continue;
+            bool has = false;
+            if (Particles[Ci->I1]->Verts.Size()==1&&Particles[Ci->I2]->Verts.Size()==1)
+            {
+                DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
+                if (norm(Cis->Fdvv)>0.0||norm(Cis->Fdr)>0.0) has = true;
+            }
+            else
+            {
+                has = (Ci->Fdee.size()>0||Ci->Fdvf.size()>0||Ci->Fdfv.size()>0);
+            }
+            if (has) keep.Push(it->first);
+        }
+
+        size_t NI = keep.Size();
+        data[0] = (int)NI;
+        H5LTmake_dataset_int(file_id,"/NInteractons",1,dims,data);
+
+        if (NI>0)
+        {
+            hid_t gid = H5Gcreate(file_id,"/Interactons", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+            int    * i1v  = new int[NI];
+            int    * i2v  = new int[NI];
+            int    * isph = new int[NI];
+            int    * nee  = new int[NI];
+            int    * nvf  = new int[NI];
+            int    * nfv  = new int[NI];
+            double * fdv  = new double[3*NI];
+            double * fdr  = new double[3*NI];
+            // The interacton parameters.  These are stored, not recomputed on load, because
+            // the library derives them two different ways: CInteracton's constructor uses
+            // ReducedValue(...) while CInteracton::UpdateParameters uses 2*ReducedValue(...).
+            // A pair created during a run and one refreshed by SetProps therefore differ by a
+            // factor of two, so recomputing cannot be trusted to reproduce what the running
+            // domain actually had.  Storing them also carries the FricCoeff override, which
+            // ResetContacts applies only once, at pair creation.
+            double * pKn  = new double[NI];
+            double * pKt  = new double[NI];
+            double * pGn  = new double[NI];
+            double * pGt  = new double[NI];
+            double * pMu  = new double[NI];
+
+            // pass 1: counts, so the flat arrays can be sized
+            size_t TEE=0,TVF=0,TFV=0;
+            for (size_t k=0;k<NI;k++)
+            {
+                DEM::CInteracton * Ci = PairtoCInt[keep[k]];
+                bool sph = (Particles[Ci->I1]->Verts.Size()==1&&Particles[Ci->I2]->Verts.Size()==1);
+                isph[k] = sph ? 1 : 0;
+                nee[k]=nvf[k]=nfv[k]=0;
+                if (!sph)
+                {
+                    for (auto m=Ci->Fdee.begin();m!=Ci->Fdee.end();++m) if (norm(m->second)>0.0) nee[k]++;
+                    for (auto m=Ci->Fdvf.begin();m!=Ci->Fdvf.end();++m) if (norm(m->second)>0.0) nvf[k]++;
+                    for (auto m=Ci->Fdfv.begin();m!=Ci->Fdfv.end();++m) if (norm(m->second)>0.0) nfv[k]++;
+                }
+                TEE+=nee[k]; TVF+=nvf[k]; TFV+=nfv[k];
+            }
+
+            long   * kEE = TEE ? new long[TEE]     : NULL;
+            long   * kVF = TVF ? new long[TVF]     : NULL;
+            long   * kFV = TFV ? new long[TFV]     : NULL;
+            double * vEE = TEE ? new double[3*TEE] : NULL;
+            double * vVF = TVF ? new double[3*TVF] : NULL;
+            double * vFV = TFV ? new double[3*TFV] : NULL;
+
+            // pass 2: fill
+            size_t cEE=0,cVF=0,cFV=0;
+            for (size_t k=0;k<NI;k++)
+            {
+                DEM::CInteracton * Ci = PairtoCInt[keep[k]];
+                i1v[k] = (int)Ci->I1;
+                i2v[k] = (int)Ci->I2;
+                pKn[k] = Ci->Kn; pKt[k] = Ci->Kt;
+                pGn[k] = Ci->Gn; pGt[k] = Ci->Gt; pMu[k] = Ci->Mu;
+                if (isph[k])
+                {
+                    DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
+                    fdv[3*k+0]=Cis->Fdvv(0); fdv[3*k+1]=Cis->Fdvv(1); fdv[3*k+2]=Cis->Fdvv(2);
+                    fdr[3*k+0]=Cis->Fdr(0);  fdr[3*k+1]=Cis->Fdr(1);  fdr[3*k+2]=Cis->Fdr(2);
+                }
+                else
+                {
+                    DEM::FrictionMap_t const * maps[3] = {&Ci->Fdee,&Ci->Fdvf,&Ci->Fdfv};
+                    long   * kk[3] = {kEE,kVF,kFV};
+                    double * vv[3] = {vEE,vVF,vFV};
+                    size_t * cc[3] = {&cEE,&cVF,&cFV};
+                    for (int im=0;im<3;im++)
+                    {
+                        for (auto m=maps[im]->begin();m!=maps[im]->end();++m)
+                        {
+                            if (norm(m->second)<=0.0) continue;
+                            kk[im][*cc[im]] = (long)m->first;
+                            vv[im][3*(*cc[im])+0] = m->second(0);
+                            vv[im][3*(*cc[im])+1] = m->second(1);
+                            vv[im][3*(*cc[im])+2] = m->second(2);
+                            (*cc[im])++;
+                        }
+                    }
+                }
+            }
+
+            hsize_t dN[1]; dN[0]=NI;
+            hsize_t dN3[2]; dN3[0]=NI; dN3[1]=3;
+            H5LTmake_dataset_int   (gid,"I1",1,dN,i1v);
+            H5LTmake_dataset_int   (gid,"I2",1,dN,i2v);
+            H5LTmake_dataset_int   (gid,"IsSphere",1,dN,isph);
+            H5LTmake_dataset_int   (gid,"n_EE",1,dN,nee);
+            H5LTmake_dataset_int   (gid,"n_VF",1,dN,nvf);
+            H5LTmake_dataset_int   (gid,"n_FV",1,dN,nfv);
+            H5LTmake_dataset_double(gid,"Fdvv",2,dN3,fdv);
+            H5LTmake_dataset_double(gid,"Fdr" ,2,dN3,fdr);
+            H5LTmake_dataset_double(gid,"Kn",1,dN,pKn);
+            H5LTmake_dataset_double(gid,"Kt",1,dN,pKt);
+            H5LTmake_dataset_double(gid,"Gn",1,dN,pGn);
+            H5LTmake_dataset_double(gid,"Gt",1,dN,pGt);
+            H5LTmake_dataset_double(gid,"Mu",1,dN,pMu);
+
+            if (TEE) { hsize_t dt1[1]; dt1[0]=TEE; hsize_t dt2[2]; dt2[0]=TEE; dt2[1]=3;
+                       H5LTmake_dataset_long(gid,"key_EE",1,dt1,kEE);
+                       H5LTmake_dataset_double(gid,"val_EE",2,dt2,vEE); }
+            if (TVF) { hsize_t dt1[1]; dt1[0]=TVF; hsize_t dt2[2]; dt2[0]=TVF; dt2[1]=3;
+                       H5LTmake_dataset_long(gid,"key_VF",1,dt1,kVF);
+                       H5LTmake_dataset_double(gid,"val_VF",2,dt2,vVF); }
+            if (TFV) { hsize_t dt1[1]; dt1[0]=TFV; hsize_t dt2[2]; dt2[0]=TFV; dt2[1]=3;
+                       H5LTmake_dataset_long(gid,"key_FV",1,dt1,kFV);
+                       H5LTmake_dataset_double(gid,"val_FV",2,dt2,vFV); }
+
+            delete [] i1v; delete [] i2v; delete [] isph;
+            delete [] nee; delete [] nvf; delete [] nfv; delete [] fdv; delete [] fdr;
+            delete [] pKn; delete [] pKt; delete [] pGn; delete [] pGt; delete [] pMu;
+            delete [] kEE; delete [] kVF; delete [] kFV;
+            delete [] vEE; delete [] vVF; delete [] vFV;
+            H5Gclose(gid);
         }
     }
-*/
     H5Fflush(file_id,H5F_SCOPE_GLOBAL);
     H5Fclose(file_id);
     //sleep(5);
@@ -1857,6 +2078,17 @@ inline void Domain::Load (char const * FileKey)
     H5LTread_dataset_double(file_id,"/Zmin",perdat);
     Zmin=perdat[0];
 
+    if (H5LTfind_dataset(file_id,"Time"))
+    {
+        H5LTread_dataset_double(file_id,"/Time",perdat);
+        Time = perdat[0];
+    }
+    if (H5LTfind_dataset(file_id,"Iter"))
+    {
+        H5LTread_dataset_int(file_id,"/Iter",data);
+        iter = (size_t)data[0];
+    }
+
     // Loading the particles
     for (size_t i=0; i<NP; i++)
     {
@@ -1887,6 +2119,7 @@ inline void Domain::Load (char const * FileKey)
             H5LTread_dataset_double(gv_id,parv.CStr(),cod);
             V.Push(Vec3_t(cod[0],cod[1],cod[2]));
         }
+        H5Gclose(gv_id);
         
         // Loading the edges
         H5LTread_dataset_int(group_id,"n_edges",data);
@@ -1905,6 +2138,7 @@ inline void Domain::Load (char const * FileKey)
             Ep[1]=cod[1];
             E.Push(Ep);
         }
+        H5Gclose(gv_id);
 
         // Loading the faces
 
@@ -1935,6 +2169,7 @@ inline void Domain::Load (char const * FileKey)
             F.Push(Fp);
 
         }
+        H5Gclose(gv_id);
 
         // Number of cylinders
         H5LTread_dataset_int(group_id,"n_cylinders",data);
@@ -1969,6 +2204,32 @@ inline void Domain::Load (char const * FileKey)
         double cq[4];
         H5LTread_dataset_double(group_id,"Q",cq);
         Particles[Particles.Size()-1]->Q = Quaternion_t(cq[0],cq[1],cq[2],cq[3]);
+
+        // Fixed external force and torque (see the note in Save).  Guarded so that files written
+        // before these datasets existed still load and simply keep the default zero.
+        if (H5LTfind_dataset(group_id,"Ff"))
+        {
+            H5LTread_dataset_double(group_id,"Ff",cd);
+            Particles[Particles.Size()-1]->Ff = Vec3_t(cd[0],cd[1],cd[2]);
+        }
+        if (H5LTfind_dataset(group_id,"Tf"))
+        {
+            H5LTread_dataset_double(group_id,"Tf",cd);
+            Particles[Particles.Size()-1]->Tf = Vec3_t(cd[0],cd[1],cd[2]);
+        }
+        // Kinematic constraint flags and per-particle state (see the note in Save).
+        if (H5LTfind_dataset(group_id,"Flags"))
+        {
+            int fl[10];
+            H5LTread_dataset_int(group_id,"Flags",fl);
+            Particle * pp = Particles[Particles.Size()-1];
+            pp->vxf=fl[0]!=0; pp->vyf=fl[1]!=0; pp->vzf=fl[2]!=0;
+            pp->wxf=fl[3]!=0; pp->wyf=fl[4]!=0; pp->wzf=fl[5]!=0;
+            pp->FixFree=fl[6]!=0;
+            pp->Eroded =fl[7]!=0;
+            pp->Closed =fl[8]!=0;
+            pp->Cluster=fl[9];
+        }
     
         // Loading the scalar quantities of the particle
         double dat[1];
@@ -1991,10 +2252,234 @@ inline void Domain::Load (char const * FileKey)
         int tag[1];
         H5LTread_dataset_int(group_id,"Tag",tag);
         Particles[Particles.Size()-1]->Tag = tag[0];
+
         Particles[Particles.Size()-1]->PropsReady = true;
 
+        // Same reason as in Save: leaving the particle group open keeps the file handle
+        // alive past H5Fclose() and a later Save() to this key then fails in H5Fcreate().
+        H5Gclose(group_id);
     }
 
+
+    // ---------------------------------------------------------------------------------------
+    // Friction maps (the contact history).  The pairs are recreated here and each one gets its
+    // saved history attached, so a domain is ready to continue as soon as Load returns; the
+    // ordinary neighbour search later completes the Verlet list around them.  Files written
+    // before this feature have no /NInteractons and load exactly as they did before.
+    // ---------------------------------------------------------------------------------------
+    if (H5LTfind_dataset(file_id,"ContactProps"))
+    {
+        size_t NPp = Particles.Size();
+        double * pr = new double[13*NPp];
+        H5LTread_dataset_double(file_id,"/ContactProps",pr);
+        for (size_t i=0;i<NPp;i++)
+        {
+            Particles[i]->Props.Kn   = pr[13*i+0];
+            Particles[i]->Props.Kt   = pr[13*i+1];
+            Particles[i]->Props.Bn   = pr[13*i+2];
+            Particles[i]->Props.Bt   = pr[13*i+3];
+            Particles[i]->Props.Bm   = pr[13*i+4];
+            Particles[i]->Props.Gn   = pr[13*i+5];
+            Particles[i]->Props.Gt   = pr[13*i+6];
+            Particles[i]->Props.Gv   = pr[13*i+7];
+            Particles[i]->Props.Gm   = pr[13*i+8];
+            Particles[i]->Props.Mu   = pr[13*i+9];
+            Particles[i]->Props.eps  = pr[13*i+10];
+            Particles[i]->Props.Beta = pr[13*i+11];
+            Particles[i]->Props.Eta  = pr[13*i+12];
+        }
+        delete [] pr;
+    }
+
+    size_t ncreated = 0;
+    if (H5LTfind_dataset(file_id,"NInteractons"))
+    {
+        H5LTread_dataset_int(file_id,"/NInteractons",data);
+        size_t NI = data[0];
+        if (NI>0)
+        {
+            hid_t gid = H5Gopen(file_id,"/Interactons", H5P_DEFAULT);
+
+            int * i1v  = new int[NI];
+            int * i2v  = new int[NI];
+            int * isph = new int[NI];
+            int * nee  = new int[NI];
+            int * nvf  = new int[NI];
+            int * nfv  = new int[NI];
+            H5LTread_dataset_int(gid,"I1",i1v);
+            H5LTread_dataset_int(gid,"I2",i2v);
+            H5LTread_dataset_int(gid,"IsSphere",isph);
+            H5LTread_dataset_int(gid,"n_EE",nee);
+            H5LTread_dataset_int(gid,"n_VF",nvf);
+            H5LTread_dataset_int(gid,"n_FV",nfv);
+
+            double * fdv = new double[3*NI];
+            double * fdr = new double[3*NI];
+            H5LTread_dataset_double(gid,"Fdvv",fdv);
+            H5LTread_dataset_double(gid,"Fdr" ,fdr);
+
+            size_t TEE=0,TVF=0,TFV=0;
+            for (size_t k=0;k<NI;k++) { TEE+=nee[k]; TVF+=nvf[k]; TFV+=nfv[k]; }
+
+            long   * kk[3] = {NULL,NULL,NULL};
+            double * vv[3] = {NULL,NULL,NULL};
+            char const * kn[3] = {"key_EE","key_VF","key_FV"};
+            char const * vn[3] = {"val_EE","val_VF","val_FV"};
+            size_t tot[3] = {TEE,TVF,TFV};
+            for (int im=0;im<3;im++)
+            {
+                if (tot[im]==0) continue;
+                kk[im] = new long[tot[im]];
+                vv[im] = new double[3*tot[im]];
+                H5LTread_dataset_long  (gid,kn[im],kk[im]);
+                H5LTread_dataset_double(gid,vn[im],vv[im]);
+            }
+
+            // Build the interaction pairs straight from the file, each one carrying its saved
+            // history.  Load therefore leaves the domain with a usable PairtoCInt instead of
+            // an empty one that only fills in later if Solve() happens to call UpdateContacts().
+            //
+            // This composes with the normal contact search rather than duplicating it:
+            // UpdateLinkedCells() looks at every pair within the Verlet distance, skips the
+            // ones already in PairtoCInt, and only creates the missing ones.  So the pairs
+            // restored here are kept, everything else the neighbourhood needs is added, and
+            // nothing is built twice.  UpdateContacts() on a pair resets only its contact
+            // lists (Lee/Lvf/...), never the friction maps, so the restored history survives
+            // the rebuild untouched.
+            // Read the parameters back.  H5LTfind_dataset wants the BARE name while the
+            // H5LTread_dataset_* family wants the absolute path -- mixing them up makes find
+            // silently return 0, which is exactly the trap that hid this for a while.
+            double * lKn = NULL; double * lKt = NULL; double * lGn = NULL; double * lGt = NULL; double * lMu = NULL;
+            bool have_params = (H5LTfind_dataset(gid,"Kn")>0);
+            if (have_params)
+            {
+                lKn = new double[NI]; lKt = new double[NI]; lGn = new double[NI];
+                lGt = new double[NI]; lMu = new double[NI];
+                H5LTread_dataset_double(gid,"Kn",lKn);
+                H5LTread_dataset_double(gid,"Kt",lKt);
+                H5LTread_dataset_double(gid,"Gn",lGn);
+                H5LTread_dataset_double(gid,"Gt",lGt);
+                H5LTread_dataset_double(gid,"Mu",lMu);
+            }
+
+            size_t cur[3] = {0,0,0};
+            for (size_t k=0;k<NI;k++)
+            {
+                size_t I1 = (size_t)i1v[k];
+                size_t I2 = (size_t)i2v[k];
+                bool sph = (isph[k]!=0);
+                size_t hash = HashFunction(I1,I2);
+
+                DEM::CInteracton * Ci = NULL;
+                auto it = PairtoCInt.find(hash);
+                if (it!=PairtoCInt.end()) Ci = it->second;
+                // if a pair is already present but of the other kind, replace it
+                if (Ci!=NULL && ((dynamic_cast<DEM::CInteractonSphere*>(Ci)!=NULL)!=sph))
+                {
+                    delete Ci;
+                    PairtoCInt.erase(hash);
+                    Ci = NULL;
+                }
+                if (Ci==NULL)
+                {
+                    if (sph) Ci = new DEM::CInteractonSphere(Particles[I1],Particles[I2],ContactLaw);
+                    else     Ci = new DEM::CInteracton      (Particles[I1],Particles[I2],ContactLaw);
+                    Ci->I1 = I1;
+                    Ci->I2 = I2;
+                    PairtoCInt[hash] = Ci;
+                    ncreated++;
+                }
+
+                if (sph)
+                {
+                    DEM::CInteractonSphere * Cis = static_cast<DEM::CInteractonSphere *>(Ci);
+                    Cis->Fdvv = Vec3_t(fdv[3*k+0],fdv[3*k+1],fdv[3*k+2]);
+                    Cis->Fdr  = Vec3_t(fdr[3*k+0],fdr[3*k+1],fdr[3*k+2]);
+                }
+                else
+                {
+                    int nn[3] = {nee[k],nvf[k],nfv[k]};
+                    DEM::FrictionMap_t * maps[3] = {&Ci->Fdee,&Ci->Fdvf,&Ci->Fdfv};
+                    for (int im=0;im<3;im++)
+                    {
+                        for (int c=0;c<nn[im];c++)
+                        {
+                            size_t q = cur[im]+c;
+                            (*maps[im])[(size_t)kk[im][q]] = Vec3_t(vv[im][3*q+0],vv[im][3*q+1],vv[im][3*q+2]);
+                        }
+                        cur[im] += nn[im];
+                    }
+                }
+
+                // authoritative when present; see the note in Save
+                if (have_params)
+                {
+                    Ci->Kn = lKn[k]; Ci->Kt = lKt[k];
+                    Ci->Gn = lGn[k]; Ci->Gt = lGt[k]; Ci->Mu = lMu[k];
+                }
+            }
+            // Refresh the parameters only for files written before they were stored.  When
+            // they are present they are authoritative: recomputing would overwrite them with
+            // UpdateParameters' 2*ReducedValue(...), which is not what the run was using.
+            if (!have_params)
+                for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
+                    it->second->UpdateParameters(ContactLaw);
+
+            // Restore the per-tag-pair friction overrides and apply them.  This has to happen
+            // here: ResetContacts applies FricCoeff only to pairs it creates itself, and every
+            // restored pair already exists, so it would skip all of them -- and it must come
+            // AFTER UpdateParameters, which is what would otherwise overwrite Mu.
+            if (H5LTfind_dataset(file_id,"FricCoeffTag1"))
+            {
+                hsize_t nf = 0;
+                H5LTget_dataset_info(file_id,"FricCoeffTag1",&nf,NULL,NULL);
+                if (nf>0)
+                {
+                    int    * ft1 = new int   [nf];
+                    int    * ft2 = new int   [nf];
+                    double * fm  = new double[nf];
+                    H5LTread_dataset_int   (file_id,"/FricCoeffTag1",ft1);
+                    H5LTread_dataset_int   (file_id,"/FricCoeffTag2",ft2);
+                    H5LTread_dataset_double(file_id,"/FricCoeffMu"  ,fm );
+                    FricCoeff.clear();
+                    for (hsize_t k=0;k<nf;k++) FricCoeff[std::pair<int,int>(ft1[k],ft2[k])] = fm[k];
+                    for (auto it=PairtoCInt.begin();it!=PairtoCInt.end();++it)
+                    {
+                        std::pair<int,int> pt (Particles[it->second->I1]->Tag,Particles[it->second->I2]->Tag);
+                        if (FricCoeff.count(pt)==1) it->second->Mu = FricCoeff[pt];
+                    }
+                    printf("%s  Restored %zu per-tag friction coefficient override(s)%s\n",TERM_CLR2,nf,TERM_RST);
+                    delete [] ft1; delete [] ft2; delete [] fm;
+                }
+            }
+
+            delete [] i1v; delete [] i2v; delete [] isph;
+            delete [] nee; delete [] nvf; delete [] nfv; delete [] fdv; delete [] fdr;
+            for (int im=0;im<3;im++) { delete [] kk[im]; delete [] vv[im]; }
+            delete [] lKn; delete [] lKt; delete [] lGn; delete [] lGt; delete [] lMu;
+            H5Gclose(gid);
+        }
+        printf("%s  Loaded friction maps for %zu interactions (%zu contact pairs created)%s\n",TERM_CLR2,NI,ncreated,TERM_RST);
+    }
+
+    // A loaded domain holds a complete and valid state, so it IS initialised.  Saying so is
+    // what keeps the restored xb intact: with Initialized==false the first Solve() would run
+    // Initialize()'s first-time branch and call InitializeVelocity() on every particle, which
+    // overwrites xb with x-v*dt.
+    //
+    // Both expressions are the Verlet reference, but for different situations.  Particle::
+    // Translate() computes v from the OLD xb and only then advances it:
+    //     xa = 2*x - xb + a*dt*dt;  v = 0.5*(xa - xb)/dt;  xb = x;  x = xa;
+    // so after a finished step xb = x - v*dt - 0.5*a*dt*dt.  InitializeVelocity()'s x-v*dt is
+    // the reference for a particle about to take its FIRST step; for one resuming a finished
+    // step it is short by the 0.5*a*dt*dt term.  That is small, but it is real, and applying
+    // it would make a reloaded run take a slightly different first step from the run it was
+    // saved from.  Not touching xb is what makes the round trip exact.
+    //
+    // Nothing special is needed for particles added AFTER a load: Particle::Initialize() gives
+    // them xb = x, and Initialize()'s else-branch applies the fixed-velocity fixups.
+    Initialized = true;
+    Evis = 0.0; Efric = 0.0; Wext = 0.0;   // not persisted: start the dissipation accounting fresh
 
     H5Fclose(file_id);
     printf("\n%s--- Done --------------------------------------------%s\n",TERM_CLR2,TERM_RST);
@@ -2420,7 +2905,9 @@ inline void Domain::ResetContacts()
         }
     }
     //std::cout << "7" << std::endl;
+
 }
+
 
 inline void Domain::UpdateContacts()
 {

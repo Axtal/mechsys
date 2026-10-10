@@ -32,6 +32,7 @@ SET(EXES
   brazil_test
   test_01
   test_02
+  test_saveload
   GSD
 )
 
