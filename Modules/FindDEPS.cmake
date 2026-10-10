@@ -237,6 +237,23 @@ if(GMSH_FOUND)
 	INCLUDE_DIRECTORIES (${GMSH_INCLUDE_DIRS})
 	SET (LIBS ${LIBS} ${GMSH_LIBRARIES})
 	SET (CUDA_LIBRARIES ${CUDA_LIBRARIES} ${GMSH_LIBRARIES})
+    # A static Gmsh archive uses Blas and Lapack, which this file adds at # 4,
+    # above -- that is, before the archive.  A static archive has to be linked
+    # before the libraries that satisfy it, because with --as-needed (the
+    # default on Debian and Ubuntu) a shared library seen earlier on the line
+    # is dropped as unneeded, and the link then fails with undefined dgemm_,
+    # dgesv_ and the like.  Naming Blas and Lapack again here, after the
+    # archive, is what makes the resolution work.  Only the static case needs
+    # it: a shared object carries its own dependencies with it.
+    IF(GMSH_LIBRARIES MATCHES "\\.a$")
+        IF(LAPACK_FOUND)
+            SET (_gmsh_deps ${LAPACK_LIBRARIES})
+        ELSE(LAPACK_FOUND)
+            SET (_gmsh_deps ${LocLAPACK_LIBRARIES} "gfortran")
+        ENDIF(LAPACK_FOUND)
+        SET (LIBS           ${LIBS}           ${_gmsh_deps})
+        SET (CUDA_LIBRARIES ${CUDA_LIBRARIES} ${_gmsh_deps})
+    ENDIF(GMSH_LIBRARIES MATCHES "\\.a$")
 else(GMSH_FOUND)
     SET (MISSING "${MISSING} Gmsh")
 endif(GMSH_FOUND)
