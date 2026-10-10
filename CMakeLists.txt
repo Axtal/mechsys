@@ -338,6 +338,121 @@ ENDIF()
 
 MESSAGE(STATUS "CUDA architectures: ${MECHSYS_CUDA_ARCH}")
 
+### COMPILING A CASE WITHOUT CMake #####################################################################
+
+# mechsyscc and mechsys-config let someone compile their own case against this
+# MechSys without adding a target to any CMakeLists.txt:
+#
+#     ./mechsyscc mycase.cpp          # CPU case  -> ./mycase
+#     ./mechsyscc mycase.cu           # CUDA case -> ./mycase
+#
+# Both scripts are generated from the configuration resolved above, so they
+# always agree with the library build on this machine: same compiler, same
+# defines, same include paths, same libraries, same CUDA architectures.  There
+# is no second copy of the dependency detection to drift out of step.
+#
+# INCLUDE_DIRECTORIES and ADD_DEFINITIONS land in directory properties on the
+# root scope (FindDEPS.cmake is included from here), so they are read at this
+# point and see the whole list.
+
+GET_DIRECTORY_PROPERTY(_mechsys_incs  INCLUDE_DIRECTORIES)
+GET_DIRECTORY_PROPERTY(_mechsys_cdefs COMPILE_DEFINITIONS)
+
+SET(MECHSYS_CFG_INCLUDES "")
+FOREACH(_i ${_mechsys_incs})
+    SET(MECHSYS_CFG_INCLUDES "${MECHSYS_CFG_INCLUDES} -I${_i}")
+ENDFOREACH()
+
+# ADD_DEFINITIONS is used for both -DNAME and bare flags such as -O3, and CMake
+# keeps them in one list.  Split them back apart: -D... are defines, anything
+# else starting with '-' is a compiler flag, and a bare word is a define.
+SET(MECHSYS_CFG_DEFINES "")
+SET(_mechsys_rawflags   "")
+FOREACH(_d ${_mechsys_cdefs})
+    IF(_d MATCHES "^-D")
+        SET(MECHSYS_CFG_DEFINES "${MECHSYS_CFG_DEFINES} ${_d}")
+    ELSEIF(_d MATCHES "^-")
+        SET(_mechsys_rawflags   "${_mechsys_rawflags} ${_d}")
+    ELSE()
+        SET(MECHSYS_CFG_DEFINES "${MECHSYS_CFG_DEFINES} -D${_d}")
+    ENDIF()
+ENDFOREACH()
+
+# CMAKE_CXX_FLAGS already carries the OpenMP flag: FindDEPS.cmake appends
+# ${OpenMP_CXX_FLAGS} to it.  Adding it again here would duplicate it.
+SET(MECHSYS_CFG_CXXFLAGS "${CMAKE_CXX_FLAGS} ${FLAGS} ${_mechsys_rawflags}")
+STRING(STRIP "${MECHSYS_CFG_CXXFLAGS}" MECHSYS_CFG_CXXFLAGS)
+
+# ${LIBS} is the same list TARGET_LINK_LIBRARIES gets, absolute paths for the
+# compiled dependencies.  The rpath is the set of their directories, which is
+# how CMake builds its own link line.
+SET(MECHSYS_CFG_LIBS  "")
+SET(MECHSYS_CFG_RPATH "")
+SET(_mechsys_rdirs    "")
+FOREACH(_l ${LIBS})
+    SET(MECHSYS_CFG_LIBS "${MECHSYS_CFG_LIBS} ${_l}")
+    IF(IS_ABSOLUTE "${_l}")
+        GET_FILENAME_COMPONENT(_ldir "${_l}" DIRECTORY)
+        LIST(FIND _mechsys_rdirs "${_ldir}" _seen)
+        IF(_seen EQUAL -1)
+            LIST(APPEND _mechsys_rdirs "${_ldir}")
+        ENDIF()
+    ENDIF()
+ENDFOREACH()
+SET(MECHSYS_CFG_RPATH      "")
+SET(MECHSYS_CFG_CUDA_RPATH "")
+IF(_mechsys_rdirs)
+    STRING(REPLACE ";" ":" _mechsys_rpath "${_mechsys_rdirs}")
+    # g++ takes -Wl,... directly; nvcc does not, and rejects it as an unknown
+    # option.  nvcc has to be given the linker arguments one at a time.
+    SET(MECHSYS_CFG_RPATH      "-Wl,-rpath,${_mechsys_rpath}")
+    SET(MECHSYS_CFG_CUDA_RPATH "-Xlinker -rpath -Xlinker ${_mechsys_rpath}")
+ENDIF()
+
+# CUDA flags: -DUSE_CUDA is added by the CUDA targets themselves and a .cu
+# compiled on its own has to be told.  Architectures are emitted as plain
+# -gencode options rather than the bracketed "[compute_N,sm_N]" form CMake's
+# own property produces: the brackets are shell glob characters, and these
+# strings end up in a script.  Same meaning, one flag more.
+# CMAKE_CUDA_FLAGS already holds -Xcompiler=<openmp flags> and the language
+# standard (FindDEPS.cmake and CMake's CUDA standard setting put them there), so
+# start from it rather than naming them again.
+# The language standard is a target property in CMake, not a flag, so it does
+# not appear in CMAKE_CUDA_FLAGS and has to be named.  17 is CMake's own default
+# for CUDA and is what this tree builds with.
+IF(CMAKE_CUDA_STANDARD)
+    SET(_mechsys_cudastd "${CMAKE_CUDA_STANDARD}")
+ELSE()
+    SET(_mechsys_cudastd "17")
+ENDIF()
+SET(MECHSYS_CFG_CUDAFLAGS "${CMAKE_CUDA_FLAGS} -std=c++${_mechsys_cudastd} -DUSE_CUDA")
+FOREACH(_a ${MECHSYS_CUDA_ARCH})
+    IF(MECHSYS_CUDA_ARCH_VIA_FLAGS)
+        BREAK()   # an older CMake already put the -gencode flags in CMAKE_CUDA_FLAGS
+    ENDIF()
+    IF(_a MATCHES "^([0-9]+)(-real|-virtual)?$")
+        SET(_n "${CMAKE_MATCH_1}")
+        SET(_v "${CMAKE_MATCH_2}")
+        IF(_v STREQUAL "-real")
+            SET(MECHSYS_CFG_CUDAFLAGS "${MECHSYS_CFG_CUDAFLAGS} -gencode=arch=compute_${_n},code=sm_${_n}")
+        ELSEIF(_v STREQUAL "-virtual")
+            SET(MECHSYS_CFG_CUDAFLAGS "${MECHSYS_CFG_CUDAFLAGS} -gencode=arch=compute_${_n},code=compute_${_n}")
+        ELSE()
+            SET(MECHSYS_CFG_CUDAFLAGS "${MECHSYS_CFG_CUDAFLAGS} -gencode=arch=compute_${_n},code=sm_${_n} -gencode=arch=compute_${_n},code=compute_${_n}")
+        ENDIF()
+    ENDIF()
+ENDFOREACH()
+
+SET(MECHSYS_CFG_CXX    "${CMAKE_CXX_COMPILER}")
+SET(MECHSYS_CFG_NVCC   "${CMAKE_CUDA_COMPILER}")
+SET(MECHSYS_CFG_PREFIX "${MECHSYS_SOURCE_DIR}")
+
+CONFIGURE_FILE(${MECHSYS_SOURCE_DIR}/Modules/mechsyscc.in     ${CMAKE_BINARY_DIR}/mechsyscc     @ONLY)
+CONFIGURE_FILE(${MECHSYS_SOURCE_DIR}/Modules/mechsys-config.in ${CMAKE_BINARY_DIR}/mechsys-config @ONLY)
+EXECUTE_PROCESS(COMMAND chmod +x ${CMAKE_BINARY_DIR}/mechsyscc ${CMAKE_BINARY_DIR}/mechsys-config)
+
+MESSAGE(STATUS "Case compiler: ${CMAKE_BINARY_DIR}/mechsyscc  (./mechsyscc mycase.cu)")
+
 IF(ALLDIRS)
     SUBDIRS(${ALLDIRS})
 ENDIF(ALLDIRS)

@@ -45,7 +45,15 @@ OPTION(A_USE_HDF5           "Use HDF5 ?"                                        
 #ADD_DEFINITIONS(-std=gnu++11)                   # New C++ standard
 #ADD_DEFINITIONS(-std=c++23)                      # New C++ standard
 #ADD_DEFINITIONS(-fpermissive)                    # New C++ standard
-ADD_DEFINITIONS(-Wno-deprecated-declarations)    # Remove depracated warnings
+# NOTE: flags that are not preprocessor definitions go into FLAGS, not into
+# ADD_DEFINITIONS.  ADD_DEFINITIONS is for -DNAME; CMake does apply a bare flag
+# such as -O3 to the build, but it does not place it in the COMPILE_DEFINITIONS
+# property, where it is then invisible to anything that asks.  mechsyscc, which
+# the root CMakeLists.txt generates so a case can be compiled without CMake,
+# reads the flags from here -- so they have to be somewhere visible.  FLAGS is
+# this project's own flag variable and every target already passes it on with
+# COMPILE_FLAGS, so it is the right home.
+SET (FLAGS "${FLAGS} -Wno-deprecated-declarations")  # Remove deprecated warnings
 #INCLUDE_DIRECTORIES (${INCLUDE_DIRECTORIES} $ENV{HOME}/pkg/boost_1_59_0)
 #INCLUDE_DIRECTORIES (${INCLUDE_DIRECTORIES} $ENV{MECHSYS_ROOT}/pkg/boost_1_59_0)
 
@@ -58,21 +66,21 @@ IF(A_MAKE_VERBOSE)
 ENDIF(A_MAKE_VERBOSE)
 
 IF(A_MAKE_ALL_WARNINGS)
-	ADD_DEFINITIONS (-Wall)
+	SET (FLAGS "${FLAGS} -Wall")
 ENDIF(A_MAKE_ALL_WARNINGS)
 
 IF(A_MAKE_DEBUG_SYMBOLS)
-	ADD_DEFINITIONS (-g)
+	SET (FLAGS "${FLAGS} -g")
 ENDIF(A_MAKE_DEBUG_SYMBOLS)
 
 IF(A_MAKE_PROFILING)
-	ADD_DEFINITIONS (-pg)
+	SET (FLAGS "${FLAGS} -pg")
     SET (LFLAGS "${LFLAGS} -pg")
 ENDIF(A_MAKE_PROFILING)
 
 IF(A_MAKE_OPTIMIZED)
-	ADD_DEFINITIONS (-O3)
-	#ADD_DEFINITIONS (-Ofast)
+	SET (FLAGS "${FLAGS} -O3")
+	#SET (FLAGS "${FLAGS} -Ofast")
 ENDIF(A_MAKE_OPTIMIZED)
 
 IF(A_MAKE_WXW_MONO)

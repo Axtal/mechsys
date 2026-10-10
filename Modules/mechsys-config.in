@@ -1,0 +1,79 @@
+#!/bin/sh
+########################################################################
+# MechSys - Open Library for Mechanical Systems                        #
+#                                                                      #
+# mechsys-config - report the flags needed to compile against MechSys  #
+#                                                                      #
+# GENERATED FILE - written by cmake from Modules/mechsys-config.in.    #
+# Do not edit; edit the template and re-run cmake instead.             #
+#                                                                      #
+# This is a pkg-config style helper, for people driving their own      #
+# Makefile or build system.  If you just want to compile one case,     #
+# use mechsyscc from the same directory -- it calls this for you.      #
+########################################################################
+
+mechsys_prefix='@MECHSYS_CFG_PREFIX@'
+mechsys_cxx='@MECHSYS_CFG_CXX@'
+mechsys_nvcc='@MECHSYS_CFG_NVCC@'
+mechsys_cuda_arch='@MECHSYS_CUDA_ARCH@'
+
+mechsys_defines='@MECHSYS_CFG_DEFINES@'
+mechsys_includes='@MECHSYS_CFG_INCLUDES@'
+mechsys_cxxflags='@MECHSYS_CFG_CXXFLAGS@'
+mechsys_libs='@MECHSYS_CFG_LIBS@'
+mechsys_rpath='@MECHSYS_CFG_RPATH@'
+mechsys_cudaflags='@MECHSYS_CFG_CUDAFLAGS@'
+
+usage () {
+    cat <<EOF
+Usage: mechsys-config [option...]
+
+Reports the compiler, flags, include paths and libraries that MechSys was
+configured with on this machine.  Use it from a Makefile, for example:
+
+    CXX      = \$(shell mechsys-config --cxx)
+    CXXFLAGS = \$(shell mechsys-config --cxxflags)
+    LDFLAGS  = \$(shell mechsys-config --libs)
+
+Options:
+  --prefix        installation prefix (the MechSys source tree)
+  --cxx           C++ compiler to use
+  --nvcc          CUDA compiler to use
+  --cuda-arch     CUDA architectures this build targets, e.g. 86 or 80;90
+  --defines       -D options
+  --includes      -I options
+  --cxxflags      compiler flags for a C++ case (defines + includes included)
+  --libs          libraries and rpath for linking a C++ case
+  --cudaflags     compiler flags for a CUDA case (includes -DUSE_CUDA)
+  --cudalibs      libraries and rpath for linking a CUDA case
+  --all           everything, for eyeballing
+  --help          this message
+EOF
+}
+
+case "$1" in
+    --prefix)      echo "$mechsys_prefix" ;;
+    --cxx)         echo "$mechsys_cxx" ;;
+    --nvcc)        echo "$mechsys_nvcc" ;;
+    --cuda-arch)   echo "$mechsys_cuda_arch" ;;
+    --defines)     echo "$mechsys_defines" ;;
+    --includes)    echo "$mechsys_includes" ;;
+    --cxxflags)    echo "$mechsys_defines $mechsys_includes $mechsys_cxxflags" ;;
+    --libs)        echo "$mechsys_libs $mechsys_rpath" ;;
+    --cudaflags)   echo "$mechsys_defines $mechsys_includes $mechsys_cudaflags" ;;
+    --cudalibs)    echo "$mechsys_libs $mechsys_rpath" ;;
+    --all)
+        echo "prefix      : $mechsys_prefix"
+        echo "c++         : $mechsys_cxx"
+        echo "nvcc        : $mechsys_nvcc"
+        echo "cuda arch   : $mechsys_cuda_arch"
+        echo "defines     : $mechsys_defines"
+        echo "includes    : $mechsys_includes"
+        echo "cxxflags    : $mechsys_cxxflags"
+        echo "cudaflags   : $mechsys_cudaflags"
+        echo "libs        : $mechsys_libs"
+        echo "rpath       : $mechsys_rpath"
+        ;;
+    ""|--help|-h)  usage ;;
+    *)             echo "mechsys-config: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+esac

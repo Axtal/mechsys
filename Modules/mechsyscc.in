@@ -1,0 +1,135 @@
+#!/bin/sh
+########################################################################
+# MechSys - Open Library for Mechanical Systems                        #
+#                                                                      #
+# mechsyscc - compile a MechSys case                                   #
+#                                                                      #
+# GENERATED FILE - written by cmake from Modules/mechsyscc.in.         #
+# Do not edit; edit the template and re-run cmake instead.             #
+#                                                                      #
+# Compiles and links a case against MechSys using exactly the compiler, #
+# flags and libraries this MechSys was configured with.  The language  #
+# is taken from the file extension: a .cu source goes through nvcc,    #
+# anything else through the C++ compiler.  No CMakeLists needed.       #
+########################################################################
+
+# No globbing: the arch flags contain brackets, and the caller's shell has
+# already expanded any sources before this script ever runs.
+set -f
+
+cxx='@MECHSYS_CFG_CXX@'
+nvcc='@MECHSYS_CFG_NVCC@'
+cuda_arch='@MECHSYS_CUDA_ARCH@'
+defines='@MECHSYS_CFG_DEFINES@'
+includes='@MECHSYS_CFG_INCLUDES@'
+cxxflags='@MECHSYS_CFG_CXXFLAGS@'
+cudaflags='@MECHSYS_CFG_CUDAFLAGS@'
+libs='@MECHSYS_CFG_LIBS@'
+rpath='@MECHSYS_CFG_RPATH@'
+cudarpath='@MECHSYS_CFG_CUDA_RPATH@'
+
+me=mechsyscc
+
+usage () {
+    cat <<EOF
+Usage: $me [options] <source> [source...]
+
+Compiles a MechSys case into an executable, using the same compiler and
+flags the MechSys build itself uses.  No CMakeLists.txt is involved.
+
+A source ending in .cu is compiled with nvcc, anything else with the C++
+compiler.  Mixed .cpp and .cu sources in one command are compiled by nvcc,
+which handles both.
+
+Examples:
+  $me mycase.cpp                  -> ./mycase
+  $me mycase.cu                   -> ./mycase            (CUDA, arch $cuda_arch)
+  $me mycase.cu -o run -O0 -g     -> ./run               (extra flags passed on)
+  $me -n mycase.cu                -> print the command, compile nothing
+
+Options:
+  -o <name>        name the executable (default: first source, no extension)
+  -n, --dry-run    print the command that would be run, and run nothing
+  -v, --verbose    print the command as it is run, to stderr
+  --cuda           force the CUDA path, whatever the extension
+  --cpu            force the C++ path, whatever the extension
+  --               everything after this is passed to the compiler verbatim
+  -h, --help       this message
+
+Any other option beginning with '-' is passed to the compiler, so -O2, -g,
+-Wall, -I..., -D... and so on all work as usual.
+EOF
+}
+
+out=''
+sources=''
+extra=''
+mode=''
+dry=0
+verbose=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o)              out="$2"; shift 2 ;;
+        -o*)             out=`echo "$1" | cut -c3-`; shift ;;
+        -n|--dry-run)    dry=1; shift ;;
+        -v|--verbose)    verbose=1; shift ;;
+        --cuda)          mode=cuda; shift ;;
+        --cpu)           mode=cpu;  shift ;;
+        -h|--help)       usage; exit 0 ;;
+        --)              shift; extra="$extra $*"; break ;;
+        -*)              extra="$extra $1"; shift ;;
+        *)               sources="$sources $1"; shift ;;
+    esac
+done
+
+if [ -z "$sources" ]; then
+    echo "$me: no source file given" >&2
+    echo >&2
+    usage >&2
+    exit 2
+fi
+
+# ---- which compiler?  -------------------------------------------------------
+if [ -z "$mode" ]; then
+    for s in $sources; do
+        case "$s" in
+            *.cu) mode=cuda ;;
+        esac
+    done
+    [ -z "$mode" ] && mode=cpu
+fi
+
+# ---- default output name ----------------------------------------------------
+if [ -z "$out" ]; then
+    first=`echo $sources | cut -d' ' -f1`
+    out=`basename "$first"`
+    out=`echo "$out" | sed 's/\.[^.]*$//'`
+fi
+
+# ---- check the sources are there before the compiler complains obscurely ----
+for s in $sources; do
+    if [ ! -f "$s" ]; then
+        echo "$me: no such file: $s" >&2
+        exit 2
+    fi
+done
+
+# ---- build and run ----------------------------------------------------------
+if [ "$mode" = cuda ]; then
+    if [ ! -x "$nvcc" ]; then
+        echo "$me: nvcc not found at $nvcc" >&2
+        echo "$me: this MechSys was configured without CUDA; re-run cmake with CUDA available," >&2
+        echo "$me: or use --cpu to compile a C++ case." >&2
+        exit 2
+    fi
+    set -- $defines $includes $cudaflags $extra $sources -o "$out" $libs $cudarpath
+    [ $verbose -eq 1 ] && echo "$me: $nvcc (cuda $cuda_arch) -> $out" >&2
+    if [ $dry -eq 1 ]; then echo "$nvcc $*"; exit 0; fi
+    "$nvcc" "$@"
+else
+    set -- $defines $includes $cxxflags $extra $sources -o "$out" $libs $rpath
+    [ $verbose -eq 1 ] && echo "$me: $cxx -> $out" >&2
+    if [ $dry -eq 1 ]; then echo "$cxx $*"; exit 0; fi
+    "$cxx" "$@"
+fi
