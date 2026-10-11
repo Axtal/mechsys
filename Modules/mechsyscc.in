@@ -45,12 +45,14 @@ Examples:
   $me mycase.cpp                  -> ./mycase
   $me mycase.cu                   -> ./mycase            (CUDA, arch $cuda_arch)
   $me mycase.cu -o run -O0 -g     -> ./run               (extra flags passed on)
-  $me -n mycase.cu                -> print the command, compile nothing
+  $me -v mycase.cu                -> show the flags, grouped, then compile
+  $me -n mycase.cu                -> print the command on one line, compile nothing
 
 Options:
   -o <name>        name the executable (default: first source, no extension)
-  -n, --dry-run    print the command that would be run, and run nothing
-  -v, --verbose    print the command as it is run, to stderr
+  -n, --dry-run    print the command on one line, and run nothing
+  -v, --verbose    print the command before running it, grouped by kind with
+                   one argument per line, to stderr
   --cuda           force the CUDA path, whatever the extension
   --cpu            force the C++ path, whatever the extension
   --               everything after this is passed to the compiler verbatim
@@ -58,6 +60,9 @@ Options:
 
 Any other option beginning with '-' is passed to the compiler, so -O2, -g,
 -Wall, -I..., -D... and so on all work as usual.
+
+To see only the flags, without the libraries or the source files, use the
+companion tool: $me-config --cxxflags (or --cudaflags, or --all).
 EOF
 }
 
@@ -115,6 +120,18 @@ for s in $sources; do
     fi
 done
 
+# Print one group of the command line, one argument per line.  A CUDA link
+# carries well over a hundred arguments, which is unreadable on one line, and
+# reading them is the whole point of --verbose.  The second argument is
+# deliberately unquoted so the shell splits it into words.
+show_section () {
+    [ -z "$2" ] && return 0
+    printf '  %s\n' "$1" >&2
+    for w in $2; do
+        printf '    %s\n' "$w" >&2
+    done
+}
+
 # ---- build and run ----------------------------------------------------------
 if [ "$mode" = cuda ]; then
     if [ ! -x "$nvcc" ]; then
@@ -124,12 +141,28 @@ if [ "$mode" = cuda ]; then
         exit 2
     fi
     set -- $defines $includes $cudaflags $extra $sources -o "$out" $libs $cudarpath
-    [ $verbose -eq 1 ] && echo "$me: $nvcc (cuda $cuda_arch) -> $out" >&2
     if [ $dry -eq 1 ]; then echo "$nvcc $*"; exit 0; fi
+    if [ $verbose -eq 1 ]; then
+        printf '%s: %s   (CUDA, arch %s) -> %s\n' "$me" "$nvcc" "$cuda_arch" "$out" >&2
+        show_section "defines"   "$defines"
+        show_section "includes"  "$includes"
+        show_section "flags"     "$cudaflags $extra"
+        show_section "sources"   "$sources"
+        show_section "libraries" "$libs"
+        show_section "rpath"     "$cudarpath"
+    fi
     "$nvcc" "$@"
 else
     set -- $defines $includes $cxxflags $extra $sources -o "$out" $libs $rpath
-    [ $verbose -eq 1 ] && echo "$me: $cxx -> $out" >&2
     if [ $dry -eq 1 ]; then echo "$cxx $*"; exit 0; fi
+    if [ $verbose -eq 1 ]; then
+        printf '%s: %s   (C++) -> %s\n' "$me" "$cxx" "$out" >&2
+        show_section "defines"   "$defines"
+        show_section "includes"  "$includes"
+        show_section "flags"     "$cxxflags $extra"
+        show_section "sources"   "$sources"
+        show_section "libraries" "$libs"
+        show_section "rpath"     "$rpath"
+    fi
     "$cxx" "$@"
 fi
