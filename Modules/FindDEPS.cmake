@@ -40,6 +40,7 @@ OPTION(A_MAKE_IGNORE_SOLID   "Ignore deep solid cells from LBM computations"    
 OPTION(A_USE_OMP            "Use OpenMP  ?"                                        ON )
 OPTION(A_USE_VTK            "Use VTK ?"                                            OFF)
 OPTION(A_USE_HDF5           "Use HDF5 ?"                                           ON )
+OPTION(A_USE_STATIC_LIBSTDCXX "Link libstdc++ and libgcc statically, so a binary does not need the run-time machine's libstdc++" OFF)
 
 #ADD_DEFINITIONS(-fmessage-length=0) # Each error message will appear on a single line; no line-wrapping will be done.
 #ADD_DEFINITIONS(-std=gnu++11)                   # New C++ standard
@@ -281,4 +282,27 @@ else(OPENMP_FOUND AND A_USE_OMP)
         SET (MISSING "${MISSING} OpenMP")
     endif(A_USE_OMP)
 endif(OPENMP_FOUND AND A_USE_OMP)
+
+# 12
+# Clusters routinely compile with a module-provided compiler while the run-time
+# linker still picks up the older libstdc++ from the system, and the program
+# then dies at start-up with
+#
+#     libstdc++.so.6: version `GLIBCXX_3.4.32' not found
+#
+# Linking libstdc++ and libgcc statically removes that dependency altogether,
+# for about a megabyte per binary.  Off by default: loading the same compiler
+# module when running is the tidier fix, and mixing a static libstdc++ with
+# shared libraries that were built against a different one is worth avoiding
+# unless the mismatch actually bites.
+if(A_USE_STATIC_LIBSTDCXX)
+    # nvcc does not recognise -static-libstdc++ and rejects it as an unknown
+    # option, so the two paths need different spellings -- the same reason the
+    # OpenMP flags above are added twice.  CMAKE_CXX_FLAGS covers the C++
+    # targets and their link step; CMAKE_CUDA_FLAGS passes it through to the
+    # host compiler for the nvcc ones.
+    SET (CMAKE_CXX_FLAGS        "${CMAKE_CXX_FLAGS} -static-libstdc++ -static-libgcc")
+    SET (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -static-libgcc")
+    SET (CMAKE_CUDA_FLAGS       "${CMAKE_CUDA_FLAGS} -Xcompiler=-static-libstdc++ -Xcompiler=-static-libgcc")
+endif(A_USE_STATIC_LIBSTDCXX)
 

@@ -32,13 +32,19 @@ LIST(APPEND _gmsh_roots ${_gmsh_glob_roots})
 SET(GMSH_INCLUDE_SEARCH_PATH
   /usr/include
   /usr/local/include)
+# lib64 as well as lib: Gmsh installs into lib64 on the Red Hat family, which is
+# what most clusters run, and without it such an install is invisible here.
 SET(GMSH_LIBRARY_SEARCH_PATH
   /usr/lib
+  /usr/lib64
   /usr/lib/x86_64-linux-gnu
-  /usr/local/lib)
+  /usr/local/lib
+  /usr/local/lib64)
 FOREACH(_root ${_gmsh_roots})
   LIST(APPEND GMSH_INCLUDE_SEARCH_PATH "${_root}/include" "${_root}/usr/include")
-  LIST(APPEND GMSH_LIBRARY_SEARCH_PATH "${_root}/lib"     "${_root}/usr/lib/x86_64-linux-gnu")
+  LIST(APPEND GMSH_LIBRARY_SEARCH_PATH "${_root}/lib"     "${_root}/lib64"
+                                       "${_root}/usr/lib" "${_root}/usr/lib64"
+                                       "${_root}/usr/lib/x86_64-linux-gnu")
 ENDFOREACH(_root)
 
 FIND_PATH(GMSH_GMSH_H gmsh.h ${GMSH_INCLUDE_SEARCH_PATH})
