@@ -24,6 +24,7 @@ defines='@MECHSYS_CFG_DEFINES@'
 includes='@MECHSYS_CFG_INCLUDES@'
 cxxflags='@MECHSYS_CFG_CXXFLAGS@'
 cudaflags='@MECHSYS_CFG_CUDAFLAGS@'
+ccbin='@MECHSYS_CFG_CUDA_CCBIN@'
 libs='@MECHSYS_CFG_LIBS@'
 rpath='@MECHSYS_CFG_RPATH@'
 cudarpath='@MECHSYS_CFG_CUDA_RPATH@'
@@ -140,10 +141,26 @@ if [ "$mode" = cuda ]; then
         echo "$me: or use --cpu to compile a C++ case." >&2
         exit 2
     fi
-    set -- $defines $includes $cudaflags $extra $sources -o "$out" $libs $cudarpath
+    # nvcc takes its host compiler from PATH unless told otherwise, which on a
+    # cluster can be a different one from the MechSys build's.  Pin it to what
+    # CMake uses, unless the caller has set CUDAHOSTCXX -- on the command line
+    # -ccbin would win over that, and the caller should keep the last word.
+    ccbin_opt=''
+    if [ -n "$ccbin" ] && [ -z "$CUDAHOSTCXX" ]; then
+        ccbin_opt="-ccbin $ccbin"
+    fi
+    set -- $defines $includes $ccbin_opt $cudaflags $extra $sources -o "$out" $libs $cudarpath
     if [ $dry -eq 1 ]; then echo "$nvcc $*"; exit 0; fi
     if [ $verbose -eq 1 ]; then
         printf '%s: %s   (CUDA, arch %s) -> %s\n' "$me" "$nvcc" "$cuda_arch" "$out" >&2
+        if [ -n "$ccbin_opt" ]; then
+            show_section "host compiler" "$ccbin_opt"
+        elif [ -n "$CUDAHOSTCXX" ]; then
+            show_section "host compiler" "-ccbin $CUDAHOSTCXX (from CUDAHOSTCXX)"
+        else
+            printf '  %s\n    %s\n' "host compiler" \
+                "not pinned; nvcc takes gcc from PATH. Set CUDAHOSTCXX to pin it." >&2
+        fi
         show_section "defines"   "$defines"
         show_section "includes"  "$includes"
         show_section "flags"     "$cudaflags $extra"

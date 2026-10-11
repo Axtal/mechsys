@@ -456,6 +456,19 @@ SET(MECHSYS_CFG_CXX    "${CMAKE_CXX_COMPILER}")
 SET(MECHSYS_CFG_NVCC   "${CMAKE_CUDA_COMPILER}")
 SET(MECHSYS_CFG_PREFIX "${MECHSYS_SOURCE_DIR}")
 
+# nvcc chooses its host compiler from PATH, and on a cluster that can be a
+# different compiler from the one MechSys was configured with -- bringing a
+# different libstdc++ with it, which is how a case built by this script ends up
+# demanding a newer GLIBCXX or CXXABI than the run node has while make builds
+# one that runs.  CMake passes -ccbin for its own CUDA targets when it knows the
+# host compiler; this hands the same value to the script so the two agree.  When
+# CMAKE_CUDA_HOST_COMPILER is empty CMake passes nothing and lets nvcc decide,
+# so the script must pass nothing either, or it would disagree with make in the
+# other direction.  Note that CMAKE_CXX_COMPILER is deliberately not used here:
+# it can be a compiler nvcc does not support at all, which CUDA 12.4 does with
+# GCC 15, and pinning it would break a build that works.
+SET(MECHSYS_CFG_CUDA_CCBIN "${CMAKE_CUDA_HOST_COMPILER}")
+
 CONFIGURE_FILE(${MECHSYS_SOURCE_DIR}/Modules/mechsyscc.in     ${CMAKE_BINARY_DIR}/mechsyscc     @ONLY)
 CONFIGURE_FILE(${MECHSYS_SOURCE_DIR}/Modules/mechsys-config.in ${CMAKE_BINARY_DIR}/mechsys-config @ONLY)
 EXECUTE_PROCESS(COMMAND chmod +x ${CMAKE_BINARY_DIR}/mechsyscc ${CMAKE_BINARY_DIR}/mechsys-config)
