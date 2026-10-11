@@ -425,7 +425,16 @@ IF(CMAKE_CUDA_STANDARD)
 ELSE()
     SET(_mechsys_cudastd "17")
 ENDIF()
-SET(MECHSYS_CFG_CUDAFLAGS "${CMAKE_CUDA_FLAGS} -std=c++${_mechsys_cudastd} -DUSE_CUDA")
+# ${FLAGS} carries -O3 and -Wno-deprecated-declarations, and every directory
+# passes it on to its targets through COMPILE_FLAGS -- the CUDA ones included.
+# It has to appear here as well, and -O3 is not only a matter of speed: without
+# it the compiler emits an out-of-line call to std::ostringstream's constructor
+# instead of inlining it, and that symbol carries the GLIBCXX_3.4.26 version
+# tag.  A case built without -O3 therefore demands a libstdc++ from GCC 9 or
+# newer and refuses to start on a cluster whose libstdc++ is older, while the
+# very same case built by make runs.  -maxrregcount=128 is what the two CUDA-LBM
+# directories ask of their targets, so the register pressure matches theirs.
+SET(MECHSYS_CFG_CUDAFLAGS "${CMAKE_CUDA_FLAGS} ${FLAGS} -std=c++${_mechsys_cudastd} -DUSE_CUDA -maxrregcount=128")
 FOREACH(_a ${MECHSYS_CUDA_ARCH})
     IF(MECHSYS_CUDA_ARCH_VIA_FLAGS)
         BREAK()   # an older CMake already put the -gencode flags in CMAKE_CUDA_FLAGS
