@@ -386,16 +386,40 @@ STRING(STRIP "${MECHSYS_CFG_CXXFLAGS}" MECHSYS_CFG_CXXFLAGS)
 # ${LIBS} is the same list TARGET_LINK_LIBRARIES gets, absolute paths for the
 # compiled dependencies.  The rpath is the set of their directories, which is
 # how CMake builds its own link line.
+#
+# A directory the compiler already searches by itself must be left out of the
+# rpath.  The loader reaches it anyway, and naming it can do real harm: on
+# CentOS the dependency libraries sit in /usr/lib64, whose libstdc++ is the
+# GCC 8 one, so an rpath containing /usr/lib64 made a case resolve libstdc++
+# from the system rather than from the compiler it was built with, and it then
+# died with "GLIBCXX_3.4.32 not found" while the identical binary built by make
+# ran.  CMake leaves these directories out of its own rpath for the same reason.
+SET(_mechsys_implicit "")
+FOREACH(_v CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+           CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES
+           CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES)
+    LIST(APPEND _mechsys_implicit ${${_v}})
+ENDFOREACH()
+IF(_mechsys_implicit)
+    LIST(REMOVE_DUPLICATES _mechsys_implicit)
+ENDIF()
+
 SET(MECHSYS_CFG_LIBS  "")
 SET(MECHSYS_CFG_RPATH "")
 SET(_mechsys_rdirs    "")
 FOREACH(_l ${LIBS})
     SET(MECHSYS_CFG_LIBS "${MECHSYS_CFG_LIBS} ${_l}")
     IF(IS_ABSOLUTE "${_l}")
-        GET_FILENAME_COMPONENT(_ldir "${_l}" DIRECTORY)
-        LIST(FIND _mechsys_rdirs "${_ldir}" _seen)
-        IF(_seen EQUAL -1)
-            LIST(APPEND _mechsys_rdirs "${_ldir}")
+        GET_FILENAME_COMPONENT(_ldir  "${_l}" DIRECTORY)
+        GET_FILENAME_COMPONENT(_lext  "${_l}" EXT)
+        LIST(FIND _mechsys_implicit "${_ldir}" _impl)
+        # A static archive is copied into the binary, so its directory is of no
+        # use to the loader.  CMake leaves these out of its rpath as well.
+        IF(_impl EQUAL -1 AND NOT _lext STREQUAL ".a")
+            LIST(FIND _mechsys_rdirs "${_ldir}" _seen)
+            IF(_seen EQUAL -1)
+                LIST(APPEND _mechsys_rdirs "${_ldir}")
+            ENDIF()
         ENDIF()
     ENDIF()
 ENDFOREACH()
