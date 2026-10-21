@@ -34,7 +34,6 @@ struct UserData
 
 void Setup (LBMDEM::Domain & dom, void * UD)
 {
-    UserData & dat = (*static_cast<UserData *>(UD));
     //#pragma omp parallel for schedule(static) num_threads(dom.Nproc)
 	//for (size_t ix=0; ix<dom.LBMDOM.Ndim(0); ++ix)
 	//for (size_t iy=0; iy<dom.LBMDOM.Ndim(1); ++iy)

@@ -1231,11 +1231,13 @@ struct DynParticleCU
     real3          xb;                                              ///< Former position for the Verlet algorithm
     real3          v;                                               ///< Velocity
     real3          w;                                               ///< Angular velocity
+    real3          wrot;                                            ///< Angular velocity rotated by the orientation: Rotation(w,Q)
     real3          wa;                                              ///< Angular acceleration
     real3          wb;                                              ///< Former angular velocity for the leap frog algorithm
     real3          F;                                               ///< Force over the particle
     real3          Flbm;                                            ///< Force over the particle by the lbm fluid (hydraulic force)
     real4          Q;                                               ///< The quaternion representing the rotation
+    real4          Qc;                                              ///< Conjugate of the orientation quaternion (used to rotate torques)
 };
 
 __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM::Particle & Par)
@@ -1299,6 +1301,9 @@ __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM
     DPc.Q.y             = Par.Q(2);
     DPc.Q.z             = Par.Q(3);
     DPc.Q.w             = Par.Q(0);
+    // Cached rotation quantities; refreshed on the device after every step.
+    Rotation  (DPc.w,DPc.Q,DPc.wrot);
+    Conjugate (DPc.Q,DPc.Qc);
     }
 }
 

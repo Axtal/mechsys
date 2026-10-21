@@ -45,7 +45,6 @@ void Setup (LBMDEM::Domain & dom, void * UD)
 
 void Report (LBMDEM::Domain & dom, void * UD)
 {
-    UserData & dat = (*static_cast<UserData *>(UD));
 }
 
 int main(int argc, char **argv) try

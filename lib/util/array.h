@@ -707,7 +707,7 @@ template<typename Value_T>
 inline void Array<Value_T>::DelItem (size_t IdxToRemove)
 {
 #ifndef NDEBUG
-    if (IdxToRemove<0 || IdxToRemove>=Size()) throw new Fatal("Array::DelItem: Subscript==%zd (size==%zd) is out of range.", IdxToRemove, Size());
+    if (IdxToRemove>=Size()) throw new Fatal("Array::DelItem: Subscript==%zd (size==%zd) is out of range.", (long)IdxToRemove, (long)Size());
 #endif
     Array<Value_T> tmp((*this));
     this->Resize (tmp.Size()-1);
@@ -742,9 +742,9 @@ inline void Array<Value_T>::DelItems (Array<int> const & Idxs)
 template<typename Value_T>
 inline void Array<Value_T>::DelVal (Value_T const & V)
 {
-    size_t idx_to_remove = Find(V);
+    long idx_to_remove = Find(V);
     if (idx_to_remove<0) throw new Fatal("Array::DelVal: Value cannot be found for deletion");
-    DelItem (idx_to_remove);
+    DelItem (size_t(idx_to_remove));
 }
 
 

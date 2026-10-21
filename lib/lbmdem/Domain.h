@@ -617,13 +617,6 @@ inline void LaunchCollideMP (size_t Nneigh, size_t Nblk, size_t Nthread, bool co
     }
 }
 
-// FLBM::cudaTick advances the device side Time/iter counters; it used to be a
-// branch of the streaming kernel, which is why it now needs its own launch.
-inline void LaunchTick (FLBM::lbm_aux * lbmaux)
-{
-    FLBM::cudaTick<<<1,1>>>(lbmaux);
-}
-
 inline void LaunchFusedStreamMacro (size_t Nneigh, size_t Nblk, size_t Nthread, bool const * IsSolid, real const * Gamma, real * Omeis,
         real const * Fpost, real * F, real3 * BForce, real3 * Vel, real * Rho, FLBM::lbm_aux * lbmaux)
 {
@@ -864,16 +857,21 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 
         //start = std::chrono::high_resolution_clock::now();
 
-        DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
-        if (DEMDOM.RotPar) DEMDOM.pRotate   <<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
-        DEM::MaxD        <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU, DEMDOM.pdemaux);
+        if (DEMDOM.pMove)
+            DEMDOM.pMove<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU,
+                    DEMDOM.pdemaux, DEMDOM.RotPar, DEMDOM.pExtraParams);
+        else
+        {
+            DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+            if (DEMDOM.RotPar) DEMDOM.pRotate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+        }
+        DEM::MaxD        <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU,
+                DEMDOM.pdemaux);
 
         real maxdis = 0.0;
-        thrust::device_vector<real>::iterator it=thrust::max_element(DEMDOM.bMaxDCU.begin(),DEMDOM.bMaxDCU.end());
+        size_t nmaxblocks = DEMDOM.demaux.nverts/Nthread+1;
+        thrust::device_vector<real>::iterator it=thrust::max_element(DEMDOM.bMaxDCU.begin(),DEMDOM.bMaxDCU.begin()+nmaxblocks);
         maxdis = *it;
-
-        DEMDOM.demaux.iter++;
-        DEMDOM.demaux.Time += dt;
 
         if (maxdis>Alpha)
         {
@@ -923,8 +921,6 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         tmp = LBMDOM.pF;
         LBMDOM.pF = LBMDOM.pFtemp;
         LBMDOM.pFtemp = tmp;
-        LaunchTick(LBMDOM.plbmaux);
-
         //cudaDeviceSynchronize();
         //stop  = std::chrono::high_resolution_clock::now();
 
@@ -999,8 +995,16 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
 #endif
         
         Time += dt; 
+        DEMDOM.Time = Time;
+        LBMDOM.Time = Time;
         DEMDOM.iter++;
         iter++;
+#ifdef USE_CUDA
+        DEMDOM.demaux.iter = iter;
+        DEMDOM.demaux.Time = Time;
+        DEM::SetClock<<<1,1>>>(DEMDOM.pdemaux,DEMDOM.demaux.iter,DEMDOM.demaux.Time);
+        FLBM::cudaSetClock<<<1,1>>>(LBMDOM.plbmaux,DEMDOM.demaux.iter,DEMDOM.demaux.Time);
+#endif
     }
     Finished = true;
     if (ptReport!=NULL) (*ptReport) ((*this), UserData);

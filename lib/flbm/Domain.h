@@ -2517,6 +2517,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     UpLoadDevice();
     #endif
     
+#ifdef USE_CUDA
+    size_t cuda_iter = 0;
+#endif
     double tout = Time;
     while (Time < Tf)
     {
@@ -2621,9 +2624,6 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
             tmp = pF;
             pF = pFtemp;
             pFtemp = tmp;
-            // cudaStream2 used to bump Time/iter from thread 0; the fused kernel
-            // takes lbmaux as const, so the counters live in their own kernel.
-            cudaTick<<<1,1>>>(plbmaux);
         }
         //cudaDeviceSynchronize();
         #else
@@ -2647,6 +2647,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         #endif
 
         Time += dt;
+#ifdef USE_CUDA
+        cudaSetClock<<<1,1>>>(plbmaux,++cuda_iter,Time);
+#endif
         //std::cout << Time << std::endl;
     }
 }

@@ -180,13 +180,16 @@ __global__ void cudaCheckUpLoad (lbm_aux const * lbmaux)
     */
 }
 
-// Keeps the device-side time/iteration counters of lbm_aux up to date.  These
-// used to live in a branch of cudaStream2 / cudaStreamPF2 / ...; splitting them
-// out lets the hot fused kernel take lbm_aux as const __restrict__.
-__global__ void cudaTick (lbm_aux * lbmaux)
+// Sets the device-side clock explicitly.  The host owns the simulation clock;
+// incrementing here as well as in the host Solve would advance the same clock
+// twice (and leave the host/device copies out of step).
+__global__ void cudaSetClock (lbm_aux * lbmaux, size_t iter, real Time)
 {
-    lbmaux[0].Time += lbmaux[0].dt;
-    lbmaux[0].iter++;
+    if (threadIdx.x==0&&blockIdx.x==0)
+    {
+        lbmaux[0].iter = iter;
+        lbmaux[0].Time = Time;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -986,11 +989,6 @@ __global__ void cudaStream2(bool const * IsSolid, real * F, real * Ftemp, real3 
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
-    if (ic==0)
-    {
-        lbmaux[0].Time += lbmaux[0].dt;
-        lbmaux[0].iter++;
-    }
     const size_t icl = ic/lbmaux[0].Ncells;
     const size_t ic0 = ic - icl*lbmaux[0].Ncells;
     BForce[ic] = make_real3(0.0,0.0,0.0);
@@ -1016,11 +1014,6 @@ __global__ void cudaStreamPF2(bool const * IsSolid, real * F, real * Ftemp, real
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
-    if (ic==0)
-    {
-        lbmaux[0].Time += lbmaux[0].dt;
-        lbmaux[0].iter++;
-    }
     Rho   [ic                   ] = BForce[ic+1*lbmaux[0].Ncells].z;
     Rho   [ic+1*lbmaux[0].Ncells] = 0.0;
     Vel   [ic] = make_real3(0.0,0.0,0.0);
@@ -1047,11 +1040,6 @@ __global__ void cudaStreamPFI2(bool const * IsSolid, real * F, real * Ftemp, rea
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Ncells) return;
-    if (ic==0)
-    {
-        lbmaux[0].Time += lbmaux[0].dt;
-        lbmaux[0].iter++;
-    }
     Rho   [ic                   ] = BForce[ic+2*lbmaux[0].Ncells].x;
     Rho   [ic+1*lbmaux[0].Ncells] = BForce[ic+2*lbmaux[0].Ncells].y;
     Rho   [ic+2*lbmaux[0].Ncells] = 0.0;
@@ -1094,11 +1082,6 @@ __global__ void cudaStreamSW2(bool const * IsSolid, real * F, real * Ftemp, real
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=lbmaux[0].Nl*lbmaux[0].Ncells) return;
-    if (ic==0)
-    {
-        lbmaux[0].Time += lbmaux[0].dt;
-        lbmaux[0].iter++;
-    }
     const size_t icl = ic/lbmaux[0].Ncells;
     const size_t ic0 = ic - icl*lbmaux[0].Ncells;
     //BForce[ic] = make_real3(0.0,0.0,0.0);

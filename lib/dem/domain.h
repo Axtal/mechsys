@@ -259,11 +259,12 @@ public:
     dem_aux          * pdemaux;
     // Pointers to the main function calculating forces and dynamics
     ForceVV_ptr_t      pForceVV;                                            ///< pointer to the force calculation for vertex vertex
-    ForceEE_ptr_t      pForceEE;                                            ///< pointer to the force calculation for edge edge
+    ForceEE_ptr_t      pForceEE;                                            ///< pointer to the force calculation for edge edge (default: optimised kernel)
     ForceVF_ptr_t      pForceVF;                                            ///< pointer to the force calculation for vertex face
     ForceFV_ptr_t      pForceFV;                                            ///< pointer to the force calculation for face vertex
     Translate_ptr_t    pTranslate;                                          ///< pointer to the translation function
     Rotate_ptr_t       pRotate;                                             ///< pointer to the rotation function
+    Move_ptr_t         pMove;                                               ///< pointer to the combined translation/rotation function (NULL: use pTranslate and pRotate)
     Reset_ptr_t        pReset;                                              ///< pointer to the reset function
     void             * pExtraParams;                                        ///< pointer to a structure of extra parameters for force calculation
 #endif
@@ -308,11 +309,12 @@ inline Domain::Domain (void * UD, size_t contactlaw)
 #ifdef USE_CUDA
     if (contactlaw==0) pForceVV   = CalcForceVV;
     if (contactlaw==1) pForceVV   = CalcForceVV_Hertz;
-    pForceEE   = CalcForceEE;
-    pForceVF   = CalcForceVF;
-    pForceFV   = CalcForceFV;
+    pForceEE   = CalcForceEEPre;
+    pForceVF   = CalcForceVFPre;
+    pForceFV   = CalcForceFVPre;
     pTranslate = Translate;
     pRotate    = Rotate;
+    pMove      = MoveParticles;
     pReset     = Reset;
     pExtraParams = NULL;
 #endif
@@ -618,13 +620,14 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         pForceFV<<<demaux.nfvint/Nthread+1,Nthread>>>(pFacesCU,pFacidCU,pVertsCU,pInteractons, pComInteractons, pDynInteractonsFV, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
         //std::cout << "5" << std::endl;
         //cudaDeviceSynchronize();
-        //Move Particles
-        pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "6" << std::endl;
-        //cudaDeviceSynchronize();
-        if (RotPar) pRotate   <<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
-        //std::cout << "7" << std::endl;
-        //cudaDeviceSynchronize();
+        // Move particles (Verlet translation and rotation) and update the maximum displacement
+        if (pMove)
+            pMove<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, RotPar, pExtraParams);
+        else
+        {
+            pTranslate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+            if (RotPar) pRotate<<<demaux.nparts/Nthread+1,Nthread>>>(pVertsCU, pParticlesCU, pDynParticlesCU, pdemaux, pExtraParams);
+        }
         MaxD     <<<demaux.nverts/Nthread+1,Nthread>>>(pVertsCU, pVertsoCU, pMaxDCU, pdemaux);
         //std::cout << "8" << std::endl;
         //cudaDeviceSynchronize();
@@ -637,8 +640,6 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         //std::cout << "9" << std::endl;
         //std::cout << iter << std::endl;
         //Update Pair lists
-        demaux.iter++;
-        demaux.Time += Dt;
         if (maxdis>Alpha)
         {
             //std::cout << iter << std::endl;
@@ -731,6 +732,11 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 #endif
         Time += Dt;
         iter++;
+#ifdef USE_CUDA
+        demaux.iter = iter;
+        demaux.Time = Time;
+        SetClock<<<1,1>>>(pdemaux,demaux.iter,demaux.Time);
+#endif
     }
 
     // last output
@@ -2448,7 +2454,7 @@ inline void Domain::Load (char const * FileKey)
                         std::pair<int,int> pt (Particles[it->second->I1]->Tag,Particles[it->second->I2]->Tag);
                         if (FricCoeff.count(pt)==1) it->second->Mu = FricCoeff[pt];
                     }
-                    printf("%s  Restored %zu per-tag friction coefficient override(s)%s\n",TERM_CLR2,nf,TERM_RST);
+                    printf("%s  Restored %llu per-tag friction coefficient override(s)%s\n",TERM_CLR2,(unsigned long long)nf,TERM_RST);
                     delete [] ft1; delete [] ft2; delete [] fm;
                 }
             }
@@ -3191,6 +3197,7 @@ inline double Domain::CriticalDt ()
 
         return 0.1*sqrt(MinMass/MaxKn);
     }
+    return 0.0;
 }
 
 inline void Domain::EnergyOutput (size_t IdxOut, std::ostream & OF)
@@ -3342,6 +3349,7 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
     if (first)
     {
         demaux.Time = Time;
+        demaux.iter = iter;
         demaux.dt   = Dt;
         demaux.Per.x  = Per(0);
         demaux.Per.y  = Per(1);

@@ -198,7 +198,6 @@ struct Cell
 inline bool InsideCell(Vec3_t & V, Cell const * Ce)
 {
     bool inside = false;
-    double vtot = 0.0;
     Vec3_t v0 = Ce->V[0]->C;
     Vec3_t v1 = Ce->V[1]->C;
     Vec3_t v2 = Ce->V[2]->C;
@@ -245,6 +244,7 @@ inline bool InsideCell(Vec3_t & x, Cell const * Ce, Vec3_t & rst)
     if (!SolAlt(M,B,rst)) return false;
 
     if (rst(0)>0.0&&rst(1)>0.0&&rst(2)>0.0&&rst(0)+rst(1)+rst(2)<1.0) return true;
+    return false;
 }
 
 inline int CellGetBryTag(int iSide, Cell const *c)

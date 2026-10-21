@@ -340,7 +340,6 @@ int main(int argc, char **argv) try
     dom.Dilate = true;
     //dom.Nthread = 128;
 
-    bool load = false;
     // particle
     if      (ptype=="sphere")  dom.GenSpheres  (-1, Lx, nx, rho, "HCP", seed, fraction);
     else if (ptype=="sphereboxhcp") 
@@ -364,7 +363,6 @@ int main(int argc, char **argv) try
     else 
     {
         dom.Load(ptype.CStr());
-        load = true;
     }
     
     Vec3_t Xmin,Xmax;

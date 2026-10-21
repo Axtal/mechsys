@@ -695,10 +695,12 @@ __host__ __device__ void DistanceEE(size_t const * Edges, real3 const * Verts, s
         DistanceVE(Verts[Edges[2*e1  ]],Verts[Edges[2*e1+1]],xi2,s2,xf2,Per);
         DistanceVE(Verts[Edges[2*e0  ]],Verts[Edges[2*e0+1]],xi3,s3,xf3,Per);
         DistanceVE(Verts[Edges[2*e0  ]],Verts[Edges[2*e0+1]],xi4,s4,xf4,Per);
-        real l1 = norm(s1);
-        real l2 = norm(s2);
-        real l3 = norm(s3);
-        real l4 = norm(s4);
+        // Compare squared lengths: sqrt is monotonic, so the minimum is the
+        // same and four square roots per feature are avoided.
+        real l1 = dotreal3(s1,s1);
+        real l2 = dotreal3(s2,s2);
+        real l3 = dotreal3(s3,s3);
+        real l4 = dotreal3(s4,s4);
         if ((l1<=l2) && (l1<=l3) && (l1<=l4))
         {   
             Xi = xi1;
@@ -767,21 +769,17 @@ __host__ __device__ void DistanceVF(size_t const * Faces, size_t const * Facid, 
     else // compare V against each edge
     {
         real3 st;
-        real3 E0 = Verts[Facid[Faces[2*f1]  ]];
-        real3 E1 = Verts[Facid[Faces[2*f1]+1]];
-        DistanceVE(E0,E1,V0,st,nor,Per);
-        double lt = norm(st);
-        double ld = lt;
-        Xf = nor;
-        S  = st;
+        double ld = 1.0e300;
+        Xf = make_real3(0.0,0.0,0.0);
+        S  = make_real3(0.0,0.0,0.0);
         for (size_t i=0;i<nvertex;i++)
         {
             size_t ig  = i             + Faces[2*f1];
             size_t ip  = (i+1)%nvertex + Faces[2*f1];
-            E0 = Verts[Facid[ig]];
-            E1 = Verts[Facid[ip]];
+            real3 E0 = Verts[Facid[ig]];
+            real3 E1 = Verts[Facid[ip]];
             DistanceVE(E0,E1,V0,st,nor,Per);
-            lt = norm(st);
+            double lt = dotreal3(st,st);
             if (lt<ld)
             {
                 Xf = nor;
