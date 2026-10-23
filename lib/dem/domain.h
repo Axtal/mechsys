@@ -286,6 +286,8 @@ struct MtData   /// A structure for the multi-thread data
     Array<std::pair<size_t,size_t> >  CLCI; ///< An array of confirmed pairs
     Array<std::pair<iVec3_t,size_t> >  LLC; ///< A temporal array of possible linked cells locations
     Array<std::pair<size_t,size_t> >   LPP; ///< A temporal array of possible particle types
+    Array<Vec3_t>                       F; ///< Per-thread accumulated forces
+    Array<Vec3_t>                       T; ///< Per-thread accumulated torques
 };
 
 // Constructor & Destructor
@@ -453,7 +455,8 @@ inline void Domain::Initialize (double dt)
 inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, ptFun_t ptReport, char const * TheFileKey, bool Render, size_t TheNproc, double minEkin)
 {
     // Assigning some domain particles especifically to the output
-    FileKey.Printf("%s",TheFileKey);
+    if (TheFileKey != NULL) FileKey.Printf("%s",TheFileKey);
+    else                    FileKey.Printf("");
     idx_out = 0;
     
     //Assigning the value for the time step to the domain variable
@@ -550,6 +553,8 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         MTD[i].ProcRank = i;
         MTD[i].Dom      = this;
         MTD[i].Dmx      = 0.0;
+        MTD[i].F.Resize(Particles.Size());
+        MTD[i].T.Resize(Particles.Size());
     }
     
     UpdateContacts();
@@ -576,6 +581,19 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
         // output
         if (ptSetup!=NULL) (*ptSetup) ((*this), UserData);
+#ifndef USE_CUDA
+        if (ptSetup!=NULL)
+        {
+            // A setup callback is allowed to change orientations/angular
+            // velocities; keep the particle-level caches coherent before the
+            // force loop reads them.
+            #pragma omp parallel for schedule(static) num_threads(Nproc)
+            for (size_t i=0; i<Particles.Size(); ++i)
+            {
+                Particles[i]->UpdateRotCacheIfChanged();
+            }
+        }
+#endif
         if (Time>=tout)
         {
 #ifdef USE_CUDA
@@ -663,6 +681,15 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
         //Calculate forces
         #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t i=0;i<Nproc;i++)
+        {
+            for (size_t j=0;j<Particles.Size();j++)
+            {
+                MTD[i].F[j] = OrthoSys::O;
+                MTD[i].T[j] = OrthoSys::O;
+            }
+        }
+        #pragma omp parallel for schedule(guided) num_threads(Nproc)
         for (size_t i=0; i<Interactons.Size(); i++)
         {
             //std::cout << Interactons[i]->I1 << " " << Interactons[i]->I2 << std::endl;
@@ -681,15 +708,21 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
                 sleep(1);
                 throw new Fatal("Maximun overlap detected between particles");
             }
-            omp_set_lock  (&Interactons[i]->P1->lck);
-            Interactons[i]->P1->F += Interactons[i]->F1;
-            Interactons[i]->P1->T += Interactons[i]->T1;
-            omp_unset_lock(&Interactons[i]->P1->lck);
-            omp_set_lock  (&Interactons[i]->P2->lck);
-            Interactons[i]->P2->F += Interactons[i]->F2;
-            Interactons[i]->P2->T += Interactons[i]->T2;
-            omp_unset_lock(&Interactons[i]->P2->lck);
+            size_t tid = omp_get_thread_num();
+            MTD[tid].F[Interactons[i]->I1] += Interactons[i]->F1;
+            MTD[tid].T[Interactons[i]->I1] += Interactons[i]->T1;
+            MTD[tid].F[Interactons[i]->I2] += Interactons[i]->F2;
+            MTD[tid].T[Interactons[i]->I2] += Interactons[i]->T2;
+        }
 
+        #pragma omp parallel for schedule(static) num_threads(Nproc)
+        for (size_t ip=0; ip<Particles.Size(); ip++)
+        {
+            for (size_t it=0; it<Nproc; it++)
+            {
+                Particles[ip]->F += MTD[it].F[ip];
+                Particles[ip]->T += MTD[it].T[ip];
+            }
         }
 
         if(MostlySpheres) CalcForceSphere();
@@ -728,6 +761,10 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
         if (maxdis>Alpha)
         {
             UpdateContacts();
+        }
+        else
+        {
+            ContactDispGlobal() += maxdis;
         }
 #endif
         Time += Dt;
@@ -2259,6 +2296,10 @@ inline void Domain::Load (char const * FileKey)
         H5LTread_dataset_int(group_id,"Tag",tag);
         Particles[Particles.Size()-1]->Tag = tag[0];
 
+        // The saved quaternion and angular velocity are restored above; make
+        // the derived rotation caches valid immediately, including for a
+        // CUDA build where the upload copies rather than recomputes them.
+        Particles[Particles.Size()-1]->UpdateRotCache();
         Particles[Particles.Size()-1]->PropsReady = true;
 
         // Same reason as in Save: leaving the particle group open keeps the file handle
@@ -2917,6 +2958,17 @@ inline void Domain::ResetContacts()
 
 inline void Domain::UpdateContacts()
 {
+    // Particle-level rotation caches are used by the interaction force path.
+    // Refresh them here as well as in Particle::Rotate so that the first force
+    // evaluation and direct UpdateContacts/CalcForce calls see current w and Q.
+    // This runs on the host for both CPU and CUDA builds: the CUDA upload
+    // copies these fields, and a loaded domain has restored Q/w directly.
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t i=0; i<Particles.Size(); ++i)
+    {
+        Particles[i]->UpdateRotCacheIfChanged();
+    }
+    ContactDispGlobal() = 0.0;
     LinkedCell.Resize(0);
 
     if (FreePar.Size()!=0)
@@ -3435,6 +3487,10 @@ inline void Domain::UpLoadDevice(size_t Nc, bool first)
         #pragma omp parallel for schedule(static) num_threads(Nc)
         for (size_t ip=0;ip<Particles.Size();ip++)
         {
+            // Normally UpdateContacts()/InitializeVelocity() already prepared
+            // the caches.  This catches direct UploadDevice() calls or host
+            // edits after initialization; unchanged particles only compare.
+            Particles[ip]->UpdateRotCacheIfChanged();
             UploadParticle(hDynParticlesCU[ip],hParticlesCU[ip],*Particles[ip]);
         }
         

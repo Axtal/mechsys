@@ -98,6 +98,8 @@ public:
     void   Initialize         (size_t i=0, size_t NCalls=5000);                               ///< Initialize this particle
     void   InitializeVelocity (double dt = 1.0);                                              ///< Initialize this particle
     void   Rotate             (double dt);                                                    ///< Apply rotation on the particle once the total torque is found
+    void   UpdateRotCache     ();                                                             ///< Refresh wrot=Rotation(w,Q) and Qc=Conjugate(Q)
+    void   UpdateRotCacheIfChanged();                                                         ///< Refresh only if w or Q changed
     void   Rotate             (Quaternion_t & Q, Vec3_t & V);                                 ///< Apply rotation given by Quaternion Q at point v
     void   Translate          (double dt);                                                    ///< Apply translation once the total force is found
     void   Translate          (Vec3_t const & t);                                                   ///< Apply translation by vector t
@@ -137,6 +139,10 @@ public:
     Vec3_t          Tf;              ///< Fixed Torque over the particle
     Vec3_t          I;               ///< Vector containing the principal components of the inertia tensor
     Quaternion_t    Q;               ///< The quaternion representing the rotation
+    Vec3_t          wrot;            ///< Angular velocity rotated by the orientation: Rotation(w,Q)
+    Quaternion_t    Qc;              ///< Conjugate of the orientation quaternion (used to rotate torques)
+    Vec3_t          wrot_source;     ///< w used for the current wrot cache
+    Quaternion_t    Qc_source;       ///< Q used for the current Qc cache
     double          Erot;            ///< Rotational energy of the particle
     double          Ekin;            ///< Kinetical energy of the particle
     double          Dmax;            ///< Maximal distance from the center of mass to the surface of the body
@@ -243,6 +249,11 @@ inline void Particle::init_default_values(int tag, double r, double rho)
     Closed     = true;
     v          = 0.0,0.0,0.0;
     w          = 0.0,0.0,0.0;
+    Q          = 1.0,0.0,0.0,0.0;
+    wrot        = 0.0,0.0,0.0;
+    Qc          = 1.0,0.0,0.0,0.0;
+    wrot_source = 0.0,0.0,0.0;
+    Qc_source   = 1.0,0.0,0.0,0.0;
 
     Props.Kn   = 1.0e4;
     Props.Kt   = 5.0e3;
@@ -659,6 +670,9 @@ inline void Particle::InitializeVelocity (double dt)
     wb = w;
     Ekin = 0.5*Props.m*dot(v,v);
     Erot = 0.5*(I(0)*w(0)*w(0)+I(1)*w(1)*w(1)+I(2)*w(2)*w(2));
+    // Keep the host-side rotation caches ready.  In particular, the CUDA
+    // upload copies these fields instead of recomputing them on the host.
+    UpdateRotCache();
 }
 
 inline void Particle::Rotate (double dt)
@@ -703,11 +717,59 @@ inline void Particle::Rotate (double dt)
     dq  = Quaternion_t(-(q1*wx+q2*wy+q3*wz),q0*wx-q3*wy+q2*wz,q3*wx+q0*wy-q1*wz,-q2*wx+q1*wy+q0*wz);
     Quaternion_t Qd = (qm+dq*0.5*dt),temp;
     Conjugate (Q,temp);
-    Rotate    (temp,x);
-    Q  = Qd/norm(Qd);
-    Rotate (Q,x);
+    Quaternion_t Qnew = Qd/norm(Qd);
+
+    // Fuse the old-orientation and new-orientation passes over the vertices.
+    // The previous code rotated every vertex twice and updated all edges and
+    // faces twice.  The intermediate face normals are not used, so the final
+    // geometry is identical while the vertex and topology work is halved.
+    size_t nv = Verts.Size(),ne = Edges.Size(),nf = Faces.Size(),nc = Cylinders.Size();
+    for (size_t i = 0; i < nv; i++)
+    {
+        Vec3_t xt = *Verts[i]-x;
+        Vec3_t y;
+        Rotation(xt,temp,y);
+        y += x;
+        Vec3_t xt2 = y - x;
+        Vec3_t z;
+        Rotation(xt2,Qnew,z);
+        *Verts[i] = z + x;
+    }
+    for (size_t i = 0; i < ne; i++)
+    {
+        Edges[i]->UpdatedL();
+    }
+    for (size_t i = 0; i < nf; i++)
+    {
+        Faces[i]->UpdatedL();
+    }
+    for (size_t i = 0; i < nc; i++)
+    {
+        Cylinders[i]->UpdatedL();
+    }
+    Q = Qnew;
+    UpdateRotCache();
     Erot=0.5*(I(0)*wx*wx+I(1)*wy*wy+I(2)*wz*wz);
 
+}
+
+inline void Particle::UpdateRotCache ()
+{
+    Rotation  (w,Q,wrot);
+    Conjugate (Q,Qc);
+    wrot_source = w;
+    Qc_source   = Q;
+}
+
+inline void Particle::UpdateRotCacheIfChanged ()
+{
+    if (w(0)==wrot_source(0) && w(1)==wrot_source(1) && w(2)==wrot_source(2) &&
+        Q(0)==Qc_source(0)   && Q(1)==Qc_source(1)   &&
+        Q(2)==Qc_source(2)   && Q(3)==Qc_source(3))
+    {
+        return;
+    }
+    UpdateRotCache();
 }
 
 inline void Particle::Rotate (Quaternion_t & Q,Vec3_t & V)
@@ -939,6 +1001,7 @@ inline void Particle::CalcProps (size_t NCalls)
             if (Distance(x,(*Verts[i]))+Props.R > Dmax) Dmax = Distance(x,(*Verts[i]))+Props.R;
         }
     }
+    UpdateRotCache();
     PropsReady = true;
 }
 
@@ -1301,9 +1364,15 @@ __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM
     DPc.Q.y             = Par.Q(2);
     DPc.Q.z             = Par.Q(3);
     DPc.Q.w             = Par.Q(0);
-    // Cached rotation quantities; refreshed on the device after every step.
-    Rotation  (DPc.w,DPc.Q,DPc.wrot);
-    Conjugate (DPc.Q,DPc.Qc);
+    // Copy the host caches prepared by CalcProps/InitializeVelocity/Rotate.
+    // The device refreshes them after movement when Q/w change.
+    DPc.wrot.x          = Par.wrot(0);
+    DPc.wrot.y          = Par.wrot(1);
+    DPc.wrot.z          = Par.wrot(2);
+    DPc.Qc.w            = Par.Qc(0);
+    DPc.Qc.x            = Par.Qc(1);
+    DPc.Qc.y            = Par.Qc(2);
+    DPc.Qc.z            = Par.Qc(3);
     }
 }
 
@@ -1338,6 +1407,18 @@ __host__ void DnloadParticle(DEM::DynParticleCU & DPc,DEM::Particle & Par)
     Par.Q(2)            = DPc.Q.y   ;
     Par.Q(3)            = DPc.Q.z   ;
     Par.Q(0)            = DPc.Q.w   ;
+    // Copy the device caches back so a later UpLoadDevice can copy them
+    // again without recomputing.  The source snapshots make the host cache
+    // valid for UpdateRotCacheIfChanged() until w/Q actually change.
+    Par.wrot(0)         = DPc.wrot.x;
+    Par.wrot(1)         = DPc.wrot.y;
+    Par.wrot(2)         = DPc.wrot.z;
+    Par.Qc(0)           = DPc.Qc.w ;
+    Par.Qc(1)           = DPc.Qc.x ;
+    Par.Qc(2)           = DPc.Qc.y ;
+    Par.Qc(3)           = DPc.Qc.z ;
+    Par.wrot_source     = Par.w;
+    Par.Qc_source       = Par.Q;
     }
     Par.Ekin = 0.5*Par.Props.m*dot(Par.v,Par.v);
     Par.Erot = 0.5*(Par.I(0)*Par.w(0)*Par.w(0)+Par.I(1)*Par.w(1)*Par.w(1)+Par.I(2)*Par.w(2)*Par.w(2));

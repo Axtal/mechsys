@@ -10,3 +10,7 @@ and both computational fluid dynamics and computational electromagnetics
 using the lattice Boltzmann method.
 
 For more information, please check http://mechsys.nongnu.org
+
+For coding agents and contributors, see AGENTS.md and MECHSYS_HANDBOOK.md.
+For a distilled engineering memory and hard-won practical lessons, see MEMORY.md.
+The visible skill is SKILL.md; DeepSeek Harness also auto-discovers .agents/skills/mechsys/SKILL.md.

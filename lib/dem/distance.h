@@ -495,14 +495,25 @@ inline bool Overlap (Vec3_t & V0, Vec3_t & V1, double R0, double R1)
 
 inline bool Overlap (Vec3_t & V0, Edge   & E1, double R0, double R1)
 {
-    double dist = norm(V0 - 0.5*(*E1.X0 + *E1.X1));
+    const double eps = 1.0e-12;
+    Vec3_t B = V0 - 0.5*(*E1.X0 + *E1.X1);
+    double R = R0 + R1 + eps;
+    if (fabs(B(0)) > R + 0.5*fabs(E1.dL(0))) return false;
+    if (fabs(B(1)) > R + 0.5*fabs(E1.dL(1))) return false;
+    if (fabs(B(2)) > R + 0.5*fabs(E1.dL(2))) return false;
+    double dist = norm(B);
     return (dist < R0 + R1 + E1.Dmax);
 }
 
 inline bool Overlap (Vec3_t & V0, Edge   & E1, double R0, double R1, Vec3_t const & Per)
 {
+    const double eps = 1.0e-12;
     Vec3_t B;
     BranchVec(V0,0.5*(*E1.X0 + *E1.X1),B,Per);
+    double R = R0 + R1 + eps;
+    if (fabs(B(0)) > R + 0.5*fabs(E1.dL(0))) return false;
+    if (fabs(B(1)) > R + 0.5*fabs(E1.dL(1))) return false;
+    if (fabs(B(2)) > R + 0.5*fabs(E1.dL(2))) return false;
     double dist = norm(B);
     return (dist < R0 + R1 + E1.Dmax);
 }
@@ -519,20 +530,34 @@ inline bool Overlap (Edge   & E0, Vec3_t & V1, double R0, double R1, Vec3_t cons
 
 inline bool Overlap (Edge   & E0, Edge   & E1, double R0, double R1)
 {
-    double dist = norm(0.5*(*E0.X0 + *E0.X1) - 0.5*(*E1.X0 + *E1.X1));
+    const double eps = 1.0e-12;
+    Vec3_t B = 0.5*(*E1.X0 + *E1.X1) - 0.5*(*E0.X0 + *E0.X1);
+    double R = R0 + R1 + eps;
+    if (fabs(B(0)) > R + 0.5*fabs(E0.dL(0)) + 0.5*fabs(E1.dL(0))) return false;
+    if (fabs(B(1)) > R + 0.5*fabs(E0.dL(1)) + 0.5*fabs(E1.dL(1))) return false;
+    if (fabs(B(2)) > R + 0.5*fabs(E0.dL(2)) + 0.5*fabs(E1.dL(2))) return false;
+    double dist = norm(B);
     return (dist < R0 + R1 + E0.Dmax + E1.Dmax);
 }
 
 inline bool Overlap (Edge   & E0, Edge   & E1, double R0, double R1, Vec3_t const & Per)
 {
+    const double eps = 1.0e-12;
     Vec3_t B;
     BranchVec(0.5*(*E0.X0 + *E0.X1),0.5*(*E1.X0 + *E1.X1),B,Per);
+    double R = R0 + R1 + eps;
+    if (fabs(B(0)) > R + 0.5*fabs(E0.dL(0)) + 0.5*fabs(E1.dL(0))) return false;
+    if (fabs(B(1)) > R + 0.5*fabs(E0.dL(1)) + 0.5*fabs(E1.dL(1))) return false;
+    if (fabs(B(2)) > R + 0.5*fabs(E0.dL(2)) + 0.5*fabs(E1.dL(2))) return false;
     double dist = norm(B);
     return (dist < R0 + R1 + E0.Dmax + E1.Dmax);
 }
 
 inline bool Overlap (Vec3_t & V0, Face   & F1, double R0, double R1)
 {
+    const double eps = 1.0e-12;
+    Vec3_t B0 = V0 - *F1.Edges[0]->X0;
+    if (fabs(dot(B0,F1.Nor)) > R0 + R1 + eps) return false;
     Vec3_t C = OrthoSys::O;
     for (size_t i=0; i<F1.Edges.Size(); i++)
     {
@@ -545,6 +570,10 @@ inline bool Overlap (Vec3_t & V0, Face   & F1, double R0, double R1)
 
 inline bool Overlap (Vec3_t & V0, Face   & F1, double R0, double R1, Vec3_t const & Per)
 {
+    const double eps = 1.0e-12;
+    Vec3_t B0;
+    BranchVec(V0,*F1.Edges[0]->X0,B0,Per);
+    if (fabs(dot(B0,F1.Nor)) > R0 + R1 + eps) return false;
     Vec3_t C = OrthoSys::O;
     for (size_t i=0; i<F1.Edges.Size(); i++)
     {
@@ -796,6 +825,97 @@ __host__ __device__ void DistanceFV(size_t const * Faces, size_t const * Facid, 
     S = -1.0*S;
 }
 #endif
+
+// Squared-distance versions used by the force loop.  They let the hot path
+// reject the large majority of feature pairs without constructing closest points.
+inline double Distance2 (Vec3_t const & V, Edge const & E, Vec3_t const & Per)
+{
+    Vec3_t B;
+    BranchVec (*E.X0,V,B,Per);
+    double t = dot(B,E.dL)/dot(E.dL,E.dL);
+    Vec3_t Xf;
+    if      (t<0) Xf = (*E.X0);
+    else if (t>1) Xf = (*E.X1);
+    else          Xf = (*E.X0) + E.dL*t;
+    Vec3_t S;
+    BranchVec (V,Xf,S,Per);
+    return dot(S,S);
+}
+
+inline double Distance2 (Edge const & E0, Edge const & E1, Vec3_t const & Per)
+{
+    Vec3_t B;
+    BranchVec (*E1.X0,*E0.X0,B,Per);
+    double a = dot(E0.dL, B);
+    double b = dot(E1.dL, B);
+    double c = dot(E0.dL, E0.dL);
+    double d = dot(E1.dL, E1.dL);
+    double e = dot(E0.dL, E1.dL);
+    double t = (c*b-e*a)/(c*d-e*e);
+    double s = (e*b-a*d)/(c*d-e*e);
+    if ((s>0) && (s<1) && (t>0) && (t<1))
+    {
+        Vec3_t S;
+        BranchVec ((*E0.X0)+E0.dL*s, (*E1.X0)+E1.dL*t, S, Per);
+        return dot(S,S);
+    }
+    double l1 = Distance2((*E0.X0),E1,Per);
+    double l2 = Distance2((*E0.X1),E1,Per);
+    double l3 = Distance2((*E1.X0),E0,Per);
+    double l4 = Distance2((*E1.X1),E0,Per);
+    double l = l1;
+    if (l2<l) l = l2;
+    if (l3<l) l = l3;
+    if (l4<l) l = l4;
+    return l;
+}
+
+inline double Distance2 (Vec3_t const & V, Face const & F, Vec3_t const & Per)
+{
+    Vec3_t B;
+    BranchVec(V,(*F.Edges[0]->X0),B,Per);
+    double a = dot(B, F.Edges[0]->dL);
+    double b = dot(F.Edges[0]->dL, F.Edges[0]->dL);
+    double c = dot(F.Edges[0]->dL, F.Edges[1]->dL);
+    double d = dot(B, F.Edges[1]->dL);
+    double f = dot(F.Edges[1]->dL, F.Edges[1]->dL);
+    double s = (c*d-a*f)/(b*f-c*c);
+    double t = (a*c-b*d)/(b*f-c*c);
+    Vec3_t pro = *F.Edges[0]->X0 + s*F.Edges[0]->dL + t*F.Edges[1]->dL;
+    bool inside = true;
+    for (size_t i=0; i<F.Edges.Size(); i++)
+    {
+        Vec3_t tmp = pro-*F.Edges[i]->X0;
+        if (dot(cross(F.Edges[i]->dL,tmp),F.Nor)<0) inside = false;
+    }
+    if (inside)
+    {
+        Vec3_t S;
+        BranchVec(V,pro,S,Per);
+        return dot(S,S);
+    }
+    double l = Distance2(V,(*F.Edges[0]),Per);
+    for (size_t i=1; i<F.Edges.Size(); i++)
+    {
+        double li = Distance2(V,(*F.Edges[i]),Per);
+        if (li<l) l = li;
+    }
+    return l;
+}
+
+inline double Distance2 (Face const & F, Vec3_t const & V, Vec3_t const & Per)
+{
+    return Distance2(V,F,Per);
+}
+
+template<typename A, typename B>
+inline double Distance2 (A const & a, B const & b, Vec3_t const & Per)
+{
+    Vec3_t xi,xf,s;
+    Distance(a,b,xi,xf,s,Per);
+    return dot(s,s);
+}
+
 
 }
 #endif // MECHSYS_DEM_DISTANCE_H

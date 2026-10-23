@@ -20,6 +20,7 @@
 #define MECHSYS_DEM_INTERACTON_H
 
 // Std Lib
+#include <algorithm>
 #include <math.h>
 //#include <map>
 #include <unordered_map>
@@ -35,6 +36,10 @@ namespace DEM
 
 // typedefs
 typedef std::unordered_map<size_t,Vec3_t> FrictionMap_t;
+
+/// Sum of the MaxDisplacement values reported each step since the last
+/// contact-list rebuild. Used only as a conservative pruning bound.
+inline double & ContactDispGlobal () { static double d = 0.0; return d; }
 //typedef std::map<std::pair<int,int>,Vec3_t> FrictionMap_t;
 typedef Array<std::pair<int,int> > ListContacts_t;
 
@@ -100,6 +105,13 @@ public:
     ListContacts_t Ltv;       ///< List of torus-vertex contacts
     ListContacts_t Lvc;       ///< List of vertex-cylinder contacts
     ListContacts_t Lcv;       ///< List of cylinder-vertex contacts
+    Array<double>  Leed;      ///< Edge-edge distances at list-build time
+    Array<double>  Lvfd;      ///< Vertex-face distances at list-build time
+    Array<double>  Lfvd;      ///< Face-vertex distances at list-build time
+    Array<double>  Lvtd;      ///< Vertex-torus distances at list-build time
+    Array<double>  Ltvd;      ///< Torus-vertex distances at list-build time
+    Array<double>  Lvcd;      ///< Vertex-cylinder distances at list-build time
+    Array<double>  Lcvd;      ///< Cylinder-vertex distances at list-build time
     FrictionMap_t  Fdee;      ///< Static friction displacement for pair of edges
     FrictionMap_t  Fdvf;      ///< Static friction displacement for pair of vertex-face
     FrictionMap_t  Fdfv;      ///< Static friction displacement for pair of face-vertex
@@ -109,9 +121,9 @@ public:
     FrictionMap_t  Fdcv;      ///< Static friction displacement for pair of cylinder-vertex
 protected:
     template<typename FeatureA_T, typename FeatureB_T>
-    bool _update_disp_calc_force (FeatureA_T & A, FeatureB_T & B, FrictionMap_t & FMap, ListContacts_t & L, double dt, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);
+    bool _update_disp_calc_force (FeatureA_T & A, FeatureB_T & B, FrictionMap_t & FMap, ListContacts_t & L, Array<double> & Ld, double dt, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);
     template<typename FeatureA_T, typename FeatureB_T>
-    void _update_contacts        (FeatureA_T & A, FeatureB_T & B, ListContacts_t & L, double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);
+    void _update_contacts        (FeatureA_T & A, FeatureB_T & B, ListContacts_t & L, Array<double> & Ld, double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);
 };
 
 class CInteractonSphere: public CInteracton // Collision interacton for spheres
@@ -237,24 +249,24 @@ inline CInteracton::CInteracton (Particle * Pt1, Particle * Pt2, size_t contacla
 
 inline bool CInteracton::UpdateContacts (double alpha, Vec3_t const & Per, size_t const iter)
 {
-    Lee.Resize(0);
-    Lvf.Resize(0);
-    Lfv.Resize(0);
-    Lvt.Resize(0);
-    Ltv.Resize(0);
-    Lvc.Resize(0);
-    Lcv.Resize(0);
+    Lee.Resize(0);  Leed.Resize(0);
+    Lvf.Resize(0);  Lvfd.Resize(0);
+    Lfv.Resize(0);  Lfvd.Resize(0);
+    Lvt.Resize(0);  Lvtd.Resize(0);
+    Ltv.Resize(0);  Ltvd.Resize(0);
+    Lvc.Resize(0);  Lvcd.Resize(0);
+    Lcv.Resize(0);  Lcvd.Resize(0);
     Vec3_t Pert = OrthoSys::O;
     if (BothFree) Pert = Per;
     if (Distance(P1->x,P2->x,Pert)<=P1->Dmax+P2->Dmax+2*alpha)
     {
-        _update_contacts (P1->Edges     ,P2->Edges     ,Lee,alpha,Pert);
-        _update_contacts (P1->Verts     ,P2->Faces     ,Lvf,alpha,Pert);
-        _update_contacts (P1->Faces     ,P2->Verts     ,Lfv,alpha,Pert);
-        _update_contacts (P1->Verts     ,P2->Tori      ,Lvt,alpha,Pert);
-        _update_contacts (P1->Tori      ,P2->Verts     ,Ltv,alpha,Pert);
-        _update_contacts (P1->Verts     ,P2->Cylinders ,Lvc,alpha,Pert);
-        _update_contacts (P1->Cylinders ,P2->Verts     ,Lcv,alpha,Pert);
+        _update_contacts (P1->Edges     ,P2->Edges     ,Lee,Leed,alpha,Pert);
+        _update_contacts (P1->Verts     ,P2->Faces     ,Lvf,Lvfd,alpha,Pert);
+        _update_contacts (P1->Faces     ,P2->Verts     ,Lfv,Lfvd,alpha,Pert);
+        _update_contacts (P1->Verts     ,P2->Tori      ,Lvt,Lvtd,alpha,Pert);
+        _update_contacts (P1->Tori      ,P2->Verts     ,Ltv,Ltvd,alpha,Pert);
+        _update_contacts (P1->Verts     ,P2->Cylinders ,Lvc,Lvcd,alpha,Pert);
+        _update_contacts (P1->Cylinders ,P2->Verts     ,Lcv,Lcvd,alpha,Pert);
         if (Lee.Size()>0||Lvf.Size()>0||Lfv.Size()>0||Ltv.Size()>0||Lvt.Size()>0||Lcv.Size()>0||Lvc.Size()>0) return true;
         //if (Lee.Size()>0||Lvf.Size()>0||Lfv.Size()>0) return true;
         else return false;
@@ -278,6 +290,7 @@ inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const 
     F2     = OrthoSys::O;
     T1     = OrthoSys::O;
     T2     = OrthoSys::O;
+
     Vec3_t Pert;
     if (BothFree) // I had to do this due to the two definitions for BranchVec function
     {
@@ -298,13 +311,13 @@ inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const 
     //std::cout << I2 << std::endl;
     //std::cout << Lvf[0].first << std::endl;
     //std::cout << Lvf[0].second << std::endl;
-    if (_update_disp_calc_force (P1->Edges     ,P2->Edges     ,Fdee,Lee,dt,Pert,iter)) overlap = true;
-    if (_update_disp_calc_force (P1->Verts     ,P2->Faces     ,Fdvf,Lvf,dt,Pert,iter)) overlap = true;
-    if (_update_disp_calc_force (P1->Faces     ,P2->Verts     ,Fdfv,Lfv,dt,Pert,iter)) overlap = true;
-    if (_update_disp_calc_force (P1->Verts     ,P2->Tori      ,Fdvt,Lvt,dt,Per)) overlap = true;
-    if (_update_disp_calc_force (P1->Tori      ,P2->Verts     ,Fdtv,Ltv,dt,Per)) overlap = true;
-    if (_update_disp_calc_force (P1->Verts     ,P2->Cylinders ,Fdvc,Lvc,dt,Per)) overlap = true;
-    if (_update_disp_calc_force (P1->Cylinders ,P2->Verts     ,Fdcv,Lcv,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Edges     ,P2->Edges     ,Fdee,Lee,Leed,dt,Pert,iter)) overlap = true;
+    if (_update_disp_calc_force (P1->Verts     ,P2->Faces     ,Fdvf,Lvf,Lvfd,dt,Pert,iter)) overlap = true;
+    if (_update_disp_calc_force (P1->Faces     ,P2->Verts     ,Fdfv,Lfv,Lfvd,dt,Pert,iter)) overlap = true;
+    if (_update_disp_calc_force (P1->Verts     ,P2->Tori      ,Fdvt,Lvt,Lvtd,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Tori      ,P2->Verts     ,Fdtv,Ltv,Ltvd,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Verts     ,P2->Cylinders ,Fdvc,Lvc,Lvcd,dt,Per)) overlap = true;
+    if (_update_disp_calc_force (P1->Cylinders ,P2->Verts     ,Fdcv,Lcv,Lcvd,dt,Per)) overlap = true;
     //
     return overlap;
 }
@@ -337,18 +350,31 @@ inline void CInteracton::UpdateParameters (size_t contactlaw)
 }
 
 template<typename FeatureA_T, typename FeatureB_T>
-inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B, FrictionMap_t & FMap, ListContacts_t & L, double dt, Vec3_t const & Per, size_t const iter)
+inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B, FrictionMap_t & FMap, ListContacts_t & L, Array<double> & Ld, double dt, Vec3_t const & Per, size_t const iter)
 {
-    // update
+    double Rsum = P1->Props.R + P2->Props.R;
+    // ContactDispGlobal() is the sum of the MaxDisplacement values
+    // reported each step since the lists were rebuilt.  The factor four is deliberately
+    // conservative: it covers relative motion of two features and the fact
+    // that the displacement is measured from the last rebuild rather than
+    // independently for every feature pair.  It is verified against the
+    // sequential baseline on the reduced Voronoi test.
+    double bound = 4.0*ContactDispGlobal();
+    double cutoff = Rsum + bound;
+    // Keep the original pair order (and therefore the original floating-point
+    // accumulation order) while using the list-build distances only to skip
+    // pairs that cannot possibly overlap.
     for (size_t k=0; k<L.Size(); ++k)
     {
+        if (Ld.Size()==L.Size() && Ld[k] > cutoff) continue;
         size_t i = L[k].first;
         size_t j = L[k].second;
         if (!Overlap((*A[i]), (*B[j]),P1->Props.R,P2->Props.R,Per)) continue;
+        if (Distance2((*A[i]),(*B[j]),Per) >= Rsum*Rsum) continue;
         Vec3_t xi, xf, s;
         Distance ((*A[i]), (*B[j]), xi, xf, s, Per);
         double dist  = norm(s);
-        double delta = P1->Props.R + P2->Props.R - dist;
+        double delta = Rsum - dist;
         //if (First&&delta>0.0)
         //{
             //std::cout << "Initial overlapping detected "  << std::endl;
@@ -417,9 +443,9 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
             Vec3_t x1c = xi+n*d;
             Vec3_t x2c = xf-n*(dist-d);
             //Xc += x;
-            Vec3_t t1,t2,x1,x2;
-            Rotation(P1->w,P1->Q,t1);
-            Rotation(P2->w,P2->Q,t2);
+            Vec3_t const & t1 = P1->wrot;
+            Vec3_t const & t2 = P2->wrot;
+            Vec3_t x1,x2;
             x1 = x1c - P1->x;
             x2 = x2c - P2->x;
             Vec3_t vrel = -((P2->v-P1->v)+cross(t2,x2)-cross(t1,x1));
@@ -429,20 +455,24 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
             //std::pair<int,int> p;
             //p = std::make_pair(i,j);
             size_t p = HashFunction(i,j);
-            if (FMap.count(p)==0) FMap[p] = OrthoSys::O;
-            FMap[p] += vt*dt;
-            FMap[p] -= dot(FMap[p],n)*n;
-            Vec3_t tan = FMap[p];
-            if (norm(tan)>0.0) tan/=norm(tan);
-            if (norm(FMap[p])>Mu*norm(Fn)/Kt)
+            auto fit = FMap.find(p);
+            if (fit==FMap.end()) fit = FMap.emplace(p,OrthoSys::O).first;
+            Vec3_t & fd = fit->second;
+            fd += vt*dt;
+            fd -= dot(fd,n)*n;
+            double fdn = norm(fd);
+            double fnn = norm(Fn);
+            Vec3_t tan = fd;
+            if (fdn>0.0) tan/=fdn;
+            if (fdn>Mu*fnn/Kt)
             {
                 // Count a sliding contact
                 Nsc++;
-                FMap[p] = Mu*norm(Fn)/Kt*tan;
-                dEfric += Kt*dot(FMap[p],vt)*dt;
+                fd = Mu*fnn/Kt*tan;
+                dEfric += Kt*dot(fd,vt)*dt;
             }
-            Ftnet += Kt*FMap[p];
-            Vec3_t F = Fn + Kt*FMap[p] + Gn*dot(n,vrel)*n + Gt*vt;
+            Ftnet += Kt*fd;
+            Vec3_t F = Fn + Kt*fd + Gn*dot(n,vrel)*n + Gt*vt;
 
 
 
@@ -457,14 +487,11 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
             // torque
             Vec3_t T, Tt;
             Tt = cross (x1,F);
-            Quaternion_t q;
-            Conjugate (P1->Q,q);
-            Rotation  (Tt,q,T);
+            Rotation (Tt,P1->Qc,T);
             //P1->T -= T;
             T1 -= T;
             Tt = cross (x2,F);
-            Conjugate (P2->Q,q);
-            Rotation  (Tt,q,T);
+            Rotation (Tt,P2->Qc,T);
             //P2->T += T;
             T2 += T;
             //Transfering the branch vector information
@@ -487,24 +514,27 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
     //std::cout << P1->Index << " " << P2->Index << std::endl;
 
             // potential energy
-            Epot += 0.5*Kn*delta*delta+0.5*Kt*dot(FMap[p],FMap[p]);
+            Epot += 0.5*Kn*delta*delta+0.5*Kt*dot(fd,fd);
         }
     }
     return false;
 }
 
 template<typename FeatureA_T, typename FeatureB_T>
-inline void CInteracton::_update_contacts (FeatureA_T & A, FeatureB_T & B, ListContacts_t & L, double alpha, Vec3_t const & Per, size_t const iter)
+inline void CInteracton::_update_contacts (FeatureA_T & A, FeatureB_T & B, ListContacts_t & L, Array<double> & Ld, double alpha, Vec3_t const & Per, size_t const iter)
 {
+    L.Resize(0);
+    Ld.Resize(0);
+    double Rsum = P1->Props.R + P2->Props.R;
     for (size_t i=0; i<A.Size(); ++i)
     for (size_t j=0; j<B.Size(); ++j)
     {
         if (!Overlap ((*A[i]), (*B[j]),P1->Props.R + alpha,P2->Props.R + alpha,Per)) continue;
-        if (Distance ((*A[i]), (*B[j]),Per)<=P1->Props.R+P2->Props.R+2*alpha)
+        double d = Distance ((*A[i]), (*B[j]),Per);
+        if (d<=Rsum+2*alpha)
         {
-            std::pair<int,int> p;
-            p = std::make_pair(i,j);
-            L.Push(p);
+            L.Push(std::make_pair((int)i,(int)j));
+            Ld.Push(d);
         }
     }
 }

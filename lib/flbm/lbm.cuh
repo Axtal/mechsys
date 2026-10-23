@@ -549,15 +549,44 @@ __global__ void cudaCollideAD(bool const * __restrict__ IsSolid, real * __restri
                     real VdotC = dotreal3(vel,lbmaux[0].C[k]);
                     real Feq   = lbmaux[0].W[k]*rho*(1.0 + 3.0*VdotC*iCs + 4.5*VdotC*VdotC*iCs2 - Fc);
                     size_t idx = FIDX(Ncells,Nneigh,il,k,ic);
-                    Ftemp[idx] = F[idx] - alpha*(F[idx]-Feq)*itau;
+                    real denom = F[idx]-Feq;
+                    Ftemp[idx] = F[idx] - alpha*denom*itau;
                     if (Ftemp[idx]<0.0)
                     {
-                        real temp = tau*F[idx]/(F[idx]-Feq);
-                        if (temp<alpha) alpha = temp;
+                        // Guard the entropic limiter.  The original expression
+                        // tau*F/(F-Feq) is -inf when a negative population
+                        // coincides with F==Feq, and the next alpha*(F-Feq)
+                        // becomes NaN.  For the passive scalar layer (il==1)
+                        // clamp the offending population to zero.
+                        if (denom>0.0)
+                        {
+                            real temp = tau*F[idx]/denom;
+                            if (temp>0.0)
+                            {
+                                if (temp<alpha) alpha = temp;
+                            }
+                            else if (il==1)
+                            {
+                                Ftemp[idx] = 0.0;
+                            }
+                        }
+                        else if (il==1)
+                        {
+                            Ftemp[idx] = 0.0;
+                        }
                         valid = true;
                     }
                 }
                 if (valid) numit++;
+            }
+            if (il==1)
+            {
+                #pragma unroll
+                for (size_t k=0;k<Nneigh;k++)
+                {
+                    size_t idx = FIDX(Ncells,Nneigh,il,k,ic);
+                    if (Ftemp[idx]<0.0) Ftemp[idx] = 0.0;
+                }
             }
         }
         else
