@@ -44,6 +44,35 @@ that are easy to get wrong and the shortest path to a trustworthy result.
 - Read an existing file before replacing it. In particular, `tdem/test_cu_04.cu`
   uses CRLF line endings; do not rewrite it with a tool that normalizes them.
 
+## 1a. VisIt
+
+- Binary: `/usr/local/visit/bin/visit` (VisIt 3.3.2), added to `PATH` by
+  `~/.profile`.
+- Headless: `/usr/local/visit/bin/visit -cli -nowin -s script.py file.xmf`.
+- VisIt accepts MechSys' one-dimensional HDF5 datasets in XDMF; leave that
+  convention alone.  The XMF must reference the HDF by basename.
+- Temporal collections: give every child grid `Name="DEM_Faces"` so the
+  mesh variable is `DEM_Faces`.  Use `SetTimeSliderState(i)` to animate.
+- Pseudocolor: `AddPlot("Pseudocolor","DEM_Faces/Velocity")`; threshold with
+  `DEM_Faces/Tag` for a standalone file.  For a collection use
+  `Velocity` / `Tag`.  Add a second `Mesh` plot of the walls with
+  `MeshAttributes.SetOpacity(0.18)` and a negative-tag threshold.
+- VisIt 3.3.2 CLI attribute names: `ThresholdAttributes` takes
+  `lowerBounds`/`upperBounds` **tuples** (not `lowerBound`/`upperBound`), and
+  the 3-D view class is `View3DAttributes` (not `View3DAtts`).
+- `SaveWindow` appends a frame number to the requested filename.
+- A nonzero CLI exit after a successful save can be a warning; inspect the
+  log and PNGs.
+- A positive-`Tag` threshold alone includes parked/recycled boxes: the
+  avalanche driver keeps them at `x = -10 - 0.1*tag`, `z = -0.4` with positive
+  tags.  They are storage, not grains in the container.  For a clean render,
+  add a `Box` operator cropped to the slot (or exclude `z < -0.2`); do not
+  diagnose a wall leak from a positive-tag image.  VisIt 3.3.2 exposes
+  `BoxAttributes.SetMinx/SetMaxx/...`; applying it after the tag threshold
+  works on standalone frames.  On a temporal collection, VisIt 3.3.2 produced
+  intermittently blank frames with that operator; render each frame separately
+  for an active-only animation.
+
 ## 2. The DEM solve cycle
 
 The order in `DEM::Domain::Solve` is important:
@@ -59,6 +88,51 @@ The order in `DEM::Domain::Solve` is important:
 `MaxDisplacement()` is measured from the last `ResetDisplacements()`, which is
 called while rebuilding contacts. This is why the CPU cutoff uses accumulated
 `ContactDispGlobal()` rather than a single-step bound.
+
+### 2a. Domain-wide energy and bounds are not active-only
+
+`Domain::CalcEnergy` loops over **all** `Particle` objects.  A box that has
+already left the chute and is free-falling below the base still contributes
+translational and rotational kinetic energy, even though it is no longer part
+of the pile.  In the avalanche driver this produced `Ekin=3.47 J` while every
+active box had `vmax=0.0034 m/s`, causing a false “pile still moving” stop.
+For quiescence or avalanche criteria, filter with the same `IsActive()`/
+parked logic as the driver and compute the kinetic sum over active boxes only.
+
+A per-smallest-box energy threshold is also too strict for a large pile:
+hundreds of boxes at a few mm/s can exceed one box's energy.  Use
+`0.5*M_active*v_settle^2` for the post-check, plus an explicit `vmax` bound.
+Do **not** pass that mass-scaled value as `Domain::Solve`'s `minEkin`: the
+solver can then stop while one fast box is still moving and the post-check
+will reject the event.  Keep the solver's strict smallest-box threshold.
+
+`Domain::BoundingBox` likewise scans free particles across the whole domain;
+inspect and clamp its result before using it as a pile-top estimate.
+
+### 2b. Reset a recycled particle's orientation
+
+A recycled DEM box can keep the orientation it had when it tumbled out.  In a
+narrow slot, a long axis across the gap makes the oriented `MaxY()` larger
+than the clear width, so the insertion code stops with “recycled box ... is
+too wide for the slot.”  This is a geometric dead end, not an avalanche
+criterion.  Before reusing a parked particle, rotate its vertices back to the
+body frame and reset `Q`/`Qc` (see `AlignParkedBox` in the avalanche driver).
+Do not reuse the old quaternion blindly.  Resetting only when the box is
+parked is not sufficient: a 417-event rerun still found a parked box with a
+non-identity quaternion at reuse.  Reset again immediately before measuring
+the oriented width at insertion.
+
+### 2c. Periodic boundaries in DEM
+
+`DEM::Domain` supports periodic boxes through `Xmin/Xmax`, `Ymin/Ymax`,
+`Zmin/Zmax`.  `Domain::Solve` computes `Per` from those bounds;
+`Domain::ResetDisplacements` wraps free particles, and the linked-cell
+neighbour search uses the same periodic flags.  `CInteracton` applies `Per`
+only when both particles are free, so fixed walls are never periodic.  To make
+the narrow `y` direction periodic, remove the two side planes, set
+`Ymin=-0.5*cell_gap`, `Ymax=0.5*cell_gap` before `Solve`, and remove the
+side-wall term from the insertion-width and lost-particle tests.  The fixed
+base/feed walls keep their normal contact.
 
 ## 3. CPU Voronoi hot path: what must stay true
 
@@ -232,6 +306,10 @@ separate (`_a`, `_b`, `_bf_`) so a later run does not overwrite the baseline.
 - **Preserve `tdem/test_cu_04.cu` CRLF endings.**
 - **Do not delete uncommitted optimization changes or generated benchmark
   inputs** while experimenting.
+- **An overhanging grain at the open end is not a wall leak.**  The avalanche
+  driver uses `exit_margin=0.010 m`, so a box can remain active until its
+  center is 1 cm past `cell_Lx`.  Check the side walls (`|y|`, `z`) separately
+  before calling the run faulty.
 
 ## 9. Benchmarks: what the numbers mean
 
@@ -290,3 +368,23 @@ Then state separately:
 - what was faster, with the measured input and thread count.
 
 That distinction prevents most misleading optimization reports.
+
+## 11. Memory maintenance duty
+
+This repository is intentionally a long-running notebook. At the end of every
+user prompt, before the final response, check whether the prompt produced a
+durable fact. If so, update the owning file:
+
+| Kind of knowledge | File |
+|---|---|
+| short rule every session must see | `AGENTS.md` |
+| architecture, command, exactness, trap | `MECHSYS_HANDBOOK.md` |
+| distilled experience, checklist | `MEMORY.md` |
+| design or benchmark result | the relevant optimization report |
+| task-triggered guidance | `SKILL.md` and `.agents/skills/mechsys/SKILL.md` |
+
+The two skill copies must stay in sync. Record only durable, verified facts;
+exact commands, inputs, thread counts, and time windows belong with any
+measurement. Do not add transient `/tmp` logs or guesses. If nothing durable
+was learned, make no edit and say so in the final response. Run
+`git diff --check`; never commit or push unless explicitly asked.

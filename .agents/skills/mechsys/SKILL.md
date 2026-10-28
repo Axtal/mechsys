@@ -106,6 +106,24 @@ For one-off cases, use the configured standalone compiler:
 - Keep one-off FLBM cases outside the checkout; do not add them to `tflbm/`
   unless they belong in the library test suite.
 
+## After every prompt
+
+This repository is a long-running engineering notebook. Before the final
+response, evaluate whether the prompt produced a new durable fact:
+
+- short invariant or operational rule -> `AGENTS.md`;
+- architecture, command, exactness procedure, or trap ->
+  `MECHSYS_HANDBOOK.md`;
+- distilled experience or checklist -> `MEMORY.md`;
+- design or measurement -> the relevant optimization report;
+- task-triggered guidance -> this skill and its mirror, kept in sync.
+
+Record only durable, verified facts, with the exact input, thread count, and
+time window for benchmarks. Do not add transient logs or guesses, and do not
+manufacture an edit when nothing was learned. Run `git diff --check`; never
+commit or push unless explicitly asked. Mention the memory file changed in the
+final response, or state that no update was needed.
+
 ## Reporting
 
 Report measured wall times, separate solve time from total wall time, and

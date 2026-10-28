@@ -20,6 +20,36 @@ the handbook is the durable knowledge base for users and agents.
    - [`CUDA_OPTIMIZATION_CHANGES.md`](CUDA_OPTIMIZATION_CHANGES.md)
    - [`REDUCED_TEST_CU_03_PERFORMANCE.md`](REDUCED_TEST_CU_03_PERFORMANCE.md)
 
+## Memory maintenance (mandatory after every prompt)
+
+This checkout is a long-running engineering notebook as well as a codebase.
+At the end of **every user prompt** in this repository, before the final
+response, perform this checkpoint:
+
+1. Ask: *did this prompt teach a new durable fact about MechSys?* A durable
+   fact is architecture, a verified invariant, a command that works, a measured
+   benchmark, a demonstrated failure mode, or a corrected workflow. Transient
+   logs, one-off `/tmp` paths, and guesses are not durable facts.
+2. If there is new knowledge, update the right file:
+   - `AGENTS.md` — short operational rules that every future session must see;
+   - `MECHSYS_HANDBOOK.md` — architecture, build/run procedures, exactness
+     protocol, traps, and benchmark context;
+   - `MEMORY.md` — distilled experience and the short verification checklist;
+   - the relevant optimization report (`CPU_DEM_...`, `CUDA_...`,
+     `REDUCED_TEST_CU_03_...`) — designs, measurements, and accuracy results;
+   - `SKILL.md` and `.agents/skills/mechsys/SKILL.md` — task-triggered
+     guidance. Keep these two copies in sync except for their mirror note.
+3. Prefer editing an existing section over appending duplicate prose. State
+   the exact command, input, thread count, and whether a number is wall time or
+   solve time.
+4. If nothing durable was learned, make no memory edit. Do not manufacture
+   activity or copy transient output into the repository.
+5. Run `git diff --check` after memory edits. Do not commit or push unless the
+   user explicitly asks.
+
+The final response should briefly mention which memory file changed, or say
+that no memory update was needed.
+
 ## Build and test
 
 The root CMake/Makefiles are already configured. Build from the test directory:
@@ -94,6 +124,38 @@ make it fast.
   on static solids), while `mass_total` matches `S(t-t_on)`. Production
   512x512, phi=0.70, seed=12345, fx=1e-2, D=0.02, S=1e-4, t=20k..60k: 67.4 s
   wall, `mass_total=4.0`, `Cmax=1.09e-3`; the plume wraps between 55k and 60k.
+
+## VisIt visualization
+
+VisIt 3.3.2 is installed at `/usr/local/visit/bin/visit`; `~/.profile` adds
+`/usr/local/visit/bin` to `PATH`.  Use it headlessly:
+
+```bash
+/usr/local/visit/bin/visit -cli -nowin -s check.py data.xmf
+```
+
+A verified minimal script is:
+
+```python
+OpenDatabase(sys.argv[1])
+md = GetMetaData(sys.argv[1])
+print(md.GetFileFormat(), md.GetNumStates())
+print([md.GetMeshes(i).name for i in range(md.GetNumMeshes())])
+print([md.GetScalars(i).name for i in range(md.GetNumScalars())])
+AddPlot("Mesh", "DEM_Faces")
+DrawPlots()
+SaveWindow()
+```
+
+VisIt 3.3.2 accepts MechSys' original one-dimensional HDF5 XDMF datasets;
+do not change the dataset rank just to satisfy VTK's XDMF reader.  For a
+temporal collection, keep every child `Grid Name` equal (for example
+`DEM_Faces`) or VisIt exposes the first child's name as the mesh variable.
+For pseudocolor, use the full variable name for a standalone file
+(`DEM_Faces/Velocity`) and the short name for a collection (`Velocity`);
+the Threshold variable must likewise be `DEM_Faces/Tag` versus `Tag`.
+`SaveWindow` appends a frame number to the requested filename
+(`visit.png0000.png`).
 
 ## Exactness rules (critical)
 
@@ -181,5 +243,5 @@ These are easy to break accidentally:
 - Give explicit commands, file paths, and measured numbers.
 - Distinguish “compiles”, “runs”, “matches baseline”, and “is faster”.
 - If a verification was not done, say so.
-- When adding durable knowledge, update this file or
-  `MECHSYS_HANDBOOK.md`, not an ephemeral note.
+- The per-prompt memory checkpoint above is mandatory; do not treat it as
+  optional cleanup.

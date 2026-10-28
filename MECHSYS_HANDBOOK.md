@@ -217,6 +217,69 @@ At `Nproc=1` every final HDF5 dataset is bit-identical to the `HEAD` baseline
 for the reduced run. At `Nproc>1`, small differences are expected because the
 original accumulation order is thread-dependent.
 
+### 3.6 VisIt visualization
+
+VisIt 3.3.2 is available at `/usr/local/visit/bin/visit`; `~/.profile`
+adds its `bin` directory to `PATH`.  Use the CLI headlessly when no GUI is
+needed:
+
+```bash
+/usr/local/visit/bin/visit -cli -nowin -s visit_check.py data.xmf
+```
+
+The verified Python API for a MechSys XDMF file is:
+
+```python
+OpenDatabase(f)
+md = GetMetaData(f)
+print(md.GetFileFormat(), md.GetNumStates())
+meshes = [md.GetMeshes(i).name for i in range(md.GetNumMeshes())]
+scalars = [md.GetScalars(i).name for i in range(md.GetNumScalars())]
+AddPlot("Mesh", "DEM_Faces")
+DrawPlots()
+SaveWindow()
+```
+
+MechSys writes `Verts`/`FaceCon` as one-dimensional HDF5 datasets even
+though the XDMF DataItems advertise `(N,3)`.  **VisIt 3.3.2 accepts this
+MechSys convention.**  Only the XMF path must be the HDF basename; do not
+reshape the datasets solely for VTK's stricter reader.
+
+A single `WriteXDMF` call is one state.  For animation, write per-frame
+pairs and combine them into a temporal collection whose child grids all have
+`Grid Name="DEM_Faces"`.  VisIt then reports the mesh as `DEM_Faces`; if the
+children use different names, the first name becomes the mesh variable.
+
+Plotting pseudocolor with transparent walls:
+
+```python
+scalars = [md.GetScalars(i).name for i in range(md.GetNumScalars())]
+pvar = next(s for s in scalars if s.endswith("Velocity"))
+tagvar = next(s for s in scalars if s.endswith("Tag") and "Faces" in s)
+AddPlot("Pseudocolor", pvar)          # DEM_Faces/Velocity standalone
+AddOperator("Threshold")
+t = ThresholdAttributes()
+t.SetDefaultVarName(tagvar)           # DEM_Faces/Tag standalone, Tag collection
+t.SetListedVarNames(tagvar)
+t.SetLowerBounds(0.5); t.SetUpperBounds(1.0e9)
+SetOperatorOptions(t)
+
+AddPlot("Mesh", "DEM_Faces")
+m = MeshAttributes(); m.SetMeshColor((0.55,0.55,0.55,255))
+m.SetMeshColorSource(0); m.SetOpacity(0.18)
+SetPlotOptions(m)
+AddOperator("Threshold")
+w = ThresholdAttributes(); w.SetDefaultVarName(tagvar)
+w.SetListedVarNames(tagvar); w.SetLowerBounds(-1.0e9); w.SetUpperBounds(-0.5)
+SetOperatorOptions(w)
+DrawPlots()
+```
+
+`SaveWindow` appends `0000`, `0001`, ... to the requested name.  For a time
+series, call `SetTimeSliderState(i)` and `DrawPlots()` before each save.
+VisIt CLI may return a nonzero status after a successful save if the script
+leaves a warning; check the saved files and the log, not only the exit code.
+
 ## 4. CUDA DEM
 
 The CUDA optimization report is
@@ -548,12 +611,32 @@ them while experimenting.
 
 ## 10. Maintaining this knowledge
 
-When you learn something that would save a future agent from repeating a
-failure:
+Maintenance is mandatory, not opportunistic. At the end of every user prompt
+in this repository, evaluate whether the prompt produced a durable fact. If it
+did, update the owning document before replying:
 
-1. add it to the “Known traps” section;
-2. if it is an invariant, add it to `AGENTS.md`;
-3. if it is a benchmark, record the exact input, thread count, window, and
-   whether it is wall or solve time;
-4. do not record transient `/tmp` paths or one-off logs as authoritative;
-5. keep this handbook concise enough to be read in one sitting.
+1. **Invariant or short operational rule** -> `AGENTS.md`, which is always
+   loaded. Keep it terse; this file is the last place for a long explanation.
+2. **Architecture, command, exactness procedure, or trap** -> this handbook.
+3. **Distilled lesson or verification pattern** -> `MEMORY.md`.
+4. **Design or benchmark result** -> the relevant
+   `CPU_DEM_OPTIMIZATION_CHANGES.md`,
+   `CUDA_OPTIMIZATION_CHANGES.md`, or
+   `REDUCED_TEST_CU_03_PERFORMANCE.md`.
+5. **Task-triggered guidance** -> both `SKILL.md` and
+   `.agents/skills/mechsys/SKILL.md`, kept in sync.
+6. **Known trap** -> the “Known traps” section here, plus a one-line rule in
+   `AGENTS.md` if it is severe enough to affect every session.
+
+Rules for the update:
+
+- Prefer an existing section over a duplicate paragraph.
+- Record durable facts only: architecture, verified invariants, working
+  commands, measured benchmarks, demonstrated failure modes. Do not promote
+  transient `/tmp` paths, one-off logs, guesses, or unverified numbers.
+- For a benchmark, record the exact input, thread count, time window, machine,
+  and whether the value is wall or solve time.
+- If nothing durable was learned, make no edit; do not manufacture activity.
+- Run `git diff --check`; do not commit or push unless explicitly asked.
+- Say in the final response which memory file changed, or that no update was
+  needed.
