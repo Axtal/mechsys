@@ -280,6 +280,99 @@ series, call `SetTimeSliderState(i)` and `DrawPlots()` before each save.
 VisIt CLI may return a nonzero status after a successful save if the script
 leaves a warning; check the saved files and the log, not only the exit code.
 
+### 3.7 Periodic boundaries with finite-size particles
+
+`DEM::Domain` uses `Xmin/Xmax`, `Ymin/Ymax`, `Zmin/Zmax`; `Solve()` builds
+`Per`, `ResetDisplacements()` wraps free centres, and `CInteracton` applies
+`Per` only when both particles report `IsFree()`.  The reference setup is
+`tdem/test_periodic.cpp`:
+
+- the periodic domain is several particle lengths across, independent of the
+  particle size;
+- fixed plates are created with `AddPlane`, then constrained with
+  `FixVeloc()` and **not** `FixFree`;
+- the plates are wider than the periodic cell: `Lx*2` by
+  `Ly + 4*maxd`, where `maxd=dom.MaxDim()`.
+
+For the avalanche driver's rounded boxes, setting the periodic length equal to
+the 6 cm slot width (`periodic_Ly=0.06 m` for 0.0456 m boxes) repeatedly
+aborted with a free-box/free-box overlap at `y≈±0.03 m`.  Enlarging only the
+fixed planes, or setting `FixFree` on them, did not fix it.  A separate
+`periodic_Ly=0.20 m` (4.4 box lengths), with the same nominal 6 cm insertion
+width, non-free planes, and plane span `periodic_Ly+4*L`, completed 800 events
+cleanly (`./ricepile rice_narrow_lx3_periodic_mu025.inp 32`, final simulated
+time 414.207 s, exit 0).  With burn=100 and fixed `xmin=5`, the wider periodic
+cell gives `S_path` alpha=2.302+/-0.123 (n_tail=429, KS p=6.8e-4) for the
+800-event seed 12345; that burn starts during pile growth (`h=0.095 m` at
+event 100), and selecting only `h>=0.30 m` lowers `S_path` alpha to
+2.144+/-0.174 (184 events).  Pooling a second 402-event seed 67890 gives
+alpha=2.384+/-0.118 (n_tail=532, KS p=0.0149), or `N_moved`
+alpha=2.743+/-0.231 (n_tail=218, KS p=9.2e-10).  Final pile height is 0.365 m
+for seed 12345 and 0.227 m for seed 67890, versus 0.663 m for the walled
+mu=0.25 run.  There are fewer large avalanches: seed 12345 has S>=50: 11 vs 24
+and N>=50: 1 vs 19; the pooled sample has S>=50: 12 and N>=50: 1.  The periodic exponents are
+therefore not closer to the rice value 1.12-1.21, and the poor KS p-values mean
+the power-law form is not a good description of either periodic tail.  Do not
+blame linked-cell candidate generation: at `1.5Lx=0.06845 m` the run aborts at
+event 10 whether `Domain::Beta` is 0.5, 1, 2, or 4, and whether
+`Domain::Alpha` is 0.00225, 0.005, 0.01, or 0.02; `Beta=20` with `Alpha=0.05`
+puts all boxes in one cell and still aborts at `2Lx` on a boundary-straddling
+pair; `3Lx` survives 300 events but aborts near event 835; its first 832 events give
+`S_path` alpha=2.094+/-0.095 (n_tail=512, KS p=0.115).  The remaining issue is
+the finite-box periodic contact/force geometry.
+Use the periodic length in the lost-particle test as well; otherwise boxes
+outside the nominal slot are wrongly parked.  Changing the periodic length changes the
+effective pile width and therefore the avalanche statistics.
+
+### 3.8 Save/load and continuation
+
+`Domain::Save`/`Domain::Load` are a complete DEM checkpoint: positions,
+velocities, both Verlet references `xb` and `wb`, orientations, constraint
+flags (`vxf..wzf`, `FixFree`, `Eroded`, `Closed`, `Cluster`), properties,
+particles, interaction history and per-tag friction overrides.
+
+`Load` sets `Initialized=true` and intentionally does **not** reinitialize the
+loaded particles: it preserves the saved Verlet references `xb` and `wb`, which is what
+makes an in-memory continuation and a load continuation bit-identical.
+`FreePar`, `NoFreePar` and `Particle::Index` are derived state: `Solve()`
+clears and rebuilds them after `Initialize()`, so they are intentionally empty
+right after `Load`.  Code that inspects or extends a loaded domain before the
+first `Solve()` must rebuild the partition itself.
+
+Two consequences:
+
+- A particle added **after** a load is not initialized by the next `Solve()`
+  (the domain is already marked initialized).  Call
+  `p->InitializeVelocity(dt)` after adding or repositioning it, or the
+  uninitialized `xb` makes the first Verlet step invalid.
+- `Load` appends to the current particle array.  Load into an empty domain
+  unless appending is intended.
+
+Regression command:
+
+```bash
+cd tdem
+make -j8 test_saveload
+./test_saveload 1 300 300
+```
+
+The test compares positions, velocities, `xb`, `wb`, orientations, all
+constraint flags and sphere friction history.  After the continuation
+`Solve()` it also compares `FreePar`/`NoFreePar` and `Particle::Index`, which
+`Solve()` owns.
+Expected result after 300 saved steps and 300 more steps:
+
+```text
+max|dxb|=0.000e+00 max|dw|=0.000e+00 max|dwb|=0.000e+00   flags=MATCH   BIT IDENTICAL
+after 300 more      BIT IDENTICAL
+free partition      ld: 3 free / 1 fixed   dom: 3 free / 1 fixed   MATCH
+RESULT: PASS - the reloaded domain is bit-for-bit the same
+```
+
+A freshly loaded domain is also stable before any insertion: loading an
+802-particle wall/box state and solving 0.20 s gave
+`z=[0.00996,0.34906]`, no NaNs, no particles below the base.
+
 ## 4. CUDA DEM
 
 The CUDA optimization report is
@@ -573,6 +666,50 @@ These caused real failures during optimization work.
   explicit type traits or per-container logic.
 - Warning policy: the only expected third-party warning is Blitz
   `tinymat.h(60): warning #191-D`. Keep MechSys sources warning-free.
+
+### `tdem/ttt` triaxial test: restart does not work
+
+`ttt <key> <ncores>` reads `<key>.inp` from the current directory.  With
+`ptype = state` it restarts from `state.hdf5`.  **That path is broken in the
+current binary** (`HEAD` `4a567cc`): the run aborts at the first step of the
+hold, printing `Index = 49300`, producing NaN, and dying with
+`terminate called after throwing an instance of 'Fatal*'` (exit 134).
+
+Cause, from `ttt.cpp` around line 640:
+
+- `Domain::Load` restores the interaction list, and that list still contains
+  the six wall (platen) particles at indices `NP-6 .. NP-1`.
+- `DelParticles(-2..-7)` then deletes those walls.
+- `GenBoundingBox(-2, ...)` recreates six walls *at the same indices*, so the
+  restored contact records now point at freshly built particles while carrying
+  stale `Kn/Kt/Gn/Gt/Mu`, and the force comes out NaN.
+
+It fails even for a state written by the same binary (`gen_b.hdf5`, `Time=100`,
+walls tagged `-2..-7`) and for the untouched original input, so it is not a
+consequence of editing the `.inp`.
+
+Other `ttt` facts:
+
+- `Domain::Save(key)` writes `Time`, `Xmin/Xmax`, ... and is the nominally
+  restartable format.  Older `*_b.hdf5` files (e.g. the Oct-15
+  `fine/ttt_b.hdf5`) lack `Time`/`Xmin` and also restart to NaN -- do not use
+  them as restart states.
+- `T0` is the total compression time: stage a ramps `0 -> T0/2`, stage b holds
+  `T0/2 -> T0`.  `dat.tspan = T0/2 - dom.Time` is evaluated *before* stage a,
+  so **never shorten `T0` below `2*Time` on a restart**: a negative `tspan`
+  drives the stress servo backwards.
+- `dtOut` is global to both stages.  For a fine cadence on the hold only, run
+  from a fresh packing, delete the stage-a `_a_*` frames as they appear, and
+  stop the process once the wanted number of `_b_*` frames exist.
+- `WriteBF` writes `<key>_b_bf_NNNN.h5` (datasets `Branch`, `Normal`,
+  `Position`, `Rolling`, `Tangential`, `ID1`, `ID2`; about 9.2 MB per frame at
+  `NP=49306`).  There are no velocity fields in those files.
+- The stored cadence `dtOut=0.05` is `0.90` of the contact vibration period
+  `T = 2*pi*sqrt(mu_red/Kn) = 0.0557` (`m = rho*(4/3)*pi*R^3 = 1.5708`,
+  `mu_red = 0.7854`, `Kn = 1e4`), so increments read at `dt <~ 0.05` are
+  aliased.  Measured on the 49300-sphere packings: the local exponent of
+  `<df^2>` rises to `1.8` and `K2` collapses below `T`; see
+  `/home/sergio/ttt_compare/README.md`.
 
 ## 8. Current working-tree state
 

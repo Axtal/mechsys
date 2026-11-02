@@ -101,7 +101,7 @@ int main(int argc, char ** argv) try
     ld.Load("test_saveload");
 
     // ---- the two must agree exactly going in ----------------------------------------
-    double dx=0.0,dv=0.0,dxb=0.0,dw=0.0,dq=0.0;
+    double dx=0.0,dv=0.0,dxb=0.0,dw=0.0,dwb=0.0,dq=0.0;
     for (size_t i=0;i<dom.Particles.Size();i++)
     {
         Particle * a = dom.Particles[i];
@@ -112,12 +112,27 @@ int main(int argc, char ** argv) try
             dv  = std::max(dv ,fabs(a->v (k)-b->v (k)));
             dxb = std::max(dxb,fabs(a->xb(k)-b->xb(k)));
             dw  = std::max(dw ,fabs(a->w (k)-b->w (k)));
+            dwb = std::max(dwb,fabs(a->wb(k)-b->wb(k)));
         }
         for (int k=0;k<4;k++) dq = std::max(dq,fabs(a->Q(k)-b->Q(k)));
     }
-    bool same = (dx==0.0&&dv==0.0&&dxb==0.0&&dw==0.0&&dq==0.0);
-    printf("\n  at the checkpoint   max|dx|=%.3e max|dv|=%.3e max|dxb|=%.3e max|dw|=%.3e max|dQ|=%.3e   %s\n",
-           dx,dv,dxb,dw,dq,same?"BIT IDENTICAL":"*** DIFFERS ***");
+    bool same_flags = true;
+    for (size_t i=0;i<dom.Particles.Size() && same_flags;i++)
+    {
+        Particle * a = dom.Particles[i];
+        Particle * b = ld .Particles[i];
+        same_flags = a->vxf==b->vxf && a->vyf==b->vyf && a->vzf==b->vzf
+                  && a->wxf==b->wxf && a->wyf==b->wyf && a->wzf==b->wzf
+                  && a->FixFree==b->FixFree && a->Eroded==b->Eroded
+                  && a->Closed==b->Closed && a->Cluster==b->Cluster;
+    }
+    bool same = (dx==0.0&&dv==0.0&&dxb==0.0&&dw==0.0&&dwb==0.0&&dq==0.0) && same_flags;
+    printf("\n  at the checkpoint   max|dx|=%.3e max|dv|=%.3e max|dxb|=%.3e max|dw|=%.3e max|dwb|=%.3e max|dQ|=%.3e   flags=%s   %s\n",
+           dx,dv,dxb,dw,dwb,dq,same_flags?"MATCH":"*** DIFFER ***",
+           same?"BIT IDENTICAL":"*** DIFFERS ***");
+
+    // FreePar/NoFreePar/Index are derived and intentionally empty right after Load;
+    // Solve() owns their rebuild.  Check them after the continuation Solve below.
     bool ok = same;
 
     // ---------------------------------------------------------------------------------
@@ -126,7 +141,7 @@ int main(int argc, char ** argv) try
     dom.Solve((K+M)*dt,dt,(K+M)*dt,NULL,NULL,NULL,false,Nproc);
     ld .Solve((K+M)*dt,dt,(K+M)*dt,NULL,NULL,NULL,false,Nproc);
 
-    dx=dv=dxb=dw=dq=0.0;
+    dx=dv=dxb=dw=dwb=dq=0.0;
     for (size_t i=0;i<dom.Particles.Size();i++)
     {
         Particle * a = dom.Particles[i];
@@ -137,13 +152,25 @@ int main(int argc, char ** argv) try
             dv  = std::max(dv ,fabs(a->v (k)-b->v (k)));
             dxb = std::max(dxb,fabs(a->xb(k)-b->xb(k)));
             dw  = std::max(dw ,fabs(a->w (k)-b->w (k)));
+            dwb = std::max(dwb,fabs(a->wb(k)-b->wb(k)));
         }
         for (int k=0;k<4;k++) dq = std::max(dq,fabs(a->Q(k)-b->Q(k)));
     }
-    same = (dx==0.0&&dv==0.0&&dxb==0.0&&dw==0.0&&dq==0.0);
-    printf("  after %zu more   max|dx|=%.3e max|dv|=%.3e max|dxb|=%.3e max|dw|=%.3e max|dQ|=%.3e   %s\n",
-           M,dx,dv,dxb,dw,dq,same?"BIT IDENTICAL":"*** DIFFERS ***");
-    ok = ok && same;
+    same = (dx==0.0&&dv==0.0&&dxb==0.0&&dw==0.0&&dwb==0.0&&dq==0.0);
+    printf("  after %zu more   max|dx|=%.3e max|dv|=%.3e max|dxb|=%.3e max|dw|=%.3e max|dwb|=%.3e max|dQ|=%.3e   %s\n",
+           M,dx,dv,dxb,dw,dwb,dq,same?"BIT IDENTICAL":"*** DIFFERS ***");
+
+    // Solve() must have rebuilt the same derived partition in both domains.
+    bool lists = ld.FreePar.Size()==dom.FreePar.Size() && ld.NoFreePar.Size()==dom.NoFreePar.Size();
+    for (size_t k=0; k<ld.FreePar.Size() && lists; k++)
+        lists = ld.FreePar[k]==dom.FreePar[k] && ld.Particles[ld.FreePar[k]]->Index==ld.FreePar[k];
+    for (size_t k=0; k<ld.NoFreePar.Size() && lists; k++)
+        lists = ld.NoFreePar[k]==dom.NoFreePar[k] && ld.Particles[ld.NoFreePar[k]]->Index==ld.NoFreePar[k];
+    printf("  free partition      ld: %zu free / %zu fixed   dom: %zu free / %zu fixed   %s\n",
+           ld.FreePar.Size(),ld.NoFreePar.Size(),dom.FreePar.Size(),dom.NoFreePar.Size(),
+           lists?"MATCH":"*** DIFFERS ***");
+
+    ok = ok && same && lists;
 
     // ---- how much sphere friction history is there, and is it the same on both? ------
     Domain * two[2] = {&dom,&ld};

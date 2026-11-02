@@ -1737,6 +1737,9 @@ inline void Domain::Save (char const * FileKey)
         cd[2]=Particles[i]->x(2);
         H5LTmake_dataset_double(group_id,"x",1,dd,cd);
 
+        // Persist both Verlet references.  Load restores them verbatim and does
+        // not call InitializeVelocity(), so a continuation starts from the same
+        // integrator history as the run that wrote the file.
         cd[0]=Particles[i]->xb(0);
         cd[1]=Particles[i]->xb(1);
         cd[2]=Particles[i]->xb(2);
@@ -2526,9 +2529,16 @@ inline void Domain::Load (char const * FileKey)
     // it would make a reloaded run take a slightly different first step from the run it was
     // saved from.  Not touching xb is what makes the round trip exact.
     //
-    // Nothing special is needed for particles added AFTER a load: Particle::Initialize() gives
-    // them xb = x, and Initialize()'s else-branch applies the fixed-velocity fixups.
+    // A loaded domain is already initialised: do not reinitialize its particles or xb.
+    // Particles added AFTER a load are therefore NOT initialized by the next Solve();
+    // the caller must call InitializeVelocity() after adding/repositioning one.
     Initialized = true;
+
+    // FreePar, NoFreePar and Particle::Index are derived state.  Solve() rebuilds
+    // them after Initialize(), so a normal Load()-then-Solve() sequence does not
+    // need them here.  Code that inspects or extends a loaded domain before the
+    // first Solve() must rebuild the partition itself.
+
     Evis = 0.0; Efric = 0.0; Wext = 0.0;   // not persisted: start the dissipation accounting fresh
 
     H5Fclose(file_id);

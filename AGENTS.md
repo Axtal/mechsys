@@ -50,6 +50,16 @@ response, perform this checkpoint:
 The final response should briefly mention which memory file changed, or say
 that no memory update was needed.
 
+## `tdem/ttt` triaxial runs
+
+`ptype = state` restart is **broken** in the current binary: the saved
+interaction list still references the six wall particles, and
+`DelParticles(-2..-7)` + `GenBoundingBox` recreate them at the same indices with
+stale contact records, giving a NaN at particle index `NP-6`.  Regenerate from
+scratch instead of restarting, and never shorten `T0` below `2*Time` (a negative
+`tspan` reverses the stress ramp).  Details in
+[`MECHSYS_HANDBOOK.md`](MECHSYS_HANDBOOK.md), section 7.
+
 ## Build and test
 
 The root CMake/Makefiles are already configured. Build from the test directory:

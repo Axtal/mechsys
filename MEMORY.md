@@ -25,6 +25,8 @@ that are easy to get wrong and the shortest path to a trustworthy result.
 
 - The real headers are in `lib/`; `mechsys` is a symlink to `lib/`. Include
   headers as `<mechsys/dem/...>`.
+- On Windows, use WSL and the Linux build; MechSys runs there. No native
+  Windows port is maintained.
 - There is no single MechSys executable. The tests under `tdem/`, `tlbmdem/`,
   `tlbm/`, `tflbm/`, etc. are the entry points.
 - The root is already CMake-configured in this checkout. Build individual
@@ -63,15 +65,9 @@ that are easy to get wrong and the shortest path to a trustworthy result.
 - `SaveWindow` appends a frame number to the requested filename.
 - A nonzero CLI exit after a successful save can be a warning; inspect the
   log and PNGs.
-- A positive-`Tag` threshold alone includes parked/recycled boxes: the
-  avalanche driver keeps them at `x = -10 - 0.1*tag`, `z = -0.4` with positive
-  tags.  They are storage, not grains in the container.  For a clean render,
-  add a `Box` operator cropped to the slot (or exclude `z < -0.2`); do not
-  diagnose a wall leak from a positive-tag image.  VisIt 3.3.2 exposes
-  `BoxAttributes.SetMinx/SetMaxx/...`; applying it after the tag threshold
-  works on standalone frames.  On a temporal collection, VisIt 3.3.2 produced
-  intermittently blank frames with that operator; render each frame separately
-  for an active-only animation.
+- A positive-`Tag` threshold includes any storage particles an application
+  keeps with positive tags.  Crop by bounds if the render should show only
+  the active region.
 
 ## 2. The DEM solve cycle
 
@@ -91,48 +87,59 @@ called while rebuilding contacts. This is why the CPU cutoff uses accumulated
 
 ### 2a. Domain-wide energy and bounds are not active-only
 
-`Domain::CalcEnergy` loops over **all** `Particle` objects.  A box that has
-already left the chute and is free-falling below the base still contributes
-translational and rotational kinetic energy, even though it is no longer part
-of the pile.  In the avalanche driver this produced `Ekin=3.47 J` while every
-active box had `vmax=0.0034 m/s`, causing a false “pile still moving” stop.
-For quiescence or avalanche criteria, filter with the same `IsActive()`/
-parked logic as the driver and compute the kinetic sum over active boxes only.
+`Domain::CalcEnergy` loops over **all** `Particle` objects, including free
+particles that have left the region of interest.  If only an active subset
+matters, filter it explicitly and compute energy from that subset.
 
-A per-smallest-box energy threshold is also too strict for a large pile:
-hundreds of boxes at a few mm/s can exceed one box's energy.  Use
-`0.5*M_active*v_settle^2` for the post-check, plus an explicit `vmax` bound.
-Do **not** pass that mass-scaled value as `Domain::Solve`'s `minEkin`: the
-solver can then stop while one fast box is still moving and the post-check
-will reject the event.  Keep the solver's strict smallest-box threshold.
+A single-smallest-particle energy threshold is also too strict for a large
+assembly: many particles at a few mm/s can exceed one particle's energy.  Use
+`0.5*M_active*v_settle^2` for a post-check plus a `vmax` bound, but still pass
+the strict smallest-particle `minEkin` to `Domain::Solve`; otherwise the solver
+can stop while one fast particle is still moving and the post-check will reject
+the step.
 
 `Domain::BoundingBox` likewise scans free particles across the whole domain;
-inspect and clamp its result before using it as a pile-top estimate.
+inspect and clamp its result before using it as a top/clearance estimate.
 
-### 2b. Reset a recycled particle's orientation
-
-A recycled DEM box can keep the orientation it had when it tumbled out.  In a
-narrow slot, a long axis across the gap makes the oriented `MaxY()` larger
-than the clear width, so the insertion code stops with “recycled box ... is
-too wide for the slot.”  This is a geometric dead end, not an avalanche
-criterion.  Before reusing a parked particle, rotate its vertices back to the
-body frame and reset `Q`/`Qc` (see `AlignParkedBox` in the avalanche driver).
-Do not reuse the old quaternion blindly.  Resetting only when the box is
-parked is not sufficient: a 417-event rerun still found a parked box with a
-non-identity quaternion at reuse.  Reset again immediately before measuring
-the oriented width at insertion.
-
-### 2c. Periodic boundaries in DEM
+### 2b. Periodic boundaries in DEM
 
 `DEM::Domain` supports periodic boxes through `Xmin/Xmax`, `Ymin/Ymax`,
 `Zmin/Zmax`.  `Domain::Solve` computes `Per` from those bounds;
 `Domain::ResetDisplacements` wraps free particles, and the linked-cell
 neighbour search uses the same periodic flags.  `CInteracton` applies `Per`
 only when both particles are free, so fixed walls are never periodic.  To make
-the narrow `y` direction periodic, remove the two side planes, set
-`Ymin=-0.5*cell_gap`, `Ymax=0.5*cell_gap` before `Solve`, and remove the
-side-wall term from the insertion-width and lost-particle tests.  The fixed
-base/feed walls keep their normal contact.
+one direction periodic, remove the fixed planes in that direction and set the
+corresponding bounds before `Solve`.
+
+For finite-size particles, choose a separate periodic length several particle
+lengths across; do not use a narrow gap as the period.  Fixed base/feed planes
+must span the periodic length plus `4*maxd`, and the lost-particle test must
+use the same length; otherwise a particle crossing the boundary can hit a
+plane edge and register a spurious overlap.  Keep boundary planes non-free
+(`FixVeloc` without `FixFree`): `FixFree` changes `IsFree` semantics in
+bounding boxes, wrapping, and friction selection.  See
+`tdem/test_periodic.cpp` for the reference setup.
+
+### 2c. Save/Load state
+
+`Domain::Save`/`Load` persist both Verlet references, `xb` and `wb`, together
+with particle positions, velocities, flags, shapes, interactions and friction
+history.
+
+`FreePar`, `NoFreePar` and `Particle::Index` are derived state.  `Solve()`
+clears and rebuilds them after `Initialize()`, so `Load()`-then-`Solve()` needs
+no rebuild in `Load`.  Code that inspects or extends a loaded domain **before**
+the first `Solve()` must rebuild that partition itself.
+
+`Load` sets `Initialized=true` and deliberately preserves the saved `xb` and `wb`, so it
+must not reinitialize loaded particles.  Particles added **after** a load are
+therefore not initialized by the next `Solve()`; call `InitializeVelocity(dt)`
+after adding or repositioning one.
+
+Regression: `tdem/test_saveload` compares all constraint flags, `FixFree`, and
+(after the continuation `Solve`) `FreePar`/`NoFreePar` and
+`Particle::Index`, in addition to positions, velocities, both `xb` and `wb`,
+and orientations.  The 300-step round trip is bit-identical.
 
 ## 3. CPU Voronoi hot path: what must stay true
 
@@ -306,10 +313,6 @@ separate (`_a`, `_b`, `_bf_`) so a later run does not overwrite the baseline.
 - **Preserve `tdem/test_cu_04.cu` CRLF endings.**
 - **Do not delete uncommitted optimization changes or generated benchmark
   inputs** while experimenting.
-- **An overhanging grain at the open end is not a wall leak.**  The avalanche
-  driver uses `exit_margin=0.010 m`, so a box can remain active until its
-  center is 1 cm past `cell_Lx`.  Check the side walls (`|y|`, `z`) separately
-  before calling the run faulty.
 
 ## 9. Benchmarks: what the numbers mean
 
