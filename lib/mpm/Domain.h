@@ -54,6 +54,7 @@
 
 #ifdef USE_CUDA
 #include <mechsys/mpm/mpm.cuh>
+#include <cuda/std/functional>
 #include <thrust/sequence.h>
 #endif
 
@@ -91,6 +92,10 @@ public:
         Gn = 0.001;
         BodyMesh = NULL;
         Time = 0.0;
+        ShapeFunction = SHAPE_GIMP;
+        Periodic[0] = false;
+        Periodic[1] = false;
+        Periodic[2] = false;
     };
     //Domain(MPMethod Method, ///< Type of material to solve
     //iVec3_t Ndim            ///< Vector of integers with the dimensions
@@ -111,9 +116,11 @@ public:
     double                   Mmin;              ///< The minimun mass of particle
     Vec3_t                   Xlow;              ///< Lower bound of cubic grid
     Vec3_t                  Xhigh;              ///< Upper bound of cubic grid
+    bool                 Periodic[3];           ///< Periodic particle-grid mapping in x, y, z
     Node *                  Nodes;              ///< Array of Nodes
     iVec3_t                  Ndim;              ///< Array with grid dimensions    
     size_t                 Nnodes;              ///< Total number of nodes
+    int             ShapeFunction;              ///< Particle-grid interpolation function
     Array<Particle *>   Particles;              ///< Array of particles
     Array<size_t >         VNodes;              ///< Array of valid nodes
     Array<Corner *>       Corners;              ///< Array of corners of mesh
@@ -132,6 +139,7 @@ public:
     void ResizeDomain(Vec3_t const & Xmin, Vec3_t const & Xmax, double deltax);    ///< Creates a mesh between Xmin and Xmax limits with deltax as the grid size
     double ResizeDomainMesh(Vec3_t const & Xmin, Vec3_t const & Xmax, double beta);   ///< Creates a mesh between Xmin and Xmax limits with beta the ratio between the largest particle and the cell size
     void NodePosition(size_t in, Vec3_t & Xn);                                      ///< Gives a posiiton of a node in the coordinate system
+    void DelParticles(int const & Tag);                                             ///< Delete all particles with the specified Tag from the domain
     void BoundingBox(Vec3_t & minX, Vec3_t & maxX);                                 ///< Give dimensions of the bounding box enclosing the particles
     void ParticleToNode();                                                          ///< Imprinting particle information into the mesh
     void NodeToParticle();                                                          ///< Transfering back node information into particles
@@ -361,11 +369,11 @@ inline void Domain::AddFromOBJMesh (int Tag, char const * Filename, Vec3_t const
     Array<Vec3_t>       V; //Array of vertices
     Array<Array <int> > F; //Array of facets
 
-    
+
     String fn(Filename);
     if (!Util::FileExists(fn)) throw new Fatal("File <%s> not found",fn.CStr());
     ifstream fi(fn.CStr());
-    
+
     std::string line;
     while(getline(fi,line))
     {
@@ -739,7 +747,7 @@ inline void Domain::NodePosition(size_t in, Vec3_t & Xn)
 inline void Domain::BoundingBox(Vec3_t & minX, Vec3_t & maxX)
 {
     if (Particles.Size()==0) throw new Fatal("MPM::Domain::BoundingBox: There are no particles to build the bounding box");
-    
+
     if (BodyMesh==NULL)
     {
         minX = Vec3_t(Particles[0]->x(0)-Particles[0]->Dx(0), Particles[0]->x(1)-Particles[0]->Dx(1), Particles[0]->x(2)-Particles[0]->Dx(2));
@@ -770,6 +778,38 @@ inline void Domain::BoundingBox(Vec3_t & minX, Vec3_t & maxX)
     }
 }
 
+inline void Domain::DelParticles(int const & Tag)
+{
+    // First delete from host
+    Array<MPM::Particle *> new_particles;
+    size_t removed = 0;
+
+    for (size_t i = 0; i < Particles.Size(); ++i)
+    {
+        if (Particles[i]->Tag != Tag)
+        {
+            new_particles.Push(Particles[i]);
+        }
+        else
+        {
+            delete Particles[i];
+            removed++;
+        }
+    }
+    Particles = new_particles;
+
+#ifdef USE_CUDA
+    // If using CUDA, re-upload the reduced particle set
+    if (bParticlesCU.size() > 0)
+    {
+        UpLoadDevice(Nproc);  // Re-upload everything to GPU
+    }
+#endif
+
+    std::cout << "Deleted " << removed << " particle(s) with Tag " << Tag << std::endl;
+}
+
+
 #ifdef USE_HDF5    
 inline void Domain::WriteXDMF (char const * FileKey)
 {
@@ -782,6 +822,7 @@ inline void Domain::WriteXDMF (char const * FileKey)
     float * Posvec  = new float[3*Particles.Size()];
     float * Velvec  = new float[3*Particles.Size()];
     int   * Tag     = new int  [  Particles.Size()];
+    float * Pressure= new float[  Particles.Size()];
     float * Sigma	= new float[6*Particles.Size()];
     float * Strain	= new float[6*Particles.Size()];
 
@@ -806,6 +847,7 @@ inline void Domain::WriteXDMF (char const * FileKey)
         Strain[6*i+3] = float(Particles[i]->E(1,1));
         Strain[6*i+4] = float(Particles[i]->E(1,2));
         Strain[6*i+5] = float(Particles[i]->E(2,2));
+        Pressure[i]   = float(Particles[i]->Pressure);
         Tag   [i]     = int  (Particles[i]->Tag);  
     }
 
@@ -819,6 +861,8 @@ inline void Domain::WriteXDMF (char const * FileKey)
     dims[0] = Particles.Size();
     dsname.Printf("PTag");
     H5LTmake_dataset_int  (file_id,dsname.CStr(),1,dims,Tag   );
+    dsname.Printf("Pressure");
+    H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Pressure);
     dims[0] = 6*Particles.Size();
     dsname.Printf("Sigma");
     H5LTmake_dataset_float(file_id,dsname.CStr(),1,dims,Sigma);
@@ -829,6 +873,7 @@ inline void Domain::WriteXDMF (char const * FileKey)
     delete [] Posvec;
     delete [] Velvec;
     delete [] Tag;
+    delete [] Pressure;
     delete [] Sigma;
     delete [] Strain;
 
@@ -920,6 +965,11 @@ inline void Domain::WriteXDMF (char const * FileKey)
     oss << "        " << fn.CStr() <<":/PVelocity\n";
     oss << "       </DataItem>\n";
     oss << "     </Attribute>\n";
+    oss << "     <Attribute Name=\"Pressure\" AttributeType=\"Scalar\" Center=\"Node\">\n";
+    oss << "       <DataItem Dimensions=\"" << Particles.Size() << "\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n";
+    oss << "        " << fn.CStr() <<":/Pressure\n";
+    oss << "       </DataItem>\n";
+    oss << "     </Attribute>\n";
     oss << "     <Attribute Name=\"Sigma\" AttributeType=\"Tensor6\" Center=\"Node\">\n";
     oss << "       <DataItem Dimensions=\"" << Particles.Size() << " 6\" NumberType=\"Float\" Precision=\"10\" Format=\"HDF\">\n";
     oss << "        " << fn.CStr() <<":/Sigma \n";
@@ -992,9 +1042,10 @@ inline void Domain::ParticleToNode()
 	#pragma omp parallel for schedule(static) num_threads(Nproc)
     for (size_t ip=0; ip < Particles.Size(); ip++)
     {
-        iVec3_t nlow,nhigh;
+        int nlow[3]  = {0,0,0};
+        int nhigh[3] = {0,0,0};
         Vec3_t Xp = Particles[ip]->x;
-        Vec3_t Lp = Particles[ip]->Dx;
+        Vec3_t Lp(fabs(Particles[ip]->Dx(0)),fabs(Particles[ip]->Dx(1)),fabs(Particles[ip]->Dx(2)));
         Mat3_t Vsp = -Particles[ip]->V*Particles[ip]->S;
         //Vec3_t Fex = Particles[ip]->b + Particles[ip]->h;
         Vec3_t Fex = Particles[ip]->b;
@@ -1006,24 +1057,36 @@ inline void Domain::ParticleToNode()
         //nhigh(1) = (size_t(ceil ((Xp(1)+Lp(1)-Xlow(1))/Dx)+1+Ndim(1)))%Ndim(1);
         //nhigh(2) = (size_t(ceil ((Xp(2)+Lp(2)-Xlow(2))/Dx)+1+Ndim(2)))%Ndim(2);
 
-        nlow (0) = (size_t)std::max((trunc((Xp(0)-0.5*Lp(0)-Xlow(0))/Dx)-1),0.0);
-        nlow (1) = (size_t)std::max((trunc((Xp(1)-0.5*Lp(1)-Xlow(1))/Dx)-1),0.0);
-        nlow (2) = (size_t)std::max((trunc((Xp(2)-0.5*Lp(2)-Xlow(2))/Dx)-1),0.0);
-        nhigh(0) = (size_t)std::min((ceil ((Xp(0)+0.5*Lp(0)-Xlow(0))/Dx)+1),(double)Ndim(0)-1.0);
-        nhigh(1) = (size_t)std::min((ceil ((Xp(1)+0.5*Lp(1)-Xlow(1))/Dx)+1),(double)Ndim(1)-1.0);
-        nhigh(2) = (size_t)std::min((ceil ((Xp(2)+0.5*Lp(2)-Xlow(2))/Dx)+1),(double)Ndim(2)-1.0);
+        for (size_t d=0; d<3; d++)
+        {
+            if (Periodic[d])
+            {
+                ShapeNodeRangeRaw(ShapeFunction,Xp(d),Xlow(d),Dx,Lp(d),nlow[d],nhigh[d]);
+            }
+            else
+            {
+                size_t nl = 0;
+                size_t nh = 0;
+                ShapeNodeRange(ShapeFunction,Xp(d),Xlow(d),Dx,Lp(d),Ndim(d),nl,nh);
+                nlow[d]  = (int)nl;
+                nhigh[d] = (int)nh;
+            }
+        }
 
-        for (size_t nx=nlow(0); nx<=nhigh(0); nx++)
-        for (size_t ny=nlow(1); ny<=nhigh(1); ny++)
-        for (size_t nz=nlow(2); nz<=nhigh(2); nz++)
+        for (int nx=nlow[0]; nx<=nhigh[0]; nx++)
+        for (int ny=nlow[1]; ny<=nhigh[1]; ny++)
+        for (int nz=nlow[2]; nz<=nhigh[2]; nz++)
         {
             double Sf=0.0; //Shape function value
             Vec3_t Gs=OrthoSys::O; //Shape function gradient
             //Vec3_t Xn((nx+0.5)*Dx,(ny+0.5)*Dx,(nz+0.5)*Dx);
             Vec3_t Xn(nx*Dx,ny*Dx,nz*Dx);
             Xn += Xlow;
-            iVec3_t Pt(nx,ny,nz);
-            GIMP3D(Xp,Xn,Dx,Lp,Sf,Gs);
+            size_t ix = Periodic[0] ? PeriodicNodeIndex(nx,Ndim(0)) : (size_t)nx;
+            size_t iy = Periodic[1] ? PeriodicNodeIndex(ny,Ndim(1)) : (size_t)ny;
+            size_t iz = Periodic[2] ? PeriodicNodeIndex(nz,Ndim(2)) : (size_t)nz;
+            iVec3_t Pt(ix,iy,iz);
+            MPMShapeFunction3D(ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
             if (Sf>0.0)
             {
                 size_t nc = Pt2idx(Pt,Ndim);
@@ -1127,6 +1190,13 @@ inline void Domain::NodeToParticle()
         Particles[ip]->CalcVol(Dt);
         Particles[ip]->CalcStress(Dt);
         Particles[ip]->Reset(Dt);
+        for (size_t d=0; d<3; d++)
+        {
+            if (!Periodic[d]) continue;
+            double L = Xhigh(d) - Xlow(d);
+            while (Particles[ip]->x(d) <  Xlow (d)) {Particles[ip]->x(d) += L; Particles[ip]->xb(d) += L;}
+            while (Particles[ip]->x(d) >= Xhigh(d)) {Particles[ip]->x(d) -= L; Particles[ip]->xb(d) -= L;}
+        }
     }
 
 }
@@ -1147,7 +1217,7 @@ inline void Domain::OneStepUSF()
     {
         iVec3_t nlow,nhigh;
         Vec3_t Xp = Particles[ip]->x;
-        Vec3_t Lp = Particles[ip]->Dx;
+        Vec3_t Lp(fabs(Particles[ip]->Dx(0)),fabs(Particles[ip]->Dx(1)),fabs(Particles[ip]->Dx(2)));
 
         //nlow (0) = (size_t(trunc((Xp(0)-Lp(0)-Xlow(0))/Dx)-1+Ndim(0)))%Ndim(0);
         //nlow (1) = (size_t(trunc((Xp(1)-Lp(1)-Xlow(1))/Dx)-1+Ndim(1)))%Ndim(1);
@@ -1156,12 +1226,11 @@ inline void Domain::OneStepUSF()
         //nhigh(1) = (size_t(ceil ((Xp(1)+Lp(1)-Xlow(1))/Dx)+1+Ndim(1)))%Ndim(1);
         //nhigh(2) = (size_t(ceil ((Xp(2)+Lp(2)-Xlow(2))/Dx)+1+Ndim(2)))%Ndim(2);
 
-        nlow (0) = (size_t)std::max((trunc((Xp(0)-0.5*Lp(0)-Xlow(0))/Dx)-1),0.0);
-        nlow (1) = (size_t)std::max((trunc((Xp(1)-0.5*Lp(1)-Xlow(1))/Dx)-1),0.0);
-        nlow (2) = (size_t)std::max((trunc((Xp(2)-0.5*Lp(2)-Xlow(2))/Dx)-1),0.0);
-        nhigh(0) = (size_t)std::min((ceil ((Xp(0)+0.5*Lp(0)-Xlow(0))/Dx)+1),(double)Ndim(0)-1.0);
-        nhigh(1) = (size_t)std::min((ceil ((Xp(1)+0.5*Lp(1)-Xlow(1))/Dx)+1),(double)Ndim(1)-1.0);
-        nhigh(2) = (size_t)std::min((ceil ((Xp(2)+0.5*Lp(2)-Xlow(2))/Dx)+1),(double)Ndim(2)-1.0);
+        size_t nl = 0;
+        size_t nh = 0;
+        ShapeNodeRange(ShapeFunction,Xp(0),Xlow(0),Dx,Lp(0),Ndim(0),nl,nh); nlow(0) = nl; nhigh(0) = nh;
+        ShapeNodeRange(ShapeFunction,Xp(1),Xlow(1),Dx,Lp(1),Ndim(1),nl,nh); nlow(1) = nl; nhigh(1) = nh;
+        ShapeNodeRange(ShapeFunction,Xp(2),Xlow(2),Dx,Lp(2),Ndim(2),nl,nh); nlow(2) = nl; nhigh(2) = nh;
 
         for (size_t nx=nlow(0); nx<=nhigh(0); nx++)
         for (size_t ny=nlow(1); ny<=nhigh(1); ny++)
@@ -1173,7 +1242,7 @@ inline void Domain::OneStepUSF()
             Vec3_t Xn(nx*Dx,ny*Dx,nz*Dx);
             Xn += Xlow;
             iVec3_t Pt(nx,ny,nz);
-            GIMP3D(Xp,Xn,Dx,Lp,Sf,Gs);
+            MPMShapeFunction3D(ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
             if (Sf>0.0)
             {
                 size_t nc = Pt2idx(Pt,Ndim);
@@ -1741,20 +1810,21 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
             cudaParticleToNode<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pValidMask,pmpmaux);
 
             //Building the slected node array
-            
+            if (bSelIndexes.size()!=Nnodes)
+            {
+                bSelIndexes.resize(Nnodes);
+                pSelIndexes = thrust::raw_pointer_cast(bSelIndexes.data());
+            }
             auto new_end = thrust::copy_if(
             bAllIndexes.begin(),
             bAllIndexes.end(),
             bValidMask .begin(),                    // Stencil: 1 or 0
             bSelIndexes.begin(),
-            thrust::identity<bool>());            // Identity: returns the value itself
+            // thrust::identity<bool>());            // Identity: returns the value itself
+            ::cuda::std::identity{});             // Identity: returns the value itself
 
             ValidNumber = thrust::distance(bSelIndexes.begin(),new_end);
-            cudaFree(pValidNumber);
-            cudaMalloc(&pValidNumber, sizeof(size_t));
             cudaMemcpy(pValidNumber, &ValidNumber, sizeof(size_t), cudaMemcpyHostToDevice);
-
-            bSelIndexes.resize(ValidNumber);
 
             cudaSolveNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
 
@@ -1788,6 +1858,7 @@ inline void Domain::UpLoadDevice(size_t Nc)
     mpmaux.Dt      = Dt      ;
     mpmaux.Time    = Time    ;
     mpmaux.Gn      = Gn      ;
+    mpmaux.ShapeFunction  = ShapeFunction;
     mpmaux.Nx      = Ndim (0);
     mpmaux.Ny      = Ndim (1);
     mpmaux.Nz      = Ndim (2);
@@ -1799,6 +1870,9 @@ inline void Domain::UpLoadDevice(size_t Nc)
     mpmaux.Xhigh.x = Xhigh(0);
     mpmaux.Xhigh.y = Xhigh(1);
     mpmaux.Xhigh.z = Xhigh(2);
+    mpmaux.PeriodicX = Periodic[0];
+    mpmaux.PeriodicY = Periodic[1];
+    mpmaux.PeriodicZ = Periodic[2];
 
     thrust::host_vector<ParticleCU> hParticles(Particles.Size());
     thrust::host_vector<NodeCU    > hNodes(Nnodes)              ;

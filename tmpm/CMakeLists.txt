@@ -20,10 +20,16 @@ SET(PROGS
     tmpm01
     tmpm02
     tmpm03
+    tmpm04
+    tmpm05
 )
 
 SET(CUDAPROGS
     tmpm_cu_01
+    tmpm_cu_02
+    tmpm_cu_03
+    tmpm_cu_04
+    tmpm_cu_05
 )
 FOREACH(var ${PROGS})
     ADD_EXECUTABLE        (${var} "${var}.cpp")
