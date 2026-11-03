@@ -91,23 +91,33 @@ __global__ void Right_BC(bool * IsSolid, real * F, real3 * Vel, real * Rho, FLBM
 void Setup (FLBM::Domain & dom, void * UD)
 {
     UserData & dat = (*static_cast<UserData *>(UD));
-    Left_BC<<<dom.Ndim(1)/256+1,256>>>(dat.pVel,dom.pIsSolid,dom.pF,dom.pVel,dom.pRho,dom.plbmaux);
+    const size_t nthread = dom.Nthread;
+    const size_t nblocks = (dom.Ndim(1)+nthread-1)/nthread;
+    Left_BC <<<nblocks,nthread>>>(dat.pVel,dom.pIsSolid,dom.pF,dom.pVel,dom.pRho,dom.plbmaux);
     //cudaDeviceSynchronize();
-    Right_BC<<<dom.Ndim(1)/256+1,256>>>(dom.pIsSolid,dom.pF,dom.pVel,dom.pRho,dom.plbmaux);
+    Right_BC<<<nblocks,nthread>>>(dom.pIsSolid,dom.pF,dom.pVel,dom.pRho,dom.plbmaux);
     //cudaDeviceSynchronize();
 }
 
 int main(int argc, char **argv) try
 {
+    // Usage: ./tclbm01 [Re] [Nthread]
     size_t Nproc = 1; 
     double u_max  = 0.1;                // Poiseuille's maximum velocity
     double Re     = 40000.0;                  // Reynold's number
-    if (argc==2) Re=atof(argv[1]);
+    size_t Nthread = 256;                     // CUDA threads per block
+    if (argc>=2) Re=atof(argv[1]);
+    if (argc>=3)
+    {
+        int nthread = atoi(argv[2]);
+        if (nthread>0) Nthread = (size_t)nthread;
+    }
     size_t nx = 2400;
     size_t ny = 300;
     int radius = ny/10 + 1;           // radius of inner circle (obstacle)
     double nu     = u_max*(2*radius)/Re; // viscocity
     FLBM::Domain Dom(D2Q9, nu, iVec3_t(nx,ny,1), 1.0, 1.0);
+    Dom.Nthread = Nthread;
     
     UserData dat;
     Dom.UserData = &dat;

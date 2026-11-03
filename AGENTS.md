@@ -99,6 +99,9 @@ make it fast.
   enough.
 - `dom.Nthread` (default 256) sets the CUDA block size. The `Nproc` argument of
   `Domain::Solve` only affects host-side packing/transfers on the GPU path.
+- `tclbm01` (2400x300, 40k steps) is flat for `Nthread=32..256`; 32 vs 256
+  was 45.11 vs 45.72 s over three runs each (Welch p=0.11). Do not quote its
+  small differences as a tuning gain.
 - CPU and GPU body-force conventions differ: CPU `StreamSC` adds
   `0.5*dt*BForce` to the reported velocity, while the GPU fused kernel returns
   the raw second moment. The raw GPU value carries a constant `-0.5*nu*phi`

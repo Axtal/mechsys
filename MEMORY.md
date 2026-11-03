@@ -241,6 +241,21 @@ the normal solve paths, call `Particle::UpdateRotCache()` first.
 - `Nthread=512` fails for the current large `test_cu_03` register usage. The
   tested valid range is up to 384; the large workload optimum is around 128,
   while the reduced workload optimum is around 32.
+- `AdaptiveNthread` was implemented for DEM, FLBM and LBMDEM and then rolled
+  back on request; no field or sweep remains. The startup controller did not
+  produce a reliable win: on the reduced DEM test it selected 32, but the LBM
+  cases were flat and the candidate windows were sequential and noisy. Leave
+  `Nthread` fixed and benchmark the actual workload.
+- `tclbm01` (2400x300 D2Q9, 40k steps, no file output) is flat for
+  `Nthread=32..256`: 45.1-45.7 s solve time. Three runs each at 32 and 256 gave
+  means 45.11 vs 45.72 s, a 1.3% difference with Welch p=0.11 and a 95% CI of
+  [-1.49,+0.26] s, so the apparent 32-thread gain is noise. 320-512 were
+  46.4-46.7 s, about 2% slower. Do not quote a tuning gain for this
+  memory-bound case.
+- An experimental `AdaptiveAlpha` controller was implemented and benchmarked,
+  then rolled back on request. Do not assume `Domain::AdaptiveAlpha` exists.
+  Any future attempt must change `Alpha` only at a rebuild, rebuild immediately,
+  and respect the linked-cell `Beta` cap.
 
 CUDA `test_cu_03` and `test_cu_04` use `atomicAdd`, so the baseline itself is
 not bitwise deterministic. Do not claim bitwise equality for those GPU runs.
