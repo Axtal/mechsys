@@ -30,7 +30,7 @@
 namespace MPM
 {
 
-class Node
+class alignas(64) Node
 {
 public:
     //Constructors
@@ -40,21 +40,26 @@ public:
         );    
 
     //Data
-    bool       valid;                       ///< flag to see if the node is valid for calculation
-    iVec3_t    X;                           ///< index position of the node
-    size_t     Idx;                         ///< Index of the node
+    //Hot block: the particle-to-node scatter updates exactly these fields, so
+    //they (and the lock) share one 64-byte cache line.  This avoids false
+    //sharing between neighbouring nodes and one line transfer per update.
     double     Mass;                        ///< Mass of each node
-    Vec3_t     Vn;                          ///< Velocity at each node
-    Vec3_t     Vnf;                         ///< Fixed Velocity at each node for Dirichlet BCs
     Vec3_t     Mn;                          ///< Momentum at each node
     Vec3_t     Fn;                          ///< Force at each node
-    Mat3_t     Sn;                          ///< Stress at each node
-    bool       vxf, vyf, vzf;               ///< Fixed components of velocity
-    bool       fixCor;
+    bool       valid;                       ///< flag to see if the node is valid for calculation
 
     #ifdef USE_OMP
     omp_lock_t      lck;    ///< to protect variables in multithreading
     #endif
+
+    //Cold data
+    iVec3_t    X;                           ///< index position of the node
+    size_t     Idx;                         ///< Index of the node
+    Vec3_t     Vn;                          ///< Velocity at each node
+    Vec3_t     Vnf;                         ///< Fixed Velocity at each node for Dirichlet BCs
+    Mat3_t     Sn;                          ///< Stress at each node
+    bool       vxf, vyf, vzf;               ///< Fixed components of velocity
+    bool       fixCor;
 
     //Methods
     void FixVeloc           (double vx=0.0, double vy=0.0, double vz=0.0);  ///< Fix all velocities
@@ -104,10 +109,10 @@ inline void Node::Reset()
     fixCor = false;
     valid = false;
     Mass  = 0.0;
-    set_to_zero(Vn);
     set_to_zero(Mn);
     set_to_zero(Fn);
-    set_to_zero(Sn);
+    //Vn is set by UpdateNode for every valid node and Sn is not read by the
+    //CPU transfer, so they do not need to be cleared here.
 }
 
 inline void Node::FixVeloc (double vx, double vy, double vz)

@@ -23,6 +23,8 @@ The authoritative context is:
    - `CPU_DEM_OPTIMIZATION_CHANGES.md`
    - `CUDA_OPTIMIZATION_CHANGES.md`
    - `REDUCED_TEST_CU_03_PERFORMANCE.md`
+   - `MPM_OPTIMIZATION_CHANGES.md`
+   - `CUDA_MPM_OPTIMIZATION_CHANGES.md`
 
 Read the relevant documents before making substantive changes, and update them
 when a durable lesson or corrected benchmark is learned.
@@ -43,6 +45,13 @@ when a durable lesson or corrected benchmark is learned.
 - CUDA `test_cu_03/04` use `atomicAdd`; the baseline is non-deterministic. Do
   not claim bitwise equality for those GPU runs. `Nthread=512` fails for the
   current large test; tested range is up to 384.
+- CPU MPM exactness is dataset-bitwise at `Nproc=1`; at `Nproc>1` node sums may
+  reorder. Keep the `Node` hot cache line, the first-touch `VNodes` list and the
+  cached shape-function multiplication order (see `MPM_OPTIMIZATION_CHANGES.md`).
+- CUDA MPM keeps hot node fields in SoA arrays; scatter builds the touched-node
+  list, reset uses the previous list, and the final `cudaDeviceSynchronize()` in
+  `Solve` must stay. `ParticleCU` has 64 node slots (cubic limit); GPU atomics
+  mean no general bitwise claim. See `CUDA_MPM_OPTIMIZATION_CHANGES.md`.
 - Keep the separate `pTranslate` + `pRotate` fallback. Making fused movement
   unconditional broke `test_cu_04`.
 - The outer solve loop owns `Time`/`iter`; publish them to CUDA with `SetClock`.

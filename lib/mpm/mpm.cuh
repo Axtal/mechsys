@@ -45,15 +45,26 @@ struct mpm_aux
     bool   PeriodicZ;    ///< Periodic particle-grid mapping along z
 };
 
-__global__ void cudaResetNode(NodeCU * Nodes, size_t * SelIndexes, size_t * validn, mpm_aux * mpmaux)
+//Reset only the nodes touched in the previous step, using the compact list
+//built by the scatter.  The hot fields live in separate SoA arrays.
+__global__ void cudaResetNode(real * Mass, real3 * Mn, real3 * Fn, int * valid,
+                              size_t * SelIndexes, unsigned long long * validn, mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=validn[0]) return;
     size_t in = SelIndexes[ic];
-    Nodes[in].Reset();
+    Mass[in] = 0.0;
+    Mn  [in] = make_real3(0.0,0.0,0.0);
+    Fn  [in] = make_real3(0.0,0.0,0.0);
+    valid[in] = 0;
 }
 
-__global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * ValidMask, mpm_aux * mpmaux)
+//Scatter, and at the same time build the compact list of touched nodes: the
+//first contribution to a node appends its index.  This removes the old
+//per-step thrust::fill + copy_if + thrust::distance + cudaMemcpy sequence.
+__global__ void cudaParticleToNode(ParticleCU * Par, real * Mass, real3 * Mn, real3 * Fn,
+                                  int * valid, size_t * SelIndexes, unsigned long long * validn,
+                                  mpm_aux * mpmaux)
 {   
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=mpmaux[0].Npart) return;
@@ -128,28 +139,51 @@ __global__ void cudaParticleToNode(ParticleCU * Par, NodeCU * Nodes, bool * Vali
             real ms = Sf*Par[ic].m;
             real3 VspGs = Vsp*Gs;
             real3 dF = Sf*Fex + VspGs;
-            atomicAdd(&Nodes[nc].Mass, ms);
-            atomicAdd(&Nodes[nc].Mn.x, ms*Par[ic].v.x+Dt*dF.x);
-            atomicAdd(&Nodes[nc].Mn.y, ms*Par[ic].v.y+Dt*dF.y);
-            atomicAdd(&Nodes[nc].Mn.z, ms*Par[ic].v.z+Dt*dF.z);
-            atomicAdd(&Nodes[nc].Fn.x, dF.x);
-            atomicAdd(&Nodes[nc].Fn.y, dF.y);
-            atomicAdd(&Nodes[nc].Fn.z, dF.z);
-            ValidMask[nc] = true;
+            atomicAdd(&Mass[nc], ms);
+            atomicAdd(&Mn[nc].x, ms*Par[ic].v.x+Dt*dF.x);
+            atomicAdd(&Mn[nc].y, ms*Par[ic].v.y+Dt*dF.y);
+            atomicAdd(&Mn[nc].z, ms*Par[ic].v.z+Dt*dF.z);
+            atomicAdd(&Fn[nc].x, dF.x);
+            atomicAdd(&Fn[nc].y, dF.y);
+            atomicAdd(&Fn[nc].z, dF.z);
+            if (atomicExch(&valid[nc],1)==0)
+            {
+                unsigned long long k = atomicAdd(validn,1);
+                SelIndexes[k] = nc;
+            }
         }
     }
 }
 
-__global__ void cudaSolveNode(NodeCU * Nodes, size_t * SelIndexes, size_t * validn, mpm_aux * mpmaux)
+//Nodal update over the touched list.  The launch covers all nodes and exits
+//early, so the host never needs the list size.
+__global__ void cudaSolveNode(NodeCU * Nodes, real * Mass, real3 * Mn, real3 * Fn, real3 * Vn,
+                              size_t * SelIndexes, unsigned long long * validn, mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=validn[0]) return;
     size_t in = SelIndexes[ic];
-    Nodes[in].UpdateNode(mpmaux[0].Gn,mpmaux[0].Dt,mpmaux[0].Mmin);
-    Nodes[in].FixNode();
+    real  m  = Mass[in];
+    real3 mn = Mn  [in];
+    real3 fn = Fn  [in];
+    real3 fdamp = mpmaux[0].Gn*mn;
+    fn = fn - fdamp;
+    mn = mn - mpmaux[0].Dt*fdamp;
+    real3 vn;
+    if (m<mpmaux[0].Mmin) vn = make_real3(0.0,0.0,0.0);
+    else                  vn = (1.0/m)*mn;
+    NodeCU & nd = Nodes[in];
+    if (nd.vxf) { fn.x = 0.0; vn.x = nd.Vnf.x; mn.x = m*vn.x; }
+    if (nd.vyf) { fn.y = 0.0; vn.y = nd.Vnf.y; mn.y = m*vn.y; }
+    if (nd.vzf) { fn.z = 0.0; vn.z = nd.Vnf.z; mn.z = m*vn.z; }
+    Mass[in] = m;
+    Mn  [in] = mn;
+    Fn  [in] = fn;
+    Vn  [in] = vn;
 }
 
-__global__ void cudaNodeToParticle (ParticleCU * Par, NodeCU * Nodes, mpm_aux * mpmaux)
+//Gather.  Mass/Fn/Vn are read from the coalesced SoA arrays.
+__global__ void cudaNodeToParticle (ParticleCU * Par, real * Mass, real3 * Fn, real3 * Vn, mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=mpmaux[0].Npart) return;
@@ -166,10 +200,10 @@ __global__ void cudaNodeToParticle (ParticleCU * Par, NodeCU * Nodes, mpm_aux * 
         size_t nc = Par[ic].Nodes[nn];
         real sf = Par[ic].Sfunc[nn];
         real3  gs = Par[ic].GSf[nn];
-        real3  an = Nodes[nc].Fn/Nodes[nc].Mass;
+        real3  an = Fn[nc]/Mass[nc];
         Par[ic].v = Par[ic].v + sf*mpmaux[0].Dt*an;
-        Par[ic].x = Par[ic].x + sf*mpmaux[0].Dt*Nodes[nc].Vn;
-        Mat3 Gv = Dyad(gs,Nodes[nc].Vn);
+        Par[ic].x = Par[ic].x + sf*mpmaux[0].Dt*Vn[nc];
+        Mat3 Gv = Dyad(gs,Vn[nc]);
         Par[ic].L += Gv;
     }
 

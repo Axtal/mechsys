@@ -51,6 +51,9 @@
 #include <mechsys/mpm/Corner.h>
 #include <mechsys/dem/domain.h>
 #include <mechsys/mesh/unstructured.h>
+#include <cstdlib>
+#include <new>
+#include <vector>
 
 #ifdef USE_CUDA
 #include <mechsys/mpm/mpm.cuh>
@@ -60,6 +63,21 @@
 
 namespace MPM
 {
+
+
+// Allocate and construct the node array with one thread per contiguous chunk.
+// The first touch of each page then lands on the socket of the thread that
+// will later work on that part of the grid (important on multi-socket hosts).
+inline Node * AllocNodeArray(size_t n)
+{
+    void * raw = NULL;
+    if (posix_memalign(&raw,64,n*sizeof(Node))!=0 || raw==NULL)
+        throw new Fatal("MPM: cannot allocate the node array");
+    Node * nodes = static_cast<Node*>(raw);
+    #pragma omp parallel for schedule(static)
+    for (size_t i=0; i<n; i++) new (nodes+i) Node();
+    return nodes;
+}
 
 struct BdryFac // A structure for the boundary facets data
 {
@@ -159,23 +177,29 @@ public:
     //CUDA Implementation
 #ifdef USE_CUDA
     size_t Nthread = 256;                                                   ///< Number of GPU threads 
-    size_t ValidNumber = 0;                                                 ///< Number of Valid nodes                                                                            
     void UpLoadDevice(size_t Nc=1);                                         ///< Upload the domain to cuda device
     void DnLoadDevice(size_t Nc=1);                                         ///< Download the key data from device
     thrust::device_vector<ParticleCU>      bParticlesCU;                    ///< device vector of particles
     thrust::device_vector<NodeCU    >      bNodeCU     ;                    ///< device vector of nodes
-    thrust::device_vector<size_t    >      bAllIndexes ;                    ///< vector of all indexes of nodes
-    thrust::device_vector<size_t    >      bSelIndexes ;                    ///< vector of selected indexes of nodes
-    thrust::device_vector<bool      >      bValidMask  ;                    ///< Mask marking valid nodes from non-valid ones
+    thrust::device_vector<size_t    >      bSelIndexes ;                    ///< selected (touched) node indexes, built on the device
+    thrust::device_vector<real      >      bMass       ;                    ///< hot node mass
+    thrust::device_vector<real3     >      bMn         ;                    ///< hot node momentum
+    thrust::device_vector<real3     >      bFn         ;                    ///< hot node force
+    thrust::device_vector<real3     >      bVn         ;                    ///< hot node velocity
+    thrust::device_vector<int       >      bValid      ;                    ///< hot node valid flag
     mpm_aux                                mpmaux      ;                    ///< structure with domain data                                              
 
     //Pointers to GPU arrays
     ParticleCU * pParticlesCU;
     NodeCU     * pNodeCU;
-    size_t     * pAllIndexes;
     size_t     * pSelIndexes;
-    size_t     * pValidNumber;
-    bool       * pValidMask;
+    unsigned long long * pValidNumber;
+    unsigned long long * pValidNumberPrev;
+    real       * pMass;
+    real3      * pMn;
+    real3      * pFn;
+    real3      * pVn;
+    int        * pValid;
     mpm_aux    * pmpmaux;
 
 #endif
@@ -653,7 +677,7 @@ inline void Domain::ResizeDomain(Vec3_t const & Xmin, Vec3_t const & Xmax, doubl
     Ndim      = iVec3_t(Nx,Ny,Nz);
     Nnodes    = Nx*Ny*Nz;
     Dx        = deltax;
-    Nodes     = new Node [Nnodes];
+    Nodes     = AllocNodeArray(Nnodes);
     for (size_t iz=0;iz<Nz;iz++)
     for (size_t iy=0;iy<Ny;iy++)
     for (size_t ix=0;ix<Nx;ix++)
@@ -710,7 +734,7 @@ inline double Domain::ResizeDomainMesh(Vec3_t const & Xmin, Vec3_t const & Xmax,
     Ndim      = iVec3_t(Nx,Ny,Nz);
     Nnodes    = Nx*Ny*Nz;
     Dx        = deltax;
-    Nodes     = new Node [Nnodes];
+    Nodes     = AllocNodeArray(Nnodes);
     for (size_t iz=0;iz<Nz;iz++)
     for (size_t iy=0;iy<Ny;iy++)
     for (size_t ix=0;ix<Nx;ix++)
@@ -1038,8 +1062,18 @@ inline void Domain::ParticleToNode()
     }
     VNodes.Resize(0);
 
-    //Transfering info from particle to node
-	#pragma omp parallel for schedule(static) num_threads(Nproc)
+    //Transfering info from particle to node.  The list of touched nodes is
+    //produced here, by the first thread that touches each node, instead of
+    //scanning every node of the grid after the transfer.
+    size_t Nth = (Nproc>0) ? Nproc : 1;
+    static std::vector<std::vector<size_t> > LocVNodes;
+    if (LocVNodes.size()<Nth) LocVNodes.resize(Nth);
+    for (size_t t=0; t<Nth; t++) LocVNodes[t].clear();
+	#pragma omp parallel num_threads(Nproc)
+    {
+    size_t tid = omp_get_thread_num();
+    std::vector<size_t> & MyVNodes = LocVNodes[tid];
+	#pragma omp for schedule(static)
     for (size_t ip=0; ip < Particles.Size(); ip++)
     {
         int nlow[3]  = {0,0,0};
@@ -1049,13 +1083,6 @@ inline void Domain::ParticleToNode()
         Mat3_t Vsp = -Particles[ip]->V*Particles[ip]->S;
         //Vec3_t Fex = Particles[ip]->b + Particles[ip]->h;
         Vec3_t Fex = Particles[ip]->b;
-
-        //nlow (0) = (size_t(trunc((Xp(0)-Lp(0)-Xlow(0))/Dx)-1+Ndim(0)))%Ndim(0);
-        //nlow (1) = (size_t(trunc((Xp(1)-Lp(1)-Xlow(1))/Dx)-1+Ndim(1)))%Ndim(1);
-        //nlow (2) = (size_t(trunc((Xp(2)-Lp(2)-Xlow(2))/Dx)-1+Ndim(2)))%Ndim(2);
-        //nhigh(0) = (size_t(ceil ((Xp(0)+Lp(0)-Xlow(0))/Dx)+1+Ndim(0)))%Ndim(0);
-        //nhigh(1) = (size_t(ceil ((Xp(1)+Lp(1)-Xlow(1))/Dx)+1+Ndim(1)))%Ndim(1);
-        //nhigh(2) = (size_t(ceil ((Xp(2)+Lp(2)-Xlow(2))/Dx)+1+Ndim(2)))%Ndim(2);
 
         for (size_t d=0; d<3; d++)
         {
@@ -1073,20 +1100,34 @@ inline void Domain::ParticleToNode()
             }
         }
 
+        ShapeCache1D ShCache[3];
+        bool UseCache = FillShapeCache3D(ShapeFunction,Xp,Xlow,Dx,Lp,nlow,nhigh,ShCache);
         for (int nx=nlow[0]; nx<=nhigh[0]; nx++)
         for (int ny=nlow[1]; ny<=nhigh[1]; ny++)
         for (int nz=nlow[2]; nz<=nhigh[2]; nz++)
         {
             double Sf=0.0; //Shape function value
             Vec3_t Gs=OrthoSys::O; //Shape function gradient
-            //Vec3_t Xn((nx+0.5)*Dx,(ny+0.5)*Dx,(nz+0.5)*Dx);
-            Vec3_t Xn(nx*Dx,ny*Dx,nz*Dx);
-            Xn += Xlow;
             size_t ix = Periodic[0] ? PeriodicNodeIndex(nx,Ndim(0)) : (size_t)nx;
             size_t iy = Periodic[1] ? PeriodicNodeIndex(ny,Ndim(1)) : (size_t)ny;
             size_t iz = Periodic[2] ? PeriodicNodeIndex(nz,Ndim(2)) : (size_t)nz;
             iVec3_t Pt(ix,iy,iz);
-            MPMShapeFunction3D(ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
+            if (UseCache)
+            {
+                double w0 = ShCache[0].w[nx-nlow[0]];
+                double w1 = ShCache[1].w[ny-nlow[1]];
+                double w2 = ShCache[2].w[nz-nlow[2]];
+                Sf = w0*w1*w2;
+                Gs(0) = ShCache[0].g[nx-nlow[0]]*w1*w2;
+                Gs(1) = w0*ShCache[1].g[ny-nlow[1]]*w2;
+                Gs(2) = w0*w1*ShCache[2].g[nz-nlow[2]];
+            }
+            else
+            {
+                Vec3_t Xn(nx*Dx,ny*Dx,nz*Dx);
+                Xn += Xlow;
+                MPMShapeFunction3D(ShapeFunction,Xp,Xn,Dx,Lp,Sf,Gs);
+            }
             if (Sf>0.0)
             {
                 size_t nc = Pt2idx(Pt,Ndim);
@@ -1097,28 +1138,29 @@ inline void Domain::ParticleToNode()
                 Vec3_t VspGs;
                 Mult(Vsp,Gs,VspGs);
                 Vec3_t dF = Sf*Fex + VspGs;
-                omp_set_lock(&Nodes[nc].lck);
+                if (Nproc>1) omp_set_lock(&Nodes[nc].lck);
+                bool FirstTouch = !Nodes[nc].valid;
                 Nodes[nc].Mass += ms;
                 Nodes[nc].Mn   += ms*Particles[ip]->v + Dt*dF;
                 Nodes[nc].Fn   += dF;
                 //Nodes[nc].Sn    = Nodes[nc].Sn + ms*Particles[ip]->S;
-                Nodes[nc].valid = true;
-                omp_unset_lock(&Nodes[nc].lck);
-                if (isnan(norm(Particles[ip]->x))||isnan(norm(Particles[ip]->v))||isnan(norm(Fex)))
+                if (FirstTouch)
                 {
-                    std::cout << "nan value detected" << std::endl;
-                    std::cout << "ip =" << ip <<std::endl;
-                    std::cout << "M =" << ms               <<std::endl;
-                    std::cout << "v =" << Particles[ip]->v <<std::endl;
-                    std::cout << "x =" << Particles[ip]->x <<std::endl;
-                    std::cout << "dF=" << dF  <<std::endl;
-                    std::cout << "fh =" << Particles[ip]->h <<std::endl;
-                    std::cout << "Mn=" << Nodes[nc].Mn <<std::endl;
-                    std::cout << "sf=" << Sf <<std::endl;
-                    std::cout << "Time =" << Time <<std::endl;
-                    throw new Fatal("Domain::ParticletoNode nan value found");
+                    Nodes[nc].valid = true;
+                    MyVNodes.push_back(nc);
                 }
+                if (Nproc>1) omp_unset_lock(&Nodes[nc].lck);
             }
+        }
+        if (isnan(norm(Particles[ip]->x))||isnan(norm(Particles[ip]->v))||isnan(norm(Fex)))
+        {
+            std::cout << "nan value detected" << std::endl;
+            std::cout << "ip =" << ip <<std::endl;
+            std::cout << "v =" << Particles[ip]->v <<std::endl;
+            std::cout << "x =" << Particles[ip]->x <<std::endl;
+            std::cout << "fh =" << Particles[ip]->h <<std::endl;
+            std::cout << "Time =" << Time <<std::endl;
+            throw new Fatal("Domain::ParticletoNode nan value found");
         }
         if (Particles[ip]->Nodes.Size()<2)
         {
@@ -1133,11 +1175,11 @@ inline void Domain::ParticleToNode()
             throw new Fatal("MPM:Domain:ParticleToNode No mesh cells intersected by particles");
         }
     }
+    }
 
-    //Producing an array of only valid nodes
-    for (size_t in=0; in<Nnodes; in++)
+    for (size_t t=0; t<Nth; t++)
     {
-        if (Nodes[in].valid) VNodes.Push(Nodes[in].Idx);
+        for (size_t k=0; k<LocVNodes[t].size(); k++) VNodes.Push(LocVNodes[t][k]);
     }
 }
 
@@ -1166,26 +1208,21 @@ inline void Domain::NodeToParticle()
             Vec3_t an = Nodes[nc].Fn/Nodes[nc].Mass;
             Particles[ip]->v += sf*an*Dt;
             Particles[ip]->x += sf*Nodes[nc].Vn*Dt;
-            if (isnan(norm(Particles[ip]->x))||isnan(norm(Particles[ip]->v)))
-            {
-                std::cout << "nan value detected" << std::endl;
-                std::cout << "ip =" << ip <<std::endl;
-                std::cout << "Free? =" << Particles[ip]->IsFree() <<std::endl;
-                std::cout << "v =" << Particles[ip]->v <<std::endl;
-                std::cout << "x =" << Particles[ip]->x <<std::endl;
-                std::cout << "fh =" << Particles[ip]->h <<std::endl;
-                std::cout << "Vn =" << Nodes[nc].Vn <<std::endl;
-                std::cout << "Mn =" << Nodes[nc].Mn <<std::endl;
-                std::cout << "Ma =" << Nodes[nc].Mass <<std::endl;
-                std::cout << "an =" << an <<std::endl;
-                std::cout << "sf =" << sf <<std::endl;
-                std::cout << "Time =" << Time <<std::endl;
-                throw new Fatal("Domain::NodetoParticle nan value found");
-            }
             Mat3_t Gv;
             //Dyad(Nodes[nc].Vn,gs,Gv);
             Dyad(gs,Nodes[nc].Vn,Gv);
             Particles[ip]->L = Particles[ip]->L + Gv;
+        }
+        if (isnan(norm(Particles[ip]->x))||isnan(norm(Particles[ip]->v)))
+        {
+            std::cout << "nan value detected" << std::endl;
+            std::cout << "ip =" << ip <<std::endl;
+            std::cout << "Free? =" << Particles[ip]->IsFree() <<std::endl;
+            std::cout << "v =" << Particles[ip]->v <<std::endl;
+            std::cout << "x =" << Particles[ip]->x <<std::endl;
+            std::cout << "fh =" << Particles[ip]->h <<std::endl;
+            std::cout << "Time =" << Time <<std::endl;
+            throw new Fatal("Domain::NodetoParticle nan value found");
         }
         Particles[ip]->CalcVol(Dt);
         Particles[ip]->CalcStress(Dt);
@@ -1198,7 +1235,6 @@ inline void Domain::NodeToParticle()
             while (Particles[ip]->x(d) >= Xhigh(d)) {Particles[ip]->x(d) -= L; Particles[ip]->xb(d) -= L;}
         }
     }
-
 }
 
 inline void Domain::OneStepUSF()
@@ -1803,32 +1839,16 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
         }
         else
         {
-            cudaResetNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
+            cudaResetNode<<<Nnodes/Nthread+1,Nthread>>>(pMass,pMn,pFn,pValid,pSelIndexes,pValidNumberPrev,pmpmaux);
+            cudaMemsetAsync(pValidNumber,0,sizeof(unsigned long long));
 
-            thrust::fill(bValidMask.begin(),bValidMask.end(),false);
+            cudaParticleToNode<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pMass,pMn,pFn,pValid,pSelIndexes,pValidNumber,pmpmaux);
 
-            cudaParticleToNode<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pValidMask,pmpmaux);
+            cudaSolveNode<<<Nnodes/Nthread+1,Nthread>>>(pNodeCU,pMass,pMn,pFn,pVn,pSelIndexes,pValidNumber,pmpmaux);
 
-            //Building the slected node array
-            if (bSelIndexes.size()!=Nnodes)
-            {
-                bSelIndexes.resize(Nnodes);
-                pSelIndexes = thrust::raw_pointer_cast(bSelIndexes.data());
-            }
-            auto new_end = thrust::copy_if(
-            bAllIndexes.begin(),
-            bAllIndexes.end(),
-            bValidMask .begin(),                    // Stencil: 1 or 0
-            bSelIndexes.begin(),
-            // thrust::identity<bool>());            // Identity: returns the value itself
-            ::cuda::std::identity{});             // Identity: returns the value itself
+            cudaNodeToParticle<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pMass,pFn,pVn,pmpmaux);
 
-            ValidNumber = thrust::distance(bSelIndexes.begin(),new_end);
-            cudaMemcpy(pValidNumber, &ValidNumber, sizeof(size_t), cudaMemcpyHostToDevice);
-
-            cudaSolveNode<<<ValidNumber/Nthread+1,Nthread>>>(pNodeCU,pSelIndexes,pValidNumber,pmpmaux);
-
-            cudaNodeToParticle<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pNodeCU,pmpmaux);
+            std::swap(pValidNumber,pValidNumberPrev);
 
         }
 #else
@@ -1847,6 +1867,10 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
         Time += dt;
         //std::cout << Time << std::endl;
     }
+#ifdef USE_CUDA
+    //With no per-step host synchronization the loop may leave work queued.
+    cudaDeviceSynchronize();
+#endif
 }
 
 #ifdef USE_CUDA
@@ -1891,24 +1915,31 @@ inline void Domain::UpLoadDevice(size_t Nc)
 
     bParticlesCU.resize(Particles.Size());
     bNodeCU     .resize(Nnodes);
-    bValidMask  .resize(Nnodes);
-    bAllIndexes .resize(Nnodes);
     bSelIndexes .resize(Nnodes);
     thrust::copy(hParticles.begin(),hParticles.end(),bParticlesCU.begin());
     thrust::copy(hNodes    .begin(),hNodes    .end(),bNodeCU     .begin());
-    thrust::fill(bValidMask.begin(),bValidMask.end(),false);
-    thrust::sequence(bAllIndexes.begin(), bAllIndexes.end(), 0);
-    thrust::sequence(bSelIndexes.begin(), bSelIndexes.end(), 0);
 
     pParticlesCU = thrust::raw_pointer_cast(bParticlesCU.data());
     pNodeCU      = thrust::raw_pointer_cast(bNodeCU     .data());
-    pAllIndexes  = thrust::raw_pointer_cast(bAllIndexes .data());
     pSelIndexes  = thrust::raw_pointer_cast(bSelIndexes .data());
-    pValidMask   = thrust::raw_pointer_cast(bValidMask  .data());
 
-    ValidNumber = 0;
-    cudaMalloc(&pValidNumber, sizeof(size_t));
-    cudaMemcpy(pValidNumber, &ValidNumber, sizeof(size_t), cudaMemcpyHostToDevice);
+    //Hot node fields are kept as separate arrays (SoA) so that the scatter
+    //atomics and the gather reads of neighbouring particles are coalesced.
+    bMass .resize(Nnodes); bMn.resize(Nnodes); bFn.resize(Nnodes); bVn.resize(Nnodes); bValid.resize(Nnodes);
+    thrust::fill(bMass.begin(), bMass.end(), (real)0.0);
+    thrust::fill(bMn  .begin(), bMn  .end(), make_real3(0.0,0.0,0.0));
+    thrust::fill(bFn  .begin(), bFn  .end(), make_real3(0.0,0.0,0.0));
+    thrust::fill(bVn  .begin(), bVn  .end(), make_real3(0.0,0.0,0.0));
+    thrust::fill(bValid.begin(), bValid.end(), 0);
+    pMass  = thrust::raw_pointer_cast(bMass .data());
+    pMn    = thrust::raw_pointer_cast(bMn   .data());
+    pFn    = thrust::raw_pointer_cast(bFn   .data());
+    pVn    = thrust::raw_pointer_cast(bVn   .data());
+    pValid = thrust::raw_pointer_cast(bValid.data());
+    cudaMalloc(&pValidNumber, sizeof(unsigned long long));
+    cudaMalloc(&pValidNumberPrev, sizeof(unsigned long long));
+    cudaMemset(pValidNumber, 0, sizeof(unsigned long long));
+    cudaMemset(pValidNumberPrev, 0, sizeof(unsigned long long));
 
     cudaMalloc(&pmpmaux, sizeof(mpm_aux));
     cudaMemcpy(pmpmaux, &mpmaux, sizeof(mpm_aux), cudaMemcpyHostToDevice);

@@ -275,6 +275,69 @@ SetOperatorOptions(w)
 DrawPlots()
 ```
 
+MPM uses a different grid name and attribute set.  Each `WriteXDMF` frame is
+a standalone single-state file with grid `MPM_points` (`Polyvertex` topology)
+and node attributes `Tag`, `Velocity`, `Pressure`, `Sigma`, `Strain`.  A
+verified point-cloud render is:
+
+```python
+OpenDatabase("granular_0019.xmf")
+DefineScalarExpression("speed", "magnitude(Velocity)")
+AddPlot("Pseudocolor", "speed")
+pc = PseudocolorAttributes()
+pc.colorTableName = "hot"
+pc.limitsMode = 0; pc.min = 0.0; pc.max = 1.2   # fixed scale across frames
+pc.pointSizePixels = 3
+SetPlotOptions(pc)
+DrawPlots()
+ResetView()
+v = View3DAttributes()
+v.viewNormal = (0.75, 0.35, 0.56); v.viewUp = (0.0, 1.0, 0.0)
+v.focus = (0.13, 0.045, 0.10); v.parallelScale = 0.20; v.perspective = 0
+SetView3D(v)
+sw = SaveWindowAttributes()
+sw.fileName = "granular_0019"
+sw.format = sw.PNG          # not the string "png"
+sw.width = 900; sw.height = 900
+SetSaveWindowAttributes(sw)
+SaveWindow()
+```
+
+For a **fixed, pressure-proportional color scale**, use the plot's min/max
+flags; `limitsMode` itself only accepts `0` (`OriginalData`) or `1`
+(`ActualData`), not a user-specified mode:
+
+```python
+AddPlot("Pseudocolor", "Pressure")
+pc = PseudocolorAttributes()
+pc.colorTableName = "turbo"         # blue low -> red high
+pc.limitsMode = 0
+pc.minFlag = 1; pc.maxFlag = 1
+pc.min = -30000.0; pc.max = 110000.0
+SetPlotOptions(pc)
+```
+
+A 0.5 s water-column run (`tmpm_cu_03`, 134,820 points, 40 frames) took
+8 min 43 s and produced `Pressure` from 11-774 Pa initially, through a
++105 kPa / -27 kPa transient at 0.25 s, to -24/+81 kPa at 0.49 s.  The
+fixed -30/+110 kPa scale keeps the color mapping linear and comparable
+between frames.
+
+The periodic square-duct case (`tmpm_cu_04`) is different: with its
+`EOS_LINEAR` EOS, initially uniform density and x-periodic domain, the
+`Pressure` dataset is **identically zero in every frame**.  A pressure
+colormap is therefore meaningless for this case; visualize the axial
+velocity instead (`DefineScalarExpression("Vx","Velocity[0]")`).  A full
+`Tf = 200 s` run (216,000 points, 50 frames) took 22 min 57 s solve and
+reached `Vx_max = 7.68731e-4 m/s` versus the analytical `7.36712e-4 m/s`
+(+4.35%).  The duct is low-Reynolds (`Re ~ 0.74`), so the profile develops
+smoothly with no pressure signal in this formulation.
+
+In VisIt 3.3.2 `SaveWindowAttributes` has no `resolution` member, and
+`outputDirectory` is not honored from a CLI script: the PNG is written in the
+process launch directory (or use `os.chdir`).  `SaveWindow` still appends
+`0000` to the name.
+
 `SaveWindow` appends `0000`, `0001`, ... to the requested name.  For a time
 series, call `SetTimeSliderState(i)` and `DrawPlots()` before each save.
 VisIt CLI may return a nonzero status after a successful save if the script
@@ -713,26 +776,209 @@ Other `ttt` facts:
 
 ## 8. Current working-tree state
 
-As of the last update of this handbook:
+As of 2026-11-03:
 
-- `HEAD` is `94f64b8`.
-- Modified files:
-  - `lib/dem/distance.h`
-  - `lib/dem/domain.h`
-  - `lib/dem/interacton.h`
-  - `lib/dem/particle.h`
-- Added reports:
-  - `CPU_DEM_OPTIMIZATION_CHANGES.md`
-  - `CUDA_OPTIMIZATION_CHANGES.md`
-  - `REDUCED_TEST_CU_03_PERFORMANCE.md`
-- Added benchmark inputs:
-  - `benchmarks/cpu_voronoi/tper_small.inp`
-  - `benchmarks/cpu_voronoi/tper_med.inp`
+- `HEAD` is `74407d4`, the merge of `maliaowave/mechsys` (`ad01691`) into
+  `0d9d696`. The pre-merge tip is preserved as branch
+  `backup/pre-mario-merge`; the fork is available as remote-tracking branch
+  `mario/main` (`git fetch ~/mario/mechsys main:refs/remotes/mario/main`).
+- The DEM/DEM-CUDA/FLBM optimization work described below is committed in the
+  commits up to `0d9d696`.  Uncommitted in the tracked working tree: the CPU
+  MPM optimization (`lib/mpm/Node.h`, `lib/mpm/shape_functions.h`,
+  `lib/mpm/Domain.h`), the new `MPM_OPTIMIZATION_CHANGES.md`, and the memory
+  documents (`AGENTS.md`, `MECHSYS_HANDBOOK.md`, `MEMORY.md`, `SKILL.md`,
+  `.agents/skills/mechsys/SKILL.md`).  Do not commit or push them unless asked.
+- Untracked build products: `tflbm/tclbm06..09`,
+  `tlbmdem/tlbmdem0[12]`, `tlbmdem/tlbmdem_cu_0[1-4]`,
+  `tlbmmpm/tlbmmpm01`, `tlbmmpm/tlbmmpm02`, `tmpm/tmpm0[45]`,
+  `tmpm/tmpm_cu_0[1-5]`, `MPM_OPTIMIZATION_CHANGES.md`,
+  `MECHSYS_CHANGES.txt` and the other MPM binaries from the build. They are
+  regenerable and must not be deleted without asking.
 
-These changes are uncommitted. Do not treat them as `HEAD`, and do not delete
-them while experimenting.
+## 9. MPM and tmpm
 
-## 9. Documentation map
+The Material Point Method library is `lib/mpm/`; its benchmark drivers are
+`tmpm/tmpmNN.cpp` (CPU) and `tmpm/tmpm_cu_NN.cu` (CUDA). `A_WITH_TMPM=ON` in
+this checkout, so all targets come from the root build system:
+
+```bash
+cd /home/sergio/mechsys/tmpm
+make -j8 tmpm01 tmpm02 tmpm03 tmpm04 tmpm05
+make -j8 tmpm_cu_01 tmpm_cu_02 tmpm_cu_03 tmpm_cu_04 tmpm_cu_05
+```
+
+`tlbmmpm01/02` include `<mechsys/lbmmpm/Domain.h>`, which pulls in the MPM
+headers, so build them after changing `lib/mpm/*`:
+
+```bash
+cd /home/sergio/mechsys/tlbmmpm && make -j8 tlbmmpm01 tlbmmpm02
+```
+
+### 9.1 Library entry points
+
+| File | Responsibility |
+|---|---|
+| `lib/mpm/Domain.h` | background grid, particle-to-node/node-to-particle, `Solve`, body mesh |
+| `lib/mpm/Particle.h` | material-point state, constitutive models, `CalcProps` |
+| `lib/mpm/shape_functions.h` | GIMP, quadratic and cubic B-splines, support radius and node range |
+| `lib/mpm/eos.h` | Tait/Cole (`EOS_TAIT`) and linear (`EOS_LINEAR`) acoustic EOS |
+| `lib/mpm/fluid_filter.h` | vNRL artificial viscosity for weakly-compressible water |
+| `lib/mpm/mpm.cuh` | CUDA kernels used by `tmpm_cu_*` |
+
+- `dom.ShapeFunction` defaults to `SHAPE_GIMP`; the newer cases set
+  `MPM::SHAPE_BSPLINE_QUADRATIC`, and `SHAPE_BSPLINE_CUBIC` also exists.
+- `Particle::Constitutive == 4` is the weakly-compressible fluid (`Mu`, `Cs`,
+  `EOSType`, `EOSexp`, `AVLin`, `AVQuad`, `FluidDx`).
+- `Constitutive == 5` is mu(I) rheology. Soil models are 1 = Drucker-Prager,
+  2 = Bui Drucker-Prager, 3 = hypoplastic, driven by `K`, `G`, `Friction`,
+  `Dilation`, `Cohesion`.
+- `dom.Gn` is the nodal dissipative (hourglass-damping) constant, not gravity.
+  Body acceleration is set in the case `Setup` callback.
+
+### 9.2 Checked-in benchmark sizes
+
+| Case | Physics | Particles | Grid nodes | Time steps |
+|---|---|---|---|---|
+| `tmpm01`/`tmpm_cu_01` | 3-D column, fixed base, end force | 5,000 | 125,000 | ~86,000 |
+| `tmpm02`/`tmpm_cu_02` | dry granular column, Drucker-Prager | ~26,000 | ~106,000 | ~580,000 |
+| `tmpm03`/`tmpm_cu_03` | closed-box water column, Tait EOS + vNRL | ~135,000 | ~358,000 | ~259,000 |
+| `tmpm04`/`tmpm_cu_04` | periodic square-duct flow vs analytic | 216,000 | ~39,000 | ~42,400 |
+| `tmpm05`/`tmpm_cu_05` | granular column, mu(I) rheology | ~26,000 | ~106,000 | ~500,000 |
+
+All of these are long. For a smoke test, copy the source outside the checkout,
+reduce `ndiv` / `num_particles_x` / `particles_per_diameter` and, except for
+`tmpm04`, `Tf`; compile the copy with
+`/home/sergio/mechsys/mechsyscc copy.cpp` (or `.cu`). `tmpm04` needs the
+physical `tf = 200 s` to reach steady state (viscous diffusion time is about
+25 s at `h = 5 cm`), so reduce only `particles_per_diameter` there.
+
+Measured on 2026-11-03 (RTX A6000, 128-core host; wall time includes startup
+and output):
+
+| Smoke reduction | CPU wall | GPU wall |
+|---|---|---|
+| `tmpm01`: `ndiv 50->10`, `Tf 5->0.02` | 0.04 s | 1.49 s |
+| `tmpm02`: `num_particles_x 40->10`, `Tf 1.5->0.02` | 0.87 s | 3.72 s |
+| `tmpm03`: `particles_per_diameter 70->20`, `Tf 5->0.02` | 0.39 s | 7.34 s |
+| `tmpm04`: `particles_per_diameter 60->10`, `tf 200->1` | 0.07 s | 1.78 s |
+| `tmpm05`: `num_particles_x 40->10`, `Tf 1.5->0.01` | 0.43 s | 2.35 s |
+
+All ten exit 0 and write 36-100 HDF5 frames with finite `Position`,
+`PVelocity`, `Pressure`, `Sigma`, and `Strain`.
+
+`tmpm04` at `particles_per_diameter = 20` (8,000 particles, 14,200 steps,
+`tf = 200`) ran in 22.9 s CPU wall. `Vx_max` converged to `8.57e-4 m/s` against
+the case's own analytic `7.37e-4 m/s` (`Rerror = 16.3%`); that resolution has
+only five cells across the pipe radius, so this is a convergence check, not an
+accuracy claim. The checked-in 60-ppd case (216,000 particles, 42,400 steps,
+96 OpenMP threads, `tf = 200`) completed in 1932 s (32 min 12 s) wall before
+the CPU optimization and 1676 s (27 min 56 s) after it (Section 9.3), with
+`Vx_max = 7.68731e-4 m/s`, i.e. `Rerror = 4.35%` from `t = 100 s` to the end.
+That is the checked-in accuracy of this benchmark; it does not converge
+further with time.
+
+At the tested reduced resolution (20 ppd, 3,160 particles, 294 steps),
+`tmpm_cu_03` and `tmpm03` produced bitwise-identical HDF5 datasets before the
+CUDA optimization.  After it the GPU atomics can reorder sums; do not
+generalize bitwise identity to other GPU MPM cases without checking.
+
+`tmpm_cu_02.cu` was repaired after the fork merge: its `dtOut` declaration had
+been commented out while the variable was still printed, and `Solve` used
+`Tf/100` instead. It now mirrors `tmpm02.cpp`
+(`double dtOut = std::min(Tf/100.0,5000.0*dt)`, passed to `Solve`).
+
+**`tmpm_cu_02` is not kinetically equilibrated at its checked-in `Tf = 1.5 s`.**
+A full run (25,280 points, 50 frames, `Nthread=256`) took 30 min 37 s in
+`Solve` (1837 s wall). The deposit shape stabilizes by about 0.6 s
+(`x in [-0.126, 0.314] m`, `z` the same, `y_max = 0.075 m`) and changes by
+less than a millimetre to 1.47 s. However, a thin basal layer keeps sliding:
+at 1.47 s `vmax = 1.009 m/s`, `vrms = 0.104 m/s`, median speed `0.017 m/s`.
+The fixed ground nodes plus `Gn = 0.001` do not bring the material to rest.
+Do not present the 1.5 s state as static equilibrium; it is a steady deposit
+shape with persistent basal flow. A true static state needs basal friction,
+stronger damping, or a much longer run.
+
+### 9.3 CPU performance changes
+
+The grid transfer in `ParticleToNode`/`NodeToParticle` was optimized without
+changing the arithmetic; full design and measurements are in
+[`MPM_OPTIMIZATION_CHANGES.md`](MPM_OPTIMIZATION_CHANGES.md).
+
+- `Node` is `alignas(64)` and keeps `Mass/Mn/Fn/valid/lck` in one cache line.
+- `Node::Reset` no longer clears `Vn` or `Sn` (both are overwritten/unused).
+- `VNodes` is built during the scatter (first touch per thread), not by a scan
+  of all `Nnodes`.
+- Per-particle 1-D shape weights are cached and reused for the 27/64 nodes.
+- The NaN guard is outside the node loop; single-thread runs skip the locks.
+- The node array is constructed in parallel so pages are NUMA-local.
+
+Measured speedups (`Solve` wall time unless stated; 96 threads on the
+128-thread host):
+
+| Case | Before | After | Speedup |
+|---|---:|---:|---:|
+| `tmpm03` reduced, 20 ppd, 998 steps | 2.03 s | 0.89 s | 2.29x |
+| `tmpm03` reduced, 50 ppd, 150 steps | 0.79 s | 0.40 s | 1.98x |
+| `tmpm01` full, 86,391 steps, 100 frames (wall) | 92.42 s | 33.77 s | 2.74x |
+| `tmpm04` full, 42,437 steps, 100 frames (wall) | 1932.08 s | 1676.27 s | 1.15x |
+
+`Nproc=1` output is dataset-bit-identical for GIMP (`tmpm01`),
+Drucker-Prager (`tmpm02`), Tait water (`tmpm03`) and mu(I) (`tmpm05`).  At
+`Nproc>1` only the floating-point reduction order can change; full `tmpm01`
+at 96 threads differs only in `PVelocity` by `2.8e-14` (7.6e-11 relative),
+and `tmpm04` frames differ by at most `~1e-14` relative in
+`PVelocity`/`Sigma`.
+
+`tmpm04` is the dense limit: 216,000 particles on 38,880 nodes (~5.5 per
+cell), so each node is updated ~150 times per step and the scatter is bound
+by cache-line ownership.  On a short 5-frame `tmpm04` run, 8/32/96 threads
+take 98.1/60.6/71.3 s after the optimization; for such dense grids fewer
+threads than `0.75*MAXTHREADS` can be faster.  An eight-group partial-grid
+prototype reached 60.8 s at 96 threads but regressed sparse cases, so it was
+not kept.
+
+### 9.4 CUDA MPM performance changes
+
+The GPU path was optimized after the CPU work; full design, phase profile and
+numbers are in
+[`CUDA_MPM_OPTIMIZATION_CHANGES.md`](CUDA_MPM_OPTIMIZATION_CHANGES.md).
+Files changed: `lib/mpm/mpm.cuh`, the `USE_CUDA` parts of
+`lib/mpm/Domain.h`, and `lib/mpm/Particle.h`.
+
+- Hot node fields (`Mass`, `Mn`, `Fn`, `Vn`, `valid`) are separate device
+  arrays (SoA), so neighbouring nodes read/write consecutive addresses.  The
+  cold `NodeCU` array still holds `Vnf` and the fixed-velocity flags.
+- The scatter builds the compact list of touched nodes itself
+  (`atomicExch` + `atomicAdd`).  The old per-step `thrust::fill`,
+  `thrust::copy_if`, `thrust::distance` and count `cudaMemcpy` are gone, along
+  with `bAllIndexes`/`bValidMask`.  The previous list is reset first; the
+  device count is ping-ponged.
+- Reset and solve are launched over `Nnodes` blocks and exit early on the
+  device count, so the host never needs the valid-node count.
+- `ParticleCU` now stores 64 nodes per particle (`4^3`, enough for cubic
+  B-spline and for quadratic/GIMP at the usual particle size), down from 125;
+  `sizeof(ParticleCU)` drops from 6024 B to 3584 B.
+- A final `cudaDeviceSynchronize()` makes `Solve` timing cover queued work.
+
+Reduced four-frame benchmarks (`Nthread=256`, RTX A6000) improved
+`tmpm_cu_01/03/04/05` by 4/8/9/10%; `tmpm_cu_02` regressed by about 1%
+(short steps, frequent particle deletion/re-upload).  These are `Solve`
+times; see the report for wall times and the phase split.
+
+The GPU scatter uses floating-point atomics, so bitwise identity with the
+pre-change binary is not guaranteed.  On the reduced cases the final-frame
+differences were at most `~2e-5` absolute in `Pressure`/`Sigma` (about
+`1e-8` relative) and `~1e-12` in `PVelocity`; `tmpm_cu_02` was bitwise
+identical.  At the previously tested reduced resolution, `tmpm_cu_03` and
+`tmpm03` were bitwise identical before this CUDA optimization; do not expect
+that after it.
+
+Caveat: the 64-entry arrays cover up to four nodes per dimension.  A GIMP
+particle roughly larger than 1.5 cells would need five nodes per dimension
+(125 entries); use a smaller particle size or widen the arrays in
+`Particle.h` for that configuration.
+
+## 10. Documentation map
 
 | Document | Use |
 |---|---|
@@ -744,9 +990,11 @@ them while experimenting.
 | `CPU_DEM_OPTIMIZATION_CHANGES.md` | CPU Voronoi changes, exactness, benchmarks |
 | `CUDA_OPTIMIZATION_CHANGES.md` | CUDA kernels, dispatch, clocks, accuracy, performance |
 | `REDUCED_TEST_CU_03_PERFORMANCE.md` | reduced CUDA thread/Verlet sweeps |
+| `MPM_OPTIMIZATION_CHANGES.md` | CPU MPM changes, exactness, benchmarks, dense-grid limit |
+| `CUDA_MPM_OPTIMIZATION_CHANGES.md` | CUDA MPM SoA/valid-list changes, phase profile, GPU benchmarks and 64-node limit |
 | `benchmarks/cpu_voronoi/` | reproducible CPU Voronoi inputs |
 
-## 10. Maintaining this knowledge
+## 11. Maintaining this knowledge
 
 Maintenance is mandatory, not opportunistic. At the end of every user prompt
 in this repository, evaluate whether the prompt produced a durable fact. If it

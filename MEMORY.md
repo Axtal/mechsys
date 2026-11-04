@@ -62,6 +62,17 @@ that are easy to get wrong and the shortest path to a trustworthy result.
 - VisIt 3.3.2 CLI attribute names: `ThresholdAttributes` takes
   `lowerBounds`/`upperBounds` **tuples** (not `lowerBound`/`upperBound`), and
   the 3-D view class is `View3DAttributes` (not `View3DAtts`).
+- MPM XDMF: grid is `MPM_points` (`Polyvertex`), attributes `Tag`,
+  `Velocity`, `Pressure`, `Sigma`, `Strain`; use
+  `DefineScalarExpression("speed","magnitude(Velocity)")` and a Pseudocolor
+  plot with `pc.pointSizePixels`.
+- `SaveWindowAttributes.format` must be `sw.PNG` (not the string `"png"`);
+  3.3.2 has no `resolution` member.  A CLI script's `outputDirectory` is not
+  honored, so `os.chdir` or move the PNGs afterwards.
+- Pseudocolor fixed limits: `limitsMode` only accepts 0/1
+  (`OriginalData`/`ActualData`); set `pc.minFlag=1`, `pc.maxFlag=1`,
+  `pc.min/max` to force a scale.  For water pressure use
+  `AddPlot("Pseudocolor","Pressure")` and a `turbo`/diverging table.
 - `SaveWindow` appends a frame number to the requested filename.
 - A nonzero CLI exit after a successful save can be a warning; inspect the
   log and PNGs.
@@ -358,6 +369,43 @@ distance is around `0.01-0.02`, not the large-case `0.05`/128. Always state the
 workload, thread count, Verlet distance, and whether the number is wall time or
 solve time.
 
+### CUDA MPM (GPU path)
+
+- The GPU path was optimized after the CPU work; see
+  [`CUDA_MPM_OPTIMIZATION_CHANGES.md`](CUDA_MPM_OPTIMIZATION_CHANGES.md).
+- Hot node fields (`Mass`, `Mn`, `Fn`, `Vn`, `valid`) are separate SoA device
+  arrays. `NodeCU` remains only for the cold `Vnf`/fixed flags; do not move the
+  hot fields back into it without re-measuring.
+- `cudaParticleToNode` builds the touched-node list itself (`atomicExch` +
+  `atomicAdd`); `cudaResetNode` resets the previous list first; the device
+  counter is ping-ponged. There is no per-step `thrust::fill`, `copy_if`,
+  `distance` or count `cudaMemcpy`.
+- Reset/solve are launched over `Nnodes` blocks and exit early on the device
+  count. A final `cudaDeviceSynchronize()` at the end of `Solve` is required;
+  without it `Solve` reports only the queued-work time.
+- `ParticleCU` holds 64 nodes per particle (125 before). Cubic B-spline needs
+  64; quadratic/GIMP at the usual particle size uses 27. A GIMP particle
+  larger than roughly 1.5 cells needs 125 and must be handled explicitly.
+- Reduced four-frame `Nthread=256` results: `tmpm_cu_01/03/04/05` improved by
+  4/8/9/10%; `tmpm_cu_02` regressed about 1% (short steps, frequent
+  re-upload). The GPU uses atomics, so do not claim bitwise equality; observed
+  final-frame differences were <=2e-5 absolute in `Pressure`/`Sigma` (about
+  1e-8 relative), and `tmpm_cu_02` happened to be bitwise identical.
+- Full `tmpm_cu_04` periodic square duct (`Tf = 200 s`, 216,000 points, 50
+  frames, `Nthread=256`) took 22 min 57 s solve / 1378 s wall.  `Vx_max` is
+  `7.68731e-4 m/s` against analytical `7.36712e-4 m/s` (+4.35%).  With
+  `EOS_LINEAR` and uniform initial density, `Pressure` is exactly 0 in every
+  frame; do not try to make a pressure colormap for this case.  Visualize
+  `Vx = Velocity[0]` on a cross-section instead.
+- Full `tmpm_cu_02` granular column (`Tf = 1.5`, 50 frames, `Nthread=256`)
+  took 30 min 37 s Solve / 1837 s wall. The deposit shape is stable from about
+  0.6 s (`x,z in [-0.126,0.314]`, `y_max=0.075 m`), but at 1.47 s the basal
+  layer still moves: `vmax=1.009 m/s`, `vrms=0.104 m/s`, median `0.017 m/s`.
+  It is not a static equilibrium; fixed ground plus `Gn=0.001` leaves a
+  persistent sliding layer. Do not claim equilibrium from the 1.5 s state.
+- Tried and rejected: packed `NodeHot`, precomputed `Fn/Mass` array, scalar
+  shape cache, split gather/update kernel, register caps, block-size changes.
+
 ## 10. Short verification checklist
 
 After changing `lib/dem/*`:
@@ -377,6 +425,50 @@ cd ../tdem
 # (for example 10.0 -> 1.0e-4), build the copy, and run it. The checked-in
 # full test is long; do not treat a shortened run as a full accuracy run.
 ```
+
+After changing `lib/mpm/*`:
+
+```bash
+cd tmpm
+make -j8 tmpm01 tmpm02 tmpm03 tmpm04 tmpm05
+make -j8 tmpm_cu_01 tmpm_cu_02 tmpm_cu_03 tmpm_cu_04 tmpm_cu_05
+cd ../tlbmmpm && make -j8 tlbmmpm01 tlbmmpm02   # also compiles the MPM headers
+```
+
+The MPM cases are large: `tmpm02`/`tmpm05` are about 26,000 particles and
+500,000-580,000 steps, `tmpm03` is about 135,000 particles and 259,000 steps,
+and `tmpm04` is 216,000 particles and 42,400 steps. Smoke-test a copy with a
+reduced grid and `Tf`; keep `tmpm04` at `tf = 200 s`, because its steady state
+is set by viscous diffusion and reducing time hides errors. Reduce only
+`particles_per_diameter` there: at 20 ppd (8,000 particles, 14,200 steps,
+22.9 s CPU wall) `Vx_max` converged to `8.57e-4` vs analytic `7.37e-4`
+(`Rerror = 16.3%`, five cells across the radius). The checked-in 60-ppd case
+(216,000 particles, 96 threads) completed the full `tf = 200 s` in 1932 s wall
+before the CPU optimization and 1676 s after it, and converged to
+`7.68731e-4` vs `7.36712e-4` (`Rerror = 4.35%`).
+
+MPM CPU transfer facts (see `MPM_OPTIMIZATION_CHANGES.md`):
+
+- `Node` is `alignas(64)` with `Mass/Mn/Fn/valid/lck` in the first cache line;
+  preserve that layout when adding node fields or the scatter loses its main
+  gain.
+- `VNodes` is built by first touch during `ParticleToNode`; `Node::valid` is
+  also the "already in VNodes" flag.  A later full-grid scan would be slower.
+- The shape cache (`FillShapeCache3D`) must keep the same multiplication order
+  as `GIMP3D`/`BSpline*3D`; it is bitwise-identical on purpose.
+- `Node::Reset` intentionally does not clear `Vn`/`Sn`.  Do not read them for
+  invalid nodes.
+- Exactness: build the same reduced driver against a copy of pre-change
+  `lib/mpm` headers and compare HDF5 datasets at `Nproc=1`; expected result is
+  bitwise equality.  At 96 threads expect <=1e-13 relative in
+  `PVelocity`/`Sigma` on long runs.
+- Measured 96-thread speedups: `tmpm01` full 92.42 -> 33.77 s (2.74x),
+  20-ppd `tmpm03` 2.03 -> 0.89 s (2.29x), 50-ppd `tmpm03` 0.79 -> 0.40 s
+  (1.98x), full `tmpm04` 1932 -> 1676 s (1.15x).
+- `tmpm04` is dense (5.5 particles per node): its scatter is cache-line
+  ownership bound.  On a short run 32 threads beat 96 (60.6 vs 71.3 s).
+  Eight per-group partial grids gave 60.8 s but regressed sparse cases, so
+  they are not in the library.
 
 Then state separately:
 

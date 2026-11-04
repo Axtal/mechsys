@@ -10,15 +10,17 @@ the handbook is the durable knowledge base for users and agents.
 1. Run `pwd`, `git status`, and inspect the relevant file before editing.
 2. This checkout is `mechsys` at `/home/sergio/mechsys`; `mechsys` is a symlink
    to `lib/`.
-3. **Do not assume `HEAD` is the optimized/correct baseline.** The working tree
-   currently contains uncommitted DEM optimization changes. Never run
-   `git reset`, `git checkout -- .`, or delete generated/uncommitted files
-   without explicit permission.
-4. Read the current optimization reports before changing DEM, CUDA, or LBM-DEM
-   performance code:
+3. **Do not assume `HEAD` is the optimized/correct baseline.** The DEM and
+   CUDA optimization work is committed up to `0d9d696`; `HEAD` also contains
+   the MPM fork merge `74407d4`. The pre-merge tip is branch
+   `backup/pre-mario-merge`. Never run `git reset`, `git checkout -- .`, or
+   delete generated/untracked files without explicit permission.
+4. Read the current optimization reports before changing DEM, CUDA, LBM-DEM or
+   MPM performance code:
    - [`CPU_DEM_OPTIMIZATION_CHANGES.md`](CPU_DEM_OPTIMIZATION_CHANGES.md)
    - [`CUDA_OPTIMIZATION_CHANGES.md`](CUDA_OPTIMIZATION_CHANGES.md)
    - [`REDUCED_TEST_CU_03_PERFORMANCE.md`](REDUCED_TEST_CU_03_PERFORMANCE.md)
+   - [`MPM_OPTIMIZATION_CHANGES.md`](MPM_OPTIMIZATION_CHANGES.md)
 
 ## Memory maintenance (mandatory after every prompt)
 
@@ -72,7 +74,20 @@ make -j8 test_cu_01 test_cu_02 test_cu_03 test_cu_04
 cd /home/sergio/mechsys/tlbmdem
 make -j8 tlbmdem01 tlbmdem02
 make -j8 tlbmdem_cu_01 tlbmdem_cu_02 tlbmdem_cu_03 tlbmdem_cu_04
+
+cd /home/sergio/mechsys/tmpm
+make -j8 tmpm01 tmpm02 tmpm03 tmpm04 tmpm05
+make -j8 tmpm_cu_01 tmpm_cu_02 tmpm_cu_03 tmpm_cu_04 tmpm_cu_05
+
+cd /home/sergio/mechsys/tlbmmpm
+make -j8 tlbmmpm01 tlbmmpm02      # also compiles the MPM headers
 ```
+
+The `tmpm` cases are large (up to 216,000 particles and 580,000 steps). For a
+smoke run, copy the source outside the checkout and reduce the grid and `Tf`;
+`tmpm04` must keep its physical `tf = 200 s` to reach steady state. Measured
+smoke timings and the full benchmark sizes are in `MECHSYS_HANDBOOK.md`,
+section 9.
 
 Typical runs:
 
@@ -177,6 +192,10 @@ the Threshold variable must likewise be `DEM_Faces/Tag` versus `Tag`.
 - For CPU DEM, exactness is checked at `Nproc=1` by comparing **HDF5 datasets**,
   not whole-file MD5. HDF5 container metadata is not deterministic even
   baseline-to-baseline. Expected result is `neq []`.
+- CPU MPM follows the same rule: build the reduced driver against a copy of the
+  pre-change `lib/mpm` headers and compare HDF5 datasets at `Nproc=1`
+  (bitwise).  At `Nproc>1` the node sums can be reordered; a healthy long run
+  differs by <=1e-13 relative in `PVelocity`/`Sigma`.
 - At `Nproc>1`, CPU force accumulation order is thread-order dependent. Small
   last-digit differences are expected, not automatically a regression.
 - CUDA `test_cu_03/04` use `atomicAdd`; the original baseline is itself
@@ -227,7 +246,15 @@ These are easy to break accidentally:
 10. **Clean warnings.** The only expected third-party warning is Blitz
     `tinymat.h(60): warning #191-D`. Do not add new warnings in MechSys code.
 
-11. **Rotation caches are derived state.** `Particle::wrot` and `Qc` are
+11. **MPM hot path.** `Node` is `alignas(64)` with
+    `Mass/Mn/Fn/valid/lck` in the first cache line; `VNodes` is built by first
+    touch inside `ParticleToNode`; `Node::Reset` deliberately leaves `Vn`/`Sn`
+    alone; and `FillShapeCache3D` must keep the same multiplication order as
+    `GIMP3D`/`BSpline*3D`.  Changing any of these breaks either the speedup or
+    the `Nproc=1` bitwise exactness.  See
+    [`MPM_OPTIMIZATION_CHANGES.md`](MPM_OPTIMIZATION_CHANGES.md).
+
+12. **Rotation caches are derived state.** `Particle::wrot` and `Qc` are
     refreshed by `CalcProps`, `InitializeVelocity`, `Rotate`,
     `Domain::UpdateContacts`, and after a user `Setup` callback. The CUDA
     upload copies these fields; `DnloadParticle` copies them back. A custom
@@ -235,6 +262,16 @@ These are easy to break accidentally:
     code assigns `Q` or `w` directly and then calls an interaction force
     without going through the normal paths, call `Particle::UpdateRotCache()`
     first.
+
+13. **CUDA MPM hot path.** Hot node fields are SoA arrays
+    (`pMass/pMn/pFn/pVn/pValid`); the scatter builds the touched-node list
+    with `atomicExch` + `atomicAdd`, the previous list is reset first, and the
+    counter is ping-ponged. Reset/solve launch over `Nnodes` and exit early on
+    the device count. Keep the final `cudaDeviceSynchronize()` in `Solve`.
+    `ParticleCU` now holds 64 nodes per particle (cubic B-spline limit);
+    quadratic/GIMP normally use 27. GPU sums use atomics, so never promise
+    bitwise equality. See
+    [`CUDA_MPM_OPTIMIZATION_CHANGES.md`](CUDA_MPM_OPTIMIZATION_CHANGES.md).
 
 ## Performance rules
 

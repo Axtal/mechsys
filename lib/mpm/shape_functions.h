@@ -223,6 +223,38 @@ inline size_t PeriodicNodeIndex(int n, size_t nmax)
     return (size_t)((m<0) ? m + (int)nmax : m);
 }
 
+
+// Precomputed separable 1-D shape data for one particle.  The 3-D values are
+// formed with exactly the same multiplication order as GIMP3D/BSpline*3D, so
+// the cached path is bitwise identical to the direct one.
+struct ShapeCache1D
+{
+    double w[8];
+    double g[8];
+};
+
+inline bool FillShapeCache3D(int ShapeFunction, Vec3_t const & x, Vec3_t const & xlow,
+                             double lx, Vec3_t const & lp,
+                             int const nlow[3], int const nhigh[3], ShapeCache1D c[3])
+{
+    for (int d=0; d<3; d++)
+    {
+        int span = nhigh[d]-nlow[d]+1;
+        if (span<0 || span>8) return false;
+        for (int k=0; k<span; k++)
+        {
+            double xc = (nlow[d]+k)*lx + xlow(d);
+            if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)
+                BSplineQuadratic(x(d),xc,lx,c[d].w[k],c[d].g[k]);
+            else if (ShapeFunction==SHAPE_BSPLINE_CUBIC)
+                BSplineCubic(x(d),xc,lx,c[d].w[k],c[d].g[k]);
+            else
+                GIMP(x(d),xc,lx,lp(d),c[d].w[k],c[d].g[k]);
+        }
+    }
+    return true;
+}
+
 void MPMShapeFunction3D(int ShapeFunction, Vec3_t const & x, Vec3_t const & xc, double lx, Vec3_t const & lp, double & n, Vec3_t & gn)
 {
     if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)

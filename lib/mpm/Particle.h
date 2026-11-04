@@ -728,9 +728,9 @@ struct ParticleCU
     real3  Dx;              ///< Size of the particle for GIMP
     bool   vxf, vyf, vzf;   ///< Fixed components of velocity
     size_t Pnodes = 0;      ///< number of nodes interacting with the particle
-    size_t Nodes[125];      ///< Array of node indexes relevant to this particle
-    real   Sfunc[125];      ///< Relevant values of the shape function
-    real3  GSf  [125];      ///< Relevant values of the shape function gradient
+    size_t Nodes[64];       ///< Node indexes (64 = 4^3, enough for cubic B-spline; quadratic/GIMP use <=4 per dim)
+    real   Sfunc[64];       ///< Shape function values
+    real3  GSf  [64];       ///< Shape function gradients
 
     int    Constitutive;    ///< 0=Elastic, 1=DruckerPrager, 2=BuiDruckerPrager, 3=Hypoplastic, 4=Newtonian fluid, 5=mu(I)
     //Data for solid properties
