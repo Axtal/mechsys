@@ -33,6 +33,10 @@ int main(int argc, char **argv) try
     if (argc>=2) Nproc      =atoi(argv[1]);
     if (argc>=3) dom.Alpha  =atof(argv[2]);
     if (argc>=4) dom.Nthread=atoi(argv[3]);
+    double Tf = 10.0;        // final time
+    if (argc>=5) Tf         =atof(argv[4]);
+    if (argc>=6) dom.UseVelocityVerlet=atoi(argv[5])!=0;
+    printf("DEM_BENCHMARK_INTEGRATOR velocity_verlet=%d\n",int(dom.UseVelocityVerlet));
     //dom.Alpha = 100.0;
     //dom.Beta  = 4.0;
     dom.AddVoroPack (-1, 0.1, 10.0,10.0,20.0, 10,10,20, 1.0, false, true, 1000, 0.8);
@@ -58,7 +62,6 @@ int main(int argc, char **argv) try
     B.Set(-2,"Gn Gt Kn Kt Mu",-0.2,0.0,1.0e7,5.0e6,mu);
     dom.SetProps(B);
 
-    double Tf = 10.0;
     dom.Solve(/*final time*/Tf,/*time step*/dt,/*Output step*/Tf/100,NULL,NULL,/*file key*/"test_cu_03",/*Render video?*/2,Nproc);
 
     return 0;

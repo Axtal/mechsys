@@ -54,6 +54,22 @@ public:
     // Methods
     virtual bool UpdateContacts   (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0) =0;    ///< Update contacts by verlet algorithm
     virtual bool CalcForce        (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0) =0; ///< Calculates the contact force between particles
+    // Keep the original virtual extension point: old four-argument overrides
+    // must still receive solver calls when sphere options are selected.
+    bool CalcForce(double dt, Vec3_t const & Per, size_t iter, size_t contactlaw,
+                   size_t mode, bool cutoff=false, bool onset=false)
+    {
+        SphereOptions const previous = sphereOptions;
+        sphereOptions = SphereOptions(mode,cutoff,onset);
+        try {
+            bool const result = CalcForce(dt,Per,iter,contactlaw);
+            sphereOptions = previous;
+            return result;
+        } catch (...) {
+            sphereOptions = previous;
+            throw;
+        }
+    }
     virtual void UpdateParameters (size_t contactlaw=0) =0;                ///< Update the parameters
 
     // Data
@@ -65,11 +81,20 @@ public:
     Vec3_t         F2;        ///< Provisional force  for particle 2
     Vec3_t         T1;        ///< Provisional torque for particle 1
     Vec3_t         T2;        ///< Provisional torque for particle 2
+protected:
+    struct SphereOptions {
+        size_t mode;
+        bool cutoff, onset;
+        SphereOptions(size_t m=0,bool c=false,bool o=false):mode(m),cutoff(c),onset(o) {}
+    };
+    SphereOptions sphereOptions;
 };
 
 class CInteracton: public Interacton // Interacton for collision
 {
 public:
+    using Interacton::CalcForce;
+
     // Constructor
     CInteracton (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     CInteracton () {};
@@ -90,12 +115,16 @@ public:
     double         Epot;      ///< Potential elastic energy
     double         dEvis;     ///< Energy dissipated in viscosity at time step
     double         dEfric;    ///< Energy dissipated by friction at time step
-    size_t         Nc;        ///< Number of contacts
+    size_t         Nc = 0;        ///< Number of contacts
+    double NormalOverlap = 0.0; ///< Maximum active feature overlap for this particle pair
     size_t         Nsc;       ///< Number of sliding contacts
     size_t         Nr;        ///< Number of rolling contacts (only for spheres)
     Vec3_t         Fn;        ///< Normal force between elements
     Vec3_t         Fnet;      ///< Net normal force
     Vec3_t         Ftnet;     ///< Net tangential force
+    Vec3_t         Fndpot;     ///< Dashpot forces (normal)
+    Vec3_t         Ftdpot;     ///< Dashpot forces (tangential)
+    Vec3_t         Fther;    // thermostat forces
     //Vec3_t         Xc;        ///< Net Position of the contact
     Vec3_t         Branch;    ///< Branch vector
     ListContacts_t Lee;       ///< List of edge-edge contacts 
@@ -129,6 +158,8 @@ protected:
 class CInteractonSphere: public CInteracton // Collision interacton for spheres
 {
 public:
+    using CInteracton::CalcForce;
+
     // Methods 
     CInteractonSphere (Particle * Pt1, Particle * Pt2, size_t contaclaw=0); ///< Constructor requires pointers to both particles
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);                 ///< Update contacts by verlet algorithm
@@ -139,24 +170,29 @@ public:
     //ListContacts_t Lvv;                            ///< List of edge-edge contacts 
     //FrictionMap_t  Fdvv;      ///< Static friction displacement for pair of edges
     Vec3_t         Fdvv;                           ///< Static Friction displacement for the vertex vertex pair
-    Vec3_t         Fdr;                            ///< Rolling displacement 
+    Vec3_t         vt_prev;                       // ^ previous increment
+    Vec3_t         Fdr;                            ///< Rolling force history (not displacement)
     double         beta;                           ///< Rolling stiffness coefficient
     double         eta;                            ///< Plastic moment coefficient
     double         Bn;                             ///< Elastic normal constant for the cohesion
     double         Bt;                             ///< Elastic tangential constant for the cohesion
     double         eps;                            ///< Maximun strain before fracture
     bool           cohesion;                       ///< A flag to determine if cohesion must be used for spheres or not
+    bool           InContact;                      ///< Has this sphere pair been overlapping in the previous force step?
+    double         PrevDelta;                      ///< Previous signed overlap for first-contact increment correction
 
 };
 
 class BInteracton: public Interacton // Interacton for cohesion
 {
 public:
+    using Interacton::CalcForce;
+
     BInteracton (Particle * Pt1, Particle * Pt2, size_t Fi1, size_t Fi2); ///< Constructor requires pointers to both particles and alos the indixes of the size they share
 
     // Methods
     bool UpdateContacts (double alpha, Vec3_t const & Per = OrthoSys::O, size_t const iter=0);    ///< Update contacts by verlet algorithm
-    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0); ///< Calculates the contact force between particles
+    bool CalcForce      (double dt = 0.0, Vec3_t const & Per = OrthoSys::O, size_t const iter=0, size_t const contactlaw=0); ///< Calculates the force between particles
     void UpdateParameters (size_t contactlaw=0);              ///< Update the parameters in case they change
 
     // Data
@@ -281,10 +317,14 @@ inline bool CInteracton::CalcForce (double dt, Vec3_t const & Per, size_t const 
     dEvis  = 0.0;
     dEfric = 0.0;
     Nc     = 0;
+    NormalOverlap = 0.0;
     Nsc    = 0;
     Nr     = 0;
     Fnet   = OrthoSys::O;
     Ftnet  = OrthoSys::O;
+    Fndpot = OrthoSys::O;
+    Ftdpot = OrthoSys::O;
+    Fther  = OrthoSys::O;
     //Xc     = OrthoSys::O;
     F1     = OrthoSys::O;
     F2     = OrthoSys::O;
@@ -436,6 +476,7 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
 #endif
             // Count a contact
             Nc++;
+            NormalOverlap = std::max(NormalOverlap,delta);
 
             // update force
             Vec3_t n = s/dist;
@@ -471,12 +512,20 @@ inline bool CInteracton::_update_disp_calc_force (FeatureA_T & A, FeatureB_T & B
                 fd = Mu*fnn/Kt*tan;
                 dEfric += Kt*dot(fd,vt)*dt;
             }
-            Ftnet += Kt*fd;
-            Vec3_t F = Fn + Kt*fd + Gn*dot(n,vrel)*n + Gt*vt;
+            Vec3_t Ft_elastic = Kt*fd;
+            Vec3_t Fn_dashpot = Gn*dot(n,vrel)*n;
+            Vec3_t Ft_dashpot = Gt*vt;
+            Vec3_t Fn_total = Fn + Fn_dashpot;
+            if (dot(Fn_total,n)<0.0)
+            {
+                Fn_total = OrthoSys::O;
+                Fn_dashpot = -Fn;
+            }
+            Ftnet += Ft_elastic;
+            Fndpot += Fn_dashpot;
+            Ftdpot += Ft_dashpot;
+            Vec3_t F = Fn_total + Ft_elastic + Ft_dashpot;
 
-
-
-            if (dot(F,n)<0) F-=dot(F,n)*n;
             //P1->F    += -F;
             //P2->F    +=  F;
             //P1->Comp += norm(Fn);
@@ -561,7 +610,14 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2, siz
         {
             if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
             Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-            Gt = 0.0;
+            // Convert Gt only when it is supplied as a tangential restitution
+            // coefficient. Gt == 0 must remain zero: log(-0) produces an
+            // indeterminate damping coefficient and poisons the contact force.
+            if (Gt < 0.0)
+            {
+                if (fabs(Gt)>1.0) throw new Fatal("CInteractonSphere the tangential restitution coefficient is greater than 1");
+                Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            }
         }
         Gn *= me;
         Gt *= me;
@@ -613,11 +669,14 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2, siz
     }
     
     Nc = 0;
+    NormalOverlap = 0.0;
     Nsc = 0;
 
     Epot = 0.0;
     Fdr  = OrthoSys::O;
     Fdvv = OrthoSys::O;
+    InContact = false;
+    PrevDelta = 0.0;
 
     //std::pair<int,int> p;
     //p = std::make_pair(0,0);
@@ -628,14 +687,21 @@ inline CInteractonSphere::CInteractonSphere (Particle * Pt1, Particle * Pt2, siz
 
 inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t const iter, size_t contactlaw)
 {
+    size_t sphereCoulombMode = sphereOptions.mode;
+    bool const sphereTensileCutoff = sphereOptions.cutoff;
+    bool const sphereFirstContactCorrection = sphereOptions.onset;
     Epot   = 0.0;
     dEvis  = 0.0;
     dEfric = 0.0;
     Nc     = 0;
+    NormalOverlap = 0.0;
     Nsc    = 0;
     Nr     = 0;
     Fnet   = OrthoSys::O;
     Ftnet  = OrthoSys::O;
+    Fndpot = OrthoSys::O;
+    Ftdpot = OrthoSys::O;
+    Fther  = OrthoSys::O;
     //Xc     = OrthoSys::O;
     F1     = OrthoSys::O;
     F2     = OrthoSys::O;
@@ -678,8 +744,18 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
     //}
 
     First = false;
+
+    if (delta<=0.0){
+    Fdvv = Vec3_t(0.0, 0.0, 0.0);
+    vt_prev = Vec3_t(0.0, 0.0, 0.0);
+    InContact = false;
+    PrevDelta = delta;
+    }
+
     if (delta>0.0)
     {
+        bool newContact = !InContact;
+        InContact = true;
 #ifdef USE_CHECK_OVERLAP
         if (delta > 0.4*(P1->Props.R+P2->Props.R))
         {
@@ -713,6 +789,7 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
 #endif
         //Count a contact
         Nc++;
+        NormalOverlap = std::max(NormalOverlap,delta);
 
         //update force
         Vec3_t n = -Branch/dist;
@@ -727,33 +804,113 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
         x2 = x2c- xf;
         Vec3_t vrel = -((P2->v-P1->v)+cross(t2,x2)-cross(t1,x1));
         Vec3_t vt = vrel - dot(n,vrel)*n;
+        double dtTangential = dt;
+        if (sphereFirstContactCorrection && newContact && PrevDelta<0.0 && delta>PrevDelta)
+        {
+            double activationFraction = delta/(delta-PrevDelta);
+            if (activationFraction < 0.0) activationFraction = 0.0;
+            if (activationFraction > 1.0) activationFraction = 1.0;
+            dtTangential *= activationFraction;
+        }
         Vec3_t F  = OrthoSys::O;
         Vec3_t Ft = OrthoSys::O;
-        if (contactlaw==0)
-        {
-            Fn  = Kn*delta*n;
-            
-            Fnet += Fn;
-            Fdvv += vt*dt;
-            Fdvv -= dot(Fdvv,n)*n;
-            Vec3_t tan = Fdvv;
-            if (norm(tan)>0.0) tan/=norm(tan);
-            if (norm(Fdvv)>Mu*norm(Fn)/Kt)
-            {
-                 //Count a sliding contact
-                Nsc++;
-                Fdvv = Mu*norm(Fn)/Kt*tan;
-                dEfric += Kt*dot(Fdvv,vt)*dt;
-            }
-            Ftnet += Kt*Fdvv;
 
-            //Calculating the rolling resistance torque
+        if (contactlaw == 0)
+        {
+            if (sphereCoulombMode > 3) sphereCoulombMode = 0; // if wrong, fall back on the default behaviour
+
+            Fn = Kn*delta*n;
+            Vec3_t Fn_dashpot = Gn*dot(n,vrel)*n;
+            Vec3_t Fn_total = Fn + Fn_dashpot;
+
+            if (sphereTensileCutoff && dot(Fn_total,n)<0.0) // tensile cutoff (dashpot fn becomes the difference)
+            {
+                Fn_total = OrthoSys::O;
+                Fn_dashpot = -Fn;
+            }
+
+            Fnet += Fn;
+            Fndpot += Fn_dashpot;
+
+            Fdvv += vt*dtTangential;
+            Fdvv -= dot(Fdvv,n)*n;
+            Vec3_t Fdvv_trial = Fdvv;
+            vt_prev = vt;
+
+            Vec3_t Ft_elastic = Kt*Fdvv;
+            Vec3_t Ft_dashpot = Gt*vt;
+            Vec3_t Ft_total = Ft_elastic + Ft_dashpot;
+
+            // Coulomb limit. Modes 0 and 2 limit on the elastic normal force;
+            // modes 1 (LAMMPS) and 3 (Yade) on the total normal force, which
+            // includes the normal dashpot.
+            double friction_limit = Mu*norm(Fn);
+            if (sphereCoulombMode == 1 || sphereCoulombMode == 3)
+            {
+                friction_limit = Mu*norm(Fn_total);
+            }
+
+            // Three independent choices; the modes are combinations of them.
+            //
+            //  trigger  : mode 1 tests the total tangential force, modes 0/2/3
+            //             test the elastic part (mode 3 still uses mu*|Fn_total|
+            //             as its threshold).
+            //  cap      : modes 1 and 3 cap the total and recover the elastic
+            //             history as cap minus dashpot; modes 0 and 2 cap the
+            //             elastic part directly.
+            //  dashpot  : mode 2 (PFC) alone removes the tangential dashpot
+            //             while sliding.
+            //
+            // Modes 1 and 3 therefore apply the same sliding force and differ
+            // only in what triggers them.
+            bool const triggerOnElastic = sphereCoulombMode != 1;
+            bool const capTotal = sphereCoulombMode == 1 || sphereCoulombMode == 3;
+
+            bool sliding = false;
+            bool tangentialDashpotApplied = true;
+            Vec3_t Fdvv_new = Fdvv_trial;
+
+            double const triggerNorm = triggerOnElastic ? norm(Ft_elastic) : norm(Ft_total);
+            if (triggerNorm > friction_limit)
+            {
+                sliding = true;
+                Nsc++;
+                if (capTotal && norm(Ft_total) > 0.0)
+                {
+                    Vec3_t const Ft_cap = friction_limit*Ft_total/norm(Ft_total);
+                    Ft_elastic = Ft_cap - Ft_dashpot;
+                    Ft_total = Ft_cap;
+                }
+                else if (norm(Ft_elastic) > 0.0)
+                {
+                    Ft_elastic = friction_limit*Ft_elastic/norm(Ft_elastic);
+                    Ft_total = Ft_elastic + Ft_dashpot;
+                }
+                Fdvv_new = Kt>0.0 ? Ft_elastic/Kt : OrthoSys::O;
+                if (sphereCoulombMode == 2)
+                {
+                    Ft_dashpot = OrthoSys::O;
+                    Ft_total = Ft_elastic;
+                    tangentialDashpotApplied = false;
+                }
+            }
+            if (sliding)
+            {
+                Vec3_t plastic_disp = Fdvv_trial - Fdvv_new;
+                dEfric += friction_limit*norm(plastic_disp);
+            }
+            Fdvv = Fdvv_new;
+
+            Ftnet += Ft_elastic;
+            Ftdpot += Ft_dashpot;
+            Epot += 0.5*Kn*delta*delta + (Kt>0.0 ? 0.5*dot(Ft_elastic,Ft_elastic)/Kt : 0.0);
+
             double Kr = beta*Kt;
             Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
             Fdr += Kr*Vr*dt;
             Fdr -= dot(Fdr,n)*n;
-            
-            tan = Fdr;
+
+            Vec3_t tan = Fdr;
             if (norm(tan)>0.0) tan/=norm(tan);
             if (norm(Fdr)>eta*Mu*norm(Fn))
             {
@@ -762,35 +919,96 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             }
 
             Ft = -Fdr;
-            
-            F = Fn + Kt*Fdvv + Gn*dot(n,vrel)*n + Gt*vt;
-            dEvis += (Gn*dot(vrel-vt,vrel-vt)+Gt*dot(vt,vt))*dt;
+            F = Fn_total + Ft_total;
+
+            double dEvis_tangential = tangentialDashpotApplied ? Gt*dot(vt,vt)*dt : 0.0;
+            dEvis += Gn*dot(vrel-vt,vrel-vt)*dt + dEvis_tangential;
         }
         else if (contactlaw==1)
         {
-            Fn  = Kn*sqrt(delta)*delta*n;
+            if (sphereCoulombMode > 3) sphereCoulombMode = 0;
+            const double sqrtDelta = sqrt(delta);
+            const double tangentialStiffness = Kt*sqrtDelta;
+            const double normalDamping = Gn*sqrt(sqrtDelta);
+            const double tangentialDamping = Gt*sqrt(sqrtDelta);
 
-            Fnet += Fn;
-            Fdvv += vt*dt;
-            Fdvv -= dot(Fdvv,n)*n;
-            Vec3_t tan = Fdvv;
-            if (norm(tan)>0.0) tan/=norm(tan);
-            if (norm(Fdvv)>Mu*norm(Fn)/(Kt*sqrt(delta)))
+            Fn = Kn*sqrtDelta*delta*n;
+            Vec3_t Fn_dashpot = normalDamping*dot(n,vrel)*n;
+            Vec3_t Fn_total = Fn + Fn_dashpot;
+            if (sphereTensileCutoff && dot(Fn_total,n)<0.0)
             {
-                 //Count a sliding contact
-                Nsc++;
-                Fdvv = Mu*norm(Fn)/(Kt*sqrt(delta))*tan;
-                dEfric += Kt*sqrt(delta)*dot(Fdvv,vt)*dt;
+                Fn_total = OrthoSys::O;
+                Fn_dashpot = -Fn;
             }
-            Ftnet += Kt*sqrt(delta)*Fdvv;
+            Fnet += Fn;
+            Fndpot += Fn_dashpot;
 
-            //Calculating the rolling resistance torque
-            double Kr = beta*Kt*sqrt(delta);
+            Fdvv += vt*dtTangential;
+            Fdvv -= dot(Fdvv,n)*n;
+            Vec3_t Fdvv_trial = Fdvv;
+            vt_prev = vt;
+
+            Vec3_t Ft_elastic = tangentialStiffness*Fdvv;
+            Vec3_t Ft_dashpot = tangentialDamping*vt;
+            Vec3_t Ft_total = Ft_elastic + Ft_dashpot;
+            // Same four modes as the linear law: 0 and 2 limit on the elastic
+            // normal force, 1 (LAMMPS) and 3 (Yade) on the total normal force;
+            // only mode 1 caps the total tangential force, and only mode 0 keeps
+            // the tangential dashpot while sliding.
+            double friction_limit = Mu*norm(Fn);
+            if (sphereCoulombMode == 1 || sphereCoulombMode == 3)
+                friction_limit = Mu*norm(Fn_total);
+
+            // Same three choices as the linear law and the same mode mapping;
+            // see the comment there.
+            bool const triggerOnElastic = sphereCoulombMode != 1;
+            bool const capTotal = sphereCoulombMode == 1 || sphereCoulombMode == 3;
+
+            bool sliding = false;
+            bool tangentialDashpotApplied = true;
+            Vec3_t Fdvv_new = Fdvv_trial;
+
+            double const triggerNorm = triggerOnElastic ? norm(Ft_elastic) : norm(Ft_total);
+            if (triggerNorm > friction_limit)
+            {
+                sliding = true;
+                Nsc++;
+                if (capTotal && norm(Ft_total) > 0.0)
+                {
+                    Vec3_t const Ft_cap = friction_limit*Ft_total/norm(Ft_total);
+                    Ft_elastic = Ft_cap - Ft_dashpot;
+                    Ft_total = Ft_cap;
+                }
+                else if (norm(Ft_elastic) > 0.0)
+                {
+                    Ft_elastic = friction_limit*Ft_elastic/norm(Ft_elastic);
+                    Ft_total = Ft_elastic + Ft_dashpot;
+                }
+                Fdvv_new = tangentialStiffness>0.0 ? Ft_elastic/tangentialStiffness : OrthoSys::O;
+                if (sphereCoulombMode == 2)
+                {
+                    Ft_dashpot = OrthoSys::O;
+                    Ft_total = Ft_elastic;
+                    tangentialDashpotApplied = false;
+                }
+            }
+            if (sliding)
+            {
+                Vec3_t plastic_disp = Fdvv_trial - Fdvv_new;
+                dEfric += friction_limit*norm(plastic_disp);
+            }
+            Fdvv = Fdvv_new;
+            Ftnet += Ft_elastic;
+            Ftdpot += Ft_dashpot;
+            Epot += 0.4*Kn*delta*delta*sqrtDelta
+                    + (tangentialStiffness>0.0
+                       ? 0.5*dot(Ft_elastic,Ft_elastic)/tangentialStiffness : 0.0);
+
+            double Kr = beta*tangentialStiffness;
             Vec3_t Vr = P1->Props.R*P2->Props.R*cross(Vec3_t(t1 - t2),n)/(P1->Props.R+P2->Props.R);
             Fdr += Kr*Vr*dt;
             Fdr -= dot(Fdr,n)*n;
-            
-            tan = Fdr;
+            Vec3_t tan = Fdr;
             if (norm(tan)>0.0) tan/=norm(tan);
             if (norm(Fdr)>eta*Mu*norm(Fn))
             {
@@ -799,9 +1017,10 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             }
 
             Ft = -Fdr;
-            
-            F = Fn + Kt*sqrt(delta)*Fdvv + Gn*sqrt(sqrt(delta))*dot(n,vrel)*n + Gt*sqrt(sqrt(delta))*vt;
-            dEvis += (Gn*sqrt(sqrt(delta))*dot(vrel-vt,vrel-vt)+Gt*sqrt(sqrt(delta))*dot(vt,vt))*dt;
+            F = Fn_total + Ft_total;
+            double dEvis_tangential = tangentialDashpotApplied
+                ? tangentialDamping*dot(vt,vt)*dt : 0.0;
+            dEvis += normalDamping*dot(vrel-vt,vrel-vt)*dt + dEvis_tangential;
         }
         
 
@@ -820,6 +1039,7 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
         T2 += T;
 
         Fn        = Fdr;
+        PrevDelta = delta;
     }
 
     //If there is at least a contact, increase the coordination number of the particles
@@ -855,7 +1075,14 @@ inline void CInteractonSphere::UpdateParameters (size_t contactlaw)
         {
             if (fabs(Gn)>1.0) throw new Fatal("CInteractonSphere the restitution coefficient is greater than 1");
             Gn = 2.0*sqrt((pow(log(-Gn),2.0)*(Kn/me))/(M_PI*M_PI+pow(log(-Gn),2.0)));
-            Gt = 0.0;
+            // Convert Gt only when it is supplied as a tangential restitution
+            // coefficient. Gt == 0 must remain zero: log(-0) produces an
+            // indeterminate damping coefficient and poisons the contact force.
+            if (Gt < 0.0)
+            {
+                if (fabs(Gt)>1.0) throw new Fatal("CInteractonSphere the tangential restitution coefficient is greater than 1");
+                Gt = 2.0*sqrt(2.0/7.0 * (pow(log(-Gt),2.0)*(Kt/me))/(M_PI*M_PI+pow(log(-Gt),2.0)));
+            }
         }
         Gn *= me;
         Gt *= me;
@@ -894,6 +1121,14 @@ inline void CInteractonSphere::UpdateParameters (size_t contactlaw)
     Bn   = 2*ReducedValue(P1->Props.Bn,P2->Props.Bn);
     Bt   = 2*ReducedValue(P1->Props.Bt,P2->Props.Bt);
     eps  = 2*ReducedValue(P1->Props.eps,P2->Props.eps);
+}
+
+/// Include geometric contacts even at zero force, and force-only interactions.
+inline bool HasContactOutput(CInteracton const & c)
+{
+    auto nonzero=[](Vec3_t const &v) { return v(0)!=0.0 || v(1)!=0.0 || v(2)!=0.0; };
+    return c.Nc>0 || nonzero(c.Fnet) || nonzero(c.Ftnet)
+        || nonzero(c.Fndpot) || nonzero(c.Ftdpot) || nonzero(c.Fther);
 }
 
 //Cohesion interacton
@@ -1090,10 +1325,19 @@ struct InteractonCU
 
 struct ComInteractonCU
 {
+    unsigned int Nc;          ///< Active overlapping features
+    real NormalOverlap;       ///< Maximum active feature overlap
     size_t         I1;        ///< Index of the first particle
     size_t         I2;        ///< Index of the second particle
     real3          Fnnet;     ///< Normal force between particles
     real3          Ftnet;     ///< Net tangential force
+    real3          Fndpot;     // dashpot forces (normal)
+    real3          Ftdpot;     // dashpot forces (normal)
+    real3          Fther;       // thermostat forces
+    real           Epot;       ///< Elastic potential energy
+    real           dEvis;      ///< Viscous energy dissipated during the force step
+    real           dEfric;     ///< Frictional energy dissipated during the force step
+
 };
 
 struct DynInteractonCU
@@ -1107,6 +1351,8 @@ struct DynInteractonCU
     real3          Fn;        ///< Normal force between elements
     real3          Ft;        ///< Net tangential force
     real3          Fr;        ///< Rolling resistance tangential force
+    real           PrevDelta; ///< Previous signed overlap for first-contact increment correction
+    bool           InContact; ///< Was this interaction overlapping in the previous force step?
 };
 
 #endif

@@ -17,6 +17,9 @@
 ########################################################################
 
 SET(EXES
+  test_2spheres
+  PID_v2
+  TX_PID_periodic
   nonconvex
   ttt
   test_periodic
@@ -37,11 +40,26 @@ SET(EXES
 )
 
 SET(CUDAPROGS
+    test_2spheres_gpu
     test_cu_01
     test_cu_02
     test_cu_03
     test_cu_04
 )
+
+# GPU build of the periodic PID driver: same base name as the CPU driver
+# (TX_PID_periodic.cu), so the executable is suffixed with _gpu.
+ADD_EXECUTABLE        (TX_PID_periodic_gpu "TX_PID_periodic.cu")
+TARGET_LINK_LIBRARIES (TX_PID_periodic_gpu ${CUDA_LIBRARIES})
+SET_TARGET_PROPERTIES (TX_PID_periodic_gpu PROPERTIES COMPILE_FLAGS "${FLAGS} -DUSE_CUDA" LINK_FLAGS "${LFLAGS}")
+IF(NOT MECHSYS_CUDA_ARCH_VIA_FLAGS)
+    SET_TARGET_PROPERTIES (TX_PID_periodic_gpu PROPERTIES CUDA_ARCHITECTURES "${MECHSYS_CUDA_ARCH}")
+ENDIF()
+
+# Constant-volume Lees-Edwards shearbox: a production-style example driven
+# entirely through Domain's function pointers (pForceVV, pReset, pExtraParams)
+# without needing any Lees-Edwards support inside the library itself.
+LIST(APPEND CUDAPROGS shearbox_LE_const_vol)
 
 FOREACH(var ${EXES})
     ADD_EXECUTABLE        (${var} "${var}.cpp")

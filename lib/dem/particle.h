@@ -23,6 +23,7 @@
 #include <iostream>
 #include <fstream>
 #include <limits>
+#include <cstdint>
 #ifdef USE_OMP
     #include <omp.h>
 #endif
@@ -111,12 +112,25 @@ public:
     void   FixVeloc           (double vx=0.0, double vy=0.0, double vz=0.0);                  ///< Fix all velocities
     //bool   IsFree             () {return !vxf&&!vyf&&!vzf&&!wxf&&!wyf&&!wzf;};              ///< Ask if the particle has any constrain in its movement
     bool   IsFree             () {return (!vxf&&!vyf&&!vzf&&!wxf&&!wyf&&!wzf)||FixFree;};                       ///< Ask if the particle has any constrain in its movement
-#ifdef USE_OMP
+
+    // Translational velocity-Verlet
+void UpdateVelocityHalf(double dt);        // v_half = v + (F/m)*dt/2
+void TranslateVelVerlet(double dt);        // x += v_half * dt
+void UpdateVelocityFull(double dt);        // v = v_half + (F_new/m)*dt/2
+void TranslateHalfStep(double dt);
+// Rotational velocity-Verlet (quaternion-based)
+void UpdateAngularVelocityHalf(double dt); // w_half = w + (Torque/I)*dt/2
+void RotateVelVerlet(double dt);           // q += 0.5*dt*q*w_half, then renormalize
+void UpdateAngularVelocityFull(double dt); // w = w_half + (Torque_new/I)*dt/2
+
+
+    #ifdef USE_OMP
     omp_lock_t      lck;             ///< to protect variables in multithreading
 #endif
 
     int             Tag;             ///< Tag of the particle
     size_t          Index;           ///< index of the particle in the domain
+    uint64_t        PersistentId = 0;///< Lifetime identity for full-state checkpoints; never a storage index/tag
     int             Cluster;         ///< The number of the cohesive cluster the particle belongs to.
     bool            PropsReady;      ///< Are the properties calculated ready ?
     bool            Eroded;          ///< True if the particle has been eroded
@@ -138,6 +152,13 @@ public:
     Vec3_t          T;               ///< Torque over the particle
     Vec3_t          Tf;              ///< Fixed Torque over the particle
     Vec3_t          I;               ///< Vector containing the principal components of the inertia tensor
+
+    // addition for the velocity verlet
+    Vec3_t  A;     // translational acceleration (current)
+    Vec3_t  Wdot;  // angular acceleration in body frame (current)
+    Vec3_t v_half;   // half-step linear velocity
+    Vec3_t w_half;   // half-step angular velocity
+
     Quaternion_t    Q;               ///< The quaternion representing the rotation
     Vec3_t          wrot;            ///< Angular velocity rotated by the orientation: Rotation(w,Q)
     Quaternion_t    Qc;              ///< Conjugate of the orientation quaternion (used to rotate torques)
@@ -242,6 +263,7 @@ std::ostream & operator<< (std::ostream & os, Particle const & P)
 inline void Particle::init_default_values(int tag, double r, double rho)
 {
     Tag        = tag;
+    PersistentId = 0; // Assigned once by the owning Domain, preserved across reconstruction.
     Cluster    = 0;
     PropsReady = false;
     Eroded     = false;
@@ -254,6 +276,11 @@ inline void Particle::init_default_values(int tag, double r, double rho)
     Qc          = 1.0,0.0,0.0,0.0;
     wrot_source = 0.0,0.0,0.0;
     Qc_source   = 1.0,0.0,0.0,0.0;
+    wa         = 0.0,0.0,0.0;
+    A    = Vec3_t(0.0, 0.0, 0.0);
+    Wdot = Vec3_t(0.0, 0.0, 0.0);
+    v_half = 0.0,0.0,0.0;
+    w_half = 0.0,0.0,0.0;
 
     Props.Kn   = 1.0e4;
     Props.Kt   = 5.0e3;
@@ -666,6 +693,8 @@ inline void Particle::Initialize (size_t i, size_t NCalls)
 inline void Particle::InitializeVelocity (double dt)
 {
     // initialize the particle for the Verlet algorithm
+    v_half = v;   // so that first half-step is consistent
+    w_half = w;
     xb = x-v*dt;
     wb = w;
     Ekin = 0.5*Props.m*dot(v,v);
@@ -674,6 +703,7 @@ inline void Particle::InitializeVelocity (double dt)
     // upload copies these fields instead of recomputing them on the host.
     UpdateRotCache();
 }
+
 
 inline void Particle::Rotate (double dt)
 {
@@ -794,6 +824,101 @@ inline void Particle::Rotate (Quaternion_t & Q,Vec3_t & V)
         Cylinders[i]->UpdatedL();
     }
 }
+
+inline void Particle::TranslateHalfStep(double dt)
+{
+
+    x += v * dt;
+
+    Vec3_t disp = v * dt;
+    for (size_t i = 0; i < Verts.Size(); ++i)
+        *Verts[i] += disp;
+}
+
+inline void Particle::UpdateVelocityHalf(double dt) {
+    Vec3_t Ft = F;
+    if (vxf) Ft(0) = 0.0;
+    if (vyf) Ft(1) = 0.0;
+    if (vzf) Ft(2) = 0.0;
+    Ft -= Props.Gv * Props.m * v;   // damping as in original Translate
+    v_half = v + (Ft / Props.m) * (dt * 0.5);
+}
+
+inline Quaternion_t Exp (Vec3_t const & w, double dt)
+{
+    double theta = norm(w) * dt;
+    if (theta < 1e-12) return Quaternion_t(1.0, 0.0, 0.0, 0.0);
+    Vec3_t axis = w / norm(w);
+    double s = sin(theta * 0.5);
+    double c = cos(theta * 0.5);
+    return Quaternion_t(c, s*axis(0), s*axis(1), s*axis(2));
+}
+
+inline void Particle::UpdateVelocityFull(double dt) {
+    Vec3_t Ft = F;
+    if (vxf) Ft(0) = 0.0;
+    if (vyf) Ft(1) = 0.0;
+    if (vzf) Ft(2) = 0.0;
+    Ft -= Props.Gv * Props.m * v_half;   // use v_half for damping
+    v = v_half + (Ft / Props.m) * (dt * 0.5);
+    Ekin = 0.5*Props.m*dot(v,v);
+}
+
+inline void Particle::TranslateVelVerlet(double dt) {
+    Vec3_t displacement = v_half * dt;
+    x += displacement;
+    xb = x - v * dt;
+    for (size_t i = 0; i < Verts.Size(); ++i)
+        *Verts[i] += displacement;
+}
+
+inline void Particle::UpdateAngularVelocityHalf(double dt) {
+    Vec3_t Tt = T;
+    if (wxf) Tt(0) = 0.0;
+    if (wyf) Tt(1) = 0.0;
+    if (wzf) Tt(2) = 0.0;
+    if (norm(w) > 1.0e-12)
+        Tt -= Props.Gm * Vec3_t(I(0)*w(0), I(1)*w(1), I(2)*w(2));
+    Vec3_t wa;
+    wa(0) = (Tt(0) + (I(1)-I(2)) * w(1) * w(2)) / I(0);
+    wa(1) = (Tt(1) + (I(2)-I(0)) * w(0) * w(2)) / I(1);
+    wa(2) = (Tt(2) + (I(0)-I(1)) * w(0) * w(1)) / I(2);
+    w_half = w + wa * (dt * 0.5);
+}
+
+inline void Particle::UpdateAngularVelocityFull(double dt) {
+    Vec3_t Tt = T;
+    if (wxf) Tt(0) = 0.0;
+    if (wyf) Tt(1) = 0.0;
+    if (wzf) Tt(2) = 0.0;
+    if (norm(w_half) > 1.0e-12)
+        Tt -= Props.Gm * Vec3_t(I(0)*w_half(0), I(1)*w_half(1), I(2)*w_half(2));
+    wa(0) = (Tt(0) + (I(1)-I(2)) * w_half(1) * w_half(2)) / I(0);
+    wa(1) = (Tt(1) + (I(2)-I(0)) * w_half(0) * w_half(2)) / I(1);
+    wa(2) = (Tt(2) + (I(0)-I(1)) * w_half(0) * w_half(1)) / I(2);
+    w = w_half + wa * (dt * 0.5);
+    Erot = 0.5*(I(0)*w(0)*w(0)+I(1)*w(1)*w(1)+I(2)*w(2)*w(2));
+}
+
+inline void Particle::RotateVelVerlet(double dt) {
+    // Build quaternion from half-step angular velocity (body frame)
+    Quaternion_t dq = Exp(w_half,dt);
+    Quaternion_t qnew;
+    QuaternionProduct(Q,dq,qnew);
+    double n = norm(qnew);
+    if (n > 1e-12)
+    {
+        qnew /= n;
+        // Update the world-space geometry as well as the orientation. Blitz
+        // TinyVector multiplication is component-wise, not a quaternion product.
+        Quaternion_t conjugateOld, spatialIncrement;
+        Conjugate(Q,conjugateOld);
+        QuaternionProduct(qnew,conjugateOld,spatialIncrement);
+        if (norm(w_half)>0.0) Rotate(spatialIncrement,x);
+        Q = qnew;
+    }
+}
+
 
 inline void Particle::Translate (double dt)
 {
@@ -1274,6 +1399,8 @@ struct ParticleCU
     real           R;                                               ///< Spheroradious of particle
     real           m;                                               ///< Mass of particle
     real           Dmax;                                            ///< Maximun Diameter
+    real            Gv;                                             // linear velocity damping coefficient (numerical damping, not used)
+    real            Gm;                                             // angular velocity damping coefficient (numerical damping, not used)
     real3          Ff;                                              ///< Fixed Force over the particle
     real3          Flbmf;                                           ///< Fixed Force over the particle by lbm fluid
     real3          T;                                               ///< Torque over the particle
@@ -1285,6 +1412,7 @@ struct ParticleCU
     size_t         Nef;
     size_t         Nfi;
     size_t         Nff;
+
 };
 
 struct DynParticleCU
@@ -1319,6 +1447,8 @@ __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM
     Pcu.R               = Par.Props.R;
     Pcu.m               = Par.Props.m;
     Pcu.Dmax            = Par.Dmax;
+    Pcu.Gv              = Par.Props.Gv;
+    Pcu.Gm              = Par.Props.Gm;
     Pcu.Ff.x            = Par.Ff(0);
     Pcu.Ff.y            = Par.Ff(1);
     Pcu.Ff.z            = Par.Ff(2);
@@ -1403,10 +1533,10 @@ __host__ void DnloadParticle(DEM::DynParticleCU & DPc,DEM::Particle & Par)
     Par.Flbm(0)         = DPc.Flbm.x;
     Par.Flbm(1)         = DPc.Flbm.y;
     Par.Flbm(2)         = DPc.Flbm.z;
+    Par.Q(0)            = DPc.Q.w   ;
     Par.Q(1)            = DPc.Q.x   ;
     Par.Q(2)            = DPc.Q.y   ;
     Par.Q(3)            = DPc.Q.z   ;
-    Par.Q(0)            = DPc.Q.w   ;
     // Copy the device caches back so a later UpLoadDevice can copy them
     // again without recomputing.  The source snapshots make the host cache
     // valid for UpdateRotCacheIfChanged() until w/Q actually change.

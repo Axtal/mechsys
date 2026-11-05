@@ -504,3 +504,9 @@ IF(ALLDIRS)
 ENDIF(ALLDIRS)
 
 
+
+# Small numerical regressions for optional DEM/VV and coupled VV features.
+OPTION(A_WITH_DEM_CONTACT_REGRESSIONS "Build bounded DEM contact and VV regressions" OFF)
+IF(A_WITH_DEM_CONTACT_REGRESSIONS)
+    ADD_SUBDIRECTORY(tests/dem_contact)
+ENDIF()
