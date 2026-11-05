@@ -861,8 +861,8 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             //  dashpot  : mode 2 (PFC) alone removes the tangential dashpot
             //             while sliding.
             //
-            // Modes 1 and 3 therefore apply the same sliding force and differ
-            // only in what triggers them.
+            // Modes 1 and 3 use the same total-force projection when triggered;
+            // neither trigger is stricter for arbitrary spring/dashpot directions.
             bool const triggerOnElastic = sphereCoulombMode != 1;
             bool const capTotal = sphereCoulombMode == 1 || sphereCoulombMode == 3;
 
@@ -875,11 +875,14 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             {
                 sliding = true;
                 Nsc++;
-                if (capTotal && norm(Ft_total) > 0.0)
+                if (capTotal)
                 {
-                    Vec3_t const Ft_cap = friction_limit*Ft_total/norm(Ft_total);
-                    Ft_elastic = Ft_cap - Ft_dashpot;
-                    Ft_total = Ft_cap;
+                    // Project onto the admissible total-force ball. An elastic
+                    // trigger can fire with a total already inside it, or zero.
+                    double const totalNorm = norm(Ft_total);
+                    if (totalNorm > friction_limit)
+                        Ft_total = friction_limit*Ft_total/totalNorm;
+                    Ft_elastic = Ft_total - Ft_dashpot;
                 }
                 else if (norm(Ft_elastic) > 0.0)
                 {
@@ -953,8 +956,8 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             Vec3_t Ft_total = Ft_elastic + Ft_dashpot;
             // Same four modes as the linear law: 0 and 2 limit on the elastic
             // normal force, 1 (LAMMPS) and 3 (Yade) on the total normal force;
-            // only mode 1 caps the total tangential force, and only mode 0 keeps
-            // the tangential dashpot while sliding.
+            // modes 1 and 3 cap the total tangential force, and mode 2 alone
+            // removes the tangential dashpot while sliding.
             double friction_limit = Mu*norm(Fn);
             if (sphereCoulombMode == 1 || sphereCoulombMode == 3)
                 friction_limit = Mu*norm(Fn_total);
@@ -973,11 +976,14 @@ inline bool CInteractonSphere::CalcForce(double dt, Vec3_t const & Per, size_t c
             {
                 sliding = true;
                 Nsc++;
-                if (capTotal && norm(Ft_total) > 0.0)
+                if (capTotal)
                 {
-                    Vec3_t const Ft_cap = friction_limit*Ft_total/norm(Ft_total);
-                    Ft_elastic = Ft_cap - Ft_dashpot;
-                    Ft_total = Ft_cap;
+                    // Project onto the admissible total-force ball. An elastic
+                    // trigger can fire with a total already inside it, or zero.
+                    double const totalNorm = norm(Ft_total);
+                    if (totalNorm > friction_limit)
+                        Ft_total = friction_limit*Ft_total/totalNorm;
+                    Ft_elastic = Ft_total - Ft_dashpot;
                 }
                 else if (norm(Ft_elastic) > 0.0)
                 {

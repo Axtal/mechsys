@@ -11,8 +11,8 @@ centre (x, y) and the closed-form orbit
 
 which is the classic rolling-sphere result and exists only because the
 sphere's spin couples into the contact through friction. This script turns
-that comparison into a pass/fail gate so the rotational integration path has
-an analytic check rather than a printed table nobody reads.
+that comparison into a pass/fail gate for the rotational contact path.
+The bounded verifier checks one reported endpoint near t=0.1 s.
 
 A tolerance of 1e-3 m separates the two regimes by more than an order of
 magnitude at the default window: with rotation enabled the deviation is

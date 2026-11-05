@@ -28,7 +28,7 @@ from the commit history, because both parts were committed together.
 | Component | Where |
 | --- | --- |
 | Velocity Verlet, translation (half kick, drift, final kick; CPU and CUDA) | `Particle::TranslateHalfStep`, `Particle::TranslateVelVerlet`, `VerletStep1`, `FinalizeVelocity` |
-| Coulomb criterion and its three modes | `CInteractonSphere::CalcForce`, the `sphereCoulombMode` branches and `friction_limit` selection |
+| Coulomb criterion and its four modes | `CInteractonSphere::CalcForce`, the `sphereCoulombMode` branches and `friction_limit` selection |
 | Tensile cutoff | the `sphereTensileCutoff` branch on the elastic-plus-dashpot normal force |
 | Tangential-overlap / first-contact correction | `sphereFirstContactCorrection`, `activationFraction`, `InContact`, `PrevDelta` |
 | Additional contact outputs (`NormalOverlap`, `TangentialOverlap`, `Rolling`, dashpot components, overlap-based row predicate) | `Domain::WriteBF`, `HasContactOutput` in `lib/dem/interacton.h`, the `H5LTmake_dataset_float` calls |
@@ -58,11 +58,10 @@ therefore the parts a reviewer should scrutinise most:
   `x = x0 + vx/wr*sin(wr*t)`, `y = vx/wr - (vx/wr)*cos(wr*t)` with
   `wr = (2/7)*omega`. That solution exists only because the sphere's spin
   couples into the contact through friction, which makes it a sharp test of the
-  rotational integration. Measured over 0.1 s the maximum deviation is
-  `3.2e-05` m with position Verlet and `4.2e-05` m with velocity Verlet, against
-  `3.5e-02` m when rotation is disabled — roughly three orders of magnitude —
-  and `scripts/verify_dem_contribution.py` asserts it for both integrators
-  through `tests/dem_contact/check_turntable.py` against a `1e-3` m tolerance.
+  rotational integration. The bounded verifier runs to approximately 0.1 s
+  and checks the reported endpoint against a `1e-3` m tolerance for both
+  integrators through `tests/dem_contact/check_turntable.py`. This is an
+  analytic endpoint check of rotation acting through contact friction.
   What is still **not** covered: a free spinning body with no contact, so there is
   no direct check of angular-momentum conservation in the absence of torque, and
   the quaternion half kick is exercised only through its effect on the contact.
@@ -82,8 +81,10 @@ whole contribution.
 
 ## Sphere contact controls
 
-These controls apply to linear and Hertz sphere contacts on CPU and CUDA.
-They do not select new polyhedral contact laws.
+These controls apply to linear and Hertz sphere contacts. All four Coulomb
+modes are available on CPU; CUDA supports modes 0 and 1. Tensile cutoff and
+first-contact correction are available on both backends. These settings do not
+select new polyhedral contact laws.
 
 | Domain member | Default | Meaning |
 | --- | --- | --- |
@@ -104,17 +105,19 @@ the choice of trigger:
 | 2 | elastic | elastic | elastic | dropped | PFC, dashpot mode > 2 |
 | 3 | total | elastic | total | kept inside the cap | Yade (legacy) |
 
-**Modes 1 and 3 apply the same sliding force.** Both cap the *total* tangential
-force at `mu*|Fn_total|` and recover the elastic history with the same update,
-`Ft_elastic = Ft_cap - Ft_dashpot`, so the dashpot stays in the decomposition.
-They differ only in what triggers the cap: mode 1 compares the total tangential
-force with the limit, mode 3 compares the elastic part, which is the stricter
-test. In the common sliding regime both trigger and give the same answer; near
-incipient sliding mode 3 can stay elastic while mode 1 is already capping.
+Modes 1 and 3 use the same total-force projection when their respective
+triggers fire. With `L = mu*|Fn_total|` and trial total `T`, the projected force
+is `T` if `|T| <= L`, otherwise `L*T/|T|`. The zero vector stays zero. The
+elastic history is recovered as `Ft_elastic = Ft_projected - Ft_dashpot`.
+This operation never increases the total-force magnitude.
 
-Mode 2 is the strictest of all, because it uses the *elastic* normal force in
-the limit and then removes the dashpot. Mode 0 is the only one that lets the
-total exceed `mu` times a normal force, because its dashpot is never removed.
+Mode 1 triggers on the total tangential force; mode 3 triggers on its elastic
+part. Neither comparison is universally stricter because the spring and
+dashpot vectors can oppose each other. If mode 3 triggers while the total is
+already inside the limit, the total remains unchanged. If its elastic trigger
+does not fire, the total can exceed the limit. Modes 0 and 2 can also exceed a
+total-force threshold while their dashpots are present. Mode 2 removes the
+dashpot only after its elastic sliding trigger fires.
 
 Measured on a single contact with `Kn=100`, `Gn=2`, `Kt=20`, `Gt=3`,
 `Mu=0.5` and a normal approach giving `|Fn_elastic|=10` and
@@ -140,10 +143,11 @@ or 3 while running a different law would be silently wrong. Any value above 3
 falls back to mode 0 everywhere.
 
 The cutoff's reported normal dashpot component includes the clamp adjustment:
-elastic plus dashpot reconstructs the normal force actually applied. In mode
-2 the elastic tangential component can oppose the dashpot; their sum is the
-capped force. The optional onset correction estimates an activation fraction;
-it is not an exact collision-time solver. Energy diagnostics follow the
+elastic plus dashpot reconstructs the normal force actually applied. In modes
+1 and 3 the elastic tangential component can oppose the dashpot; their sum is
+the projected total force when the cap is triggered. The optional onset
+correction estimates an activation fraction; it is not an exact collision-time
+solver. Energy diagnostics follow the
 selected force decomposition. The two-sphere example accepts these settings
 in `tdem/test_2spheres.inp`; its CPU and CUDA targets share one source.
 
@@ -315,6 +319,7 @@ python3 scripts/verify_dem_contribution.py --build build --output fresh-verifica
 The verifier builds the required targets, rejects a build configured for another
 checkout, checks each return code and integrator banner, and records source,
 input and binary hashes with individual logs and a final `SUMMARY.json` verdict.
+
 It runs all bounded regressions, exports, history/restart comparisons, legacy
 save/load, all four CUDA examples in both integration modes, and all four new
 application targets. Default application inputs use documented smaller windows
@@ -322,3 +327,10 @@ or boxes, recorded alongside their hashes; `--full-examples` uses the checked-in
 application configurations. Output directories must be new and existing evidence
 is never deleted. Configure the normal library dependencies beforehand; the
 verifier does not borrow paths from unrelated projects or make timing claims.
+
+The contact regression evaluates 88 CPU linear/Hertz analytic cases and 32
+CPU fast-sphere cases. The CUDA executable repeats these host checks and adds
+44 device contact comparisons for modes 0 and 1. The log labels host and device
+counts separately. Cases include different mode-1/mode-3 trigger outcomes,
+opposing spring and dashpot forces, exact and near cancellation, reversal, and
+two-dimensional tangential directions.
