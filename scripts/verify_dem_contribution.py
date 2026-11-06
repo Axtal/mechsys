@@ -85,9 +85,14 @@ def main():
                      if '=' in line and not line.startswith(('#', '//')))
         if Path(cache.get('CMAKE_HOME_DIRECTORY:INTERNAL', '')).resolve() != root:
             raise RuntimeError('Build was configured for a different source checkout')
+        # A_WITH_TDEM already defaults to ON and only gates the example
+        # executables this script runs; the two regression switches are the
+        # only real opt-ins and default to OFF.
         for option in ['A_WITH_TDEM', 'A_WITH_DEM_CONTACT_REGRESSIONS', 'A_WITH_EXPERIMENTAL_VV_COUPLING']:
             if cache.get(option+':BOOL') != 'ON':
-                raise RuntimeError('Configure '+option+'=ON')
+                raise RuntimeError(
+                    'Configure '+option+'=ON (see docs/dem_velocity_verlet.md); '
+                    'a plain MechSys build leaves the regression switches OFF')
         if args.jobs < 1:
             raise RuntimeError('--jobs must be positive')
         summary['source_head'] = subprocess.check_output(

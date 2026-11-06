@@ -1,51 +1,18 @@
-# DEM integration, sphere contact controls, and contact output
+# List of changes:
 
-`DEM::Domain` retains the legacy integration default. Select mechanical
-velocity Verlet explicitly with `domain.UseVelocityVerlet = true` on CPU or
-CUDA. Translation and body-frame rotation use half kicks, a geometry update,
-and a final kick. Neighbor validity is checked after the drift and before
-contact forces; a CUDA rebuild preserves the current particle state,
-accelerations, and surviving tangential/rolling histories. Initial acceleration
-uses a zero-duration force evaluation, so initialization consumes no contact
-history step. Calculations use
-FP64 when `A_MAKE_USE_GPU_DOUBLE=ON` (the existing build default).
+- Introduced velocity Verlet as integration scheme
+- Added contact outputs (Normal and Tangential Overlap, Rolling, and Dashpot components)
+- Added four mode of Coulomb criterion. The default mode (0) is the Legacy one (i.e. elastic threshold and persistent dashpot), mode 1 applies the threshold on the total force (elastic + dashpot) and updates the tangential overlap to reduce the elastic force so that the sum is equal to the cap. Mode 2 uses an elastic threshold and deactivates the tangential dashpot on sliding (as done by PFC on dashpot mode 2/3). Mode 3 uses an hybrid threshold (elastic in tangential, total in normal direction) and then returns the total tangential force to the threshold (legacy Yade model). 
 
-Upstream's cached feature-force kernels, combined legacy movement kernel,
-block displacement maximum, and build configuration remain available. The
-VV path refreshes the rotation caches before the cached feature kernels run.
-The legacy coupled solver rejects the standalone VV selector instead of
-silently running a different integrator.
+I assume that any 'serious' simulation will use either mode 0 or 1, so only these are implemented in the GPU path to reduce cluttering (and improve efficiency). The latter two are only kept in the CPU path for illustrative purposes.
 
-## Provenance and authorship
+I implemented the translational part of velocity Verlet and the CPU version of the rotational integration. I made a mess with the rotational one on the GPU so I used AI (GLM-5.3 iirc) to fix and test it. Likewise, the Lees-Edwards implementation was first done manually (copying the one in MercuryDPM) and then fixed/improved with AI (my own implementation triggered Verlet list rebuilding at every step).
 
-This contribution mixes work written directly by the author with work written
-with AI assistance. The split is recorded here so a reviewer can weigh the two
-parts appropriately; it is the author's statement and cannot be reconstructed
-from the commit history, because both parts were committed together.
+Because the DEM-LBM coupling was carried out with Position Verlet in mind, the scheme does not work with velocity Verlet. A mix of GLM, Deepseek and Codex was used to implement an implicit coupling with velocity verlet, which has only been tested on a few benchmarks and so it is still tentative/experimental.
 
-**Written by the author directly:**
 
-| Component | Where |
-| --- | --- |
-| Velocity Verlet, translation (half kick, drift, final kick; CPU and CUDA) | `Particle::TranslateHalfStep`, `Particle::TranslateVelVerlet`, `VerletStep1`, `FinalizeVelocity` |
-| Coulomb criterion and its four modes | `CInteractonSphere::CalcForce`, the `sphereCoulombMode` branches and `friction_limit` selection |
-| Tensile cutoff | the `sphereTensileCutoff` branch on the elastic-plus-dashpot normal force |
-| Tangential-overlap / first-contact correction | `sphereFirstContactCorrection`, `activationFraction`, `InContact`, `PrevDelta` |
-| Additional contact outputs (`NormalOverlap`, `TangentialOverlap`, `Rolling`, dashpot components, overlap-based row predicate) | `Domain::WriteBF`, `HasContactOutput` in `lib/dem/interacton.h`, the `H5LTmake_dataset_float` calls |
-
-These define the physics of the feature: the integrator's staging, the friction
-cone, the tensile clamp, the activation fraction and what is exported.
-
-**Written at least partially with AI assistance, then reviewed and validated by
-the author:**
-
-| Component | Where |
-| --- | --- |
-| Velocity Verlet, rotation (quaternion half kick, exponential map, vertex rotation, final kick) | `Particle::UpdateAngularVelocityHalf`, `Particle::RotateVelVerlet`, `Exp_GPU`, `OrientationUpdate`, `FinalizeRotation` |
-| Velocity-Verlet coupling with LBM (experimental `Session` API, momentum exchange, guards) | `lib/lbmdem/experimental/`, `tlbmdem/tlbmdem_cu_benchmark.cu` |
-
-The AI-assisted parts carry the least certainty about their physics and are
-therefore the parts a reviewer should scrutinise most:
+# AI Review:
+The changes are reviewed by a deepseek agent in the following:
 
 - **Rotation.** The registered regressions run with zero angular velocity, so
   `w` stays zero there and the vertex-rotation branch of `OrientationUpdate`,
@@ -75,10 +42,6 @@ therefore the parts a reviewer should scrutinise most:
   only exercised by `tlbmdem/tlbmdem_cu_benchmark --guards`, which is not part
   of the registered regression suite.
 
-Everything, including the AI-assisted parts, was reviewed, tested and accepted
-by the author; the bounded regression results in this document apply to the
-whole contribution.
-
 ## Sphere contact controls
 
 These controls apply to linear and Hertz sphere contacts. All four Coulomb
@@ -91,7 +54,7 @@ select new polyhedral contact laws.
 | `SphereCoulombMode` | `0` | Mode 0, the legacy law: cap on the elastic tangential force using the elastic normal force, tangential dashpot retained permanently. |
 | `SphereCoulombMode = 1` | opt-in | Mode 1, LAMMPS: cap on the total tangential force using the total normal force. |
 | `SphereCoulombMode = 2` | opt-in | Mode 2, PFC with dashpot mode > 2: elastic threshold, tangential dashpot disabled once sliding. |
-| `SphereCoulombMode = 3` | opt-in | Mode 3, Yade's legacy law: `mu` times the total normal force as the threshold, but the *elastic* tangential force is what is compared with it. |
+| `SphereCoulombMode = 3` | opt-in | Mode 3, Yade's legacy law: `mu` times the total normal force as the threshold, compared with the *elastic* tangential force, then the total is projected onto that limit. |
 | `SphereTensileCutoff` | `false` | Clamps a tensile elastic-plus-dashpot normal result to zero. |
 | `SphereFirstContactCorrection` | `false` | Scales the first tangential increment by the fraction of the step spent in contact, interpolating between previous and current signed overlap. |
 
@@ -224,7 +187,7 @@ default with the other `tdem` targets.
 
 | Target | Source / input | Purpose |
 | --- | --- | --- |
-| `PID_v2` | `tdem/PID_v2.cpp`, `tdem/test_pid_v2.inp` | Wall-particle servo that compresses a box to a target pressure and then shears it at constant axial wall velocity. Uses velocity Verlet and Coulomb mode 2. |
+| `PID_v2` | `tdem/PID_v2.cpp`, `tdem/test_pid_v2.inp` | Wall-particle servo that compresses a box to a target pressure and then shears it at constant axial wall velocity. Uses velocity Verlet and Coulomb mode 1. |
 | `TX_PID_periodic` / `TX_PID_periodic_gpu` | `tdem/TX_PID_periodic.{cpp,cu}`, `tdem/test_tx_pid_periodic.inp` | Same PID workflow driven through the periodic cell instead of walls: the stress is measured from the contact virial and the servo resizes `Xmin`/`Xmax`/`Per`. The GPU variant reduces the virial on the device. |
 | `shearbox_LE_const_vol` | `tdem/shearbox_LE_const_vol.cu`, `tdem/test_shearbox_LE.inp` | Constant-volume three-phase periodic shearbox with Lees-Edwards kinematics. It owns its step loop and supplies the Lees-Edwards branch vector, force kernels and reset through `Domain`'s existing function pointers, so no Lees-Edwards support is required inside the library. |
 
@@ -260,10 +223,23 @@ comparison can be shortened without editing the source.
 
 ## Bounded regression checks
 
-Configure the usual dependencies and set
-`A_WITH_DEM_CONTACT_REGRESSIONS=ON` and, for the coupling smoke test,
-`A_WITH_EXPERIMENTAL_VV_COUPLING=ON`. Build the `dem_test_*` targets in
-`tests/dem_contact`, then run:
+Nothing in this contribution needs a build option. A plain
+`cmake -S . -B build` produces the same library, the same examples and all four
+CUDA demos; `A_WITH_TDEM` and `A_MAKE_USE_GPU_DOUBLE` are existing MechSys
+options that already default to `ON`, so passing them changes nothing. The
+regression suite below is separate tooling and is the only opt-in part, so that a
+normal MechSys build does not pay for thirteen extra test binaries:
+
+```sh
+cmake -S . -B build \
+  -DA_WITH_DEM_CONTACT_REGRESSIONS=ON \
+  -DA_WITH_EXPERIMENTAL_VV_COUPLING=ON
+```
+
+`A_WITH_DEM_CONTACT_REGRESSIONS` adds `tests/dem_contact`;
+`A_WITH_EXPERIMENTAL_VV_COUPLING` additionally builds the coupling smoke test
+and `tlbmdem/tlbmdem_cu_benchmark`. Both default to `OFF` and neither changes
+the library. Build the `dem_test_*` targets, then run:
 
 ```sh
 ctest --test-dir build -R '^dem_' --output-on-failure
@@ -310,7 +286,7 @@ retained tangential/rolling force histories during a temporary gap. Rebuilds
 migrate those forces by pair identity; the Hertz case does not convert through
 zero stiffness when separated.
 
-After configuring a build with both regression/coupling options above, run:
+After configuring a build with the two regression options above, run:
 
 ```sh
 python3 scripts/verify_dem_contribution.py --build build --output fresh-verification
