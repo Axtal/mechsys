@@ -65,6 +65,13 @@ int main(int argc, char **argv) try
 {
     UserData dat;
     DEM::Domain dom(&dat);
+    // Optional: <Nproc> <final time> <integrator: 0 position Verlet, 1 velocity Verlet>
+    size_t Nproc = 1;
+    double Tf    = 30.0;
+    if (argc>=2) Nproc = atoi(argv[1]);
+    if (argc>=3) Tf    = atof(argv[2]);
+    if (argc>=4) dom.UseVelocityVerlet = atoi(argv[3])!=0;
+    printf("DEM_BENCHMARK_INTEGRATOR velocity_verlet=%d\n",int(dom.UseVelocityVerlet));
     double dt = 1.0e-5;      // time step
     double g = 980.0;        // gravity acceleration
     double angveltab = 10.0; // angular velocity of the sliding block
@@ -100,7 +107,7 @@ int main(int argc, char **argv) try
 
 
 
-    dom.Solve(/*final time*/30.0,/*time step*/dt,/*Output step*/0.1,NULL,&Report,/*file key*/"test_cu_02",/*Render video?*/2);
+    dom.Solve(/*final time*/Tf,/*time step*/dt,/*Output step*/0.1,NULL,&Report,/*file key*/"test_cu_02",/*Render video?*/2,Nproc);
 
     return 0;
 }

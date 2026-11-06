@@ -2090,6 +2090,29 @@ typedef float4 real4;
 #define make_real4 make_float4
 #endif
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
+// Native atomicAdd(double *, double) is available from compute capability 6.0.
+// Use a CAS loop on older devices (and when nvcc's "native" fallback selects
+// an older virtual architecture).
+static __device__ __inline__ double atomicAdd(double * address, double value)
+{
+    unsigned long long int * address_as_ull =
+        reinterpret_cast<unsigned long long int *>(address);
+    unsigned long long int old = *address_as_ull;
+    unsigned long long int assumed;
+
+    do
+    {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+                        __double_as_longlong(value + __longlong_as_double(assumed)));
+    }
+    while (assumed != old);
+
+    return __longlong_as_double(old);
+}
+#endif
+
 __host__ __device__ __inline__ real dotreal3(real3 const & a, real3 const & b)
 {
     return a.x*b.x+a.y*b.y+a.z*b.z;

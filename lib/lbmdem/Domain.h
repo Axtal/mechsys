@@ -634,6 +634,9 @@ inline void LaunchFusedStreamMacro (size_t Nneigh, size_t Nblk, size_t Nthread, 
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
                           char const * TheFileKey, bool RenderVideo, size_t TheNproc)
 {
+    if (DEMDOM.UseVelocityVerlet || DEMDOM.CheckpointReady)
+        throw new Fatal("LBM-DEM Solve uses legacy integration; use the opt-in experimental benchmark coupling API for supported VV cases. Coupled restart is unsupported");
+
     FileKey.Printf("%s",TheFileKey);
     idx_out = 0;
     Finished = false;
@@ -938,7 +941,8 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         #pragma omp parallel for schedule(static) num_threads(Nproc)
         for (size_t i=0; i<DEMDOM.Interactons.Size(); i++)
         {
-		    if (DEMDOM.Interactons[i]->CalcForce(dt,DEMDOM.Per,iter))
+		    if (DEMDOM.Interactons[i]->CalcForce(dt,DEMDOM.Per,iter,DEMDOM.ContactLaw,
+                    DEMDOM.SphereCoulombMode,DEMDOM.SphereTensileCutoff,DEMDOM.SphereFirstContactCorrection))
             {
                 String f_error(FileKey+"_error");
                 DEMDOM.Save     (f_error.CStr());

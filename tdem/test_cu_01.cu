@@ -28,6 +28,13 @@ int main(int argc, char **argv) try
     DEM::Domain dom;
     double dt = 1.0e-5;     // time step
     double g = 9.8;         // gravity acceleration
+    // Optional: <Nproc> <final time> <integrator: 0 position Verlet, 1 velocity Verlet>
+    size_t Nproc = 1;
+    double Tf    = 10.0;
+    if (argc>=2) Nproc = atoi(argv[1]);
+    if (argc>=3) Tf    = atof(argv[2]);
+    if (argc>=4) dom.UseVelocityVerlet = atoi(argv[3])!=0;
+    printf("DEM_BENCHMARK_INTEGRATOR velocity_verlet=%d\n",int(dom.UseVelocityVerlet));
     double velocity =  10.0; // velocity of the sliding block.
     double inipos = -5.0;   // Initial position in the x axis
     double mu = 0.1;        // friction coefficient
@@ -69,7 +76,7 @@ int main(int argc, char **argv) try
     //dom.AddCube(/*Tag*/-5,/*initial position*/Vec3_t(inipos-1.2,0.0,0.7), /*spheroradius*/0.1,/*side length*/ 1.0,  /*rho*/1.0, /*orientation*/M_PI/4.0,/*axis of orientation*/&OrthoSys::e0);
     //dom.AddPlane(/*Tag*/-6,Vec3_t(0.0,0.0,0.2),0.1,100.0,100.0,1.0,3.0*M_PI/4.0,&OrthoSys::e2);
 
-    dom.Solve(/*final time*/10.0,/*time step*/dt,/*Output step*/0.1,NULL,NULL,/*file key*/"test_cu_01",/*Render video?*/2);
+    dom.Solve(/*final time*/Tf,/*time step*/dt,/*Output step*/0.1,NULL,NULL,/*file key*/"test_cu_01",/*Render video?*/2,Nproc);
 
     double finpos = p->x(0);
     std::cout << "  Observed L = " << finpos - inipos<< " Theoretical L = " << velocity*velocity/(2*mu*g) << "\n";

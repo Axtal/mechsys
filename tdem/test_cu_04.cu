@@ -94,9 +94,12 @@ __global__ void MoveTopPar(size_t * TopPar,real3 * Verts, real3 * Vertso, DEM::P
     real  vel = UC[0].str*(UC[0].ztop-UC[0].zbot)*fmin(10.0*(demaux[0].Time-UC[0].T0)/(UC[0].Tf-UC[0].T0),1.0);
     DPar[ip].v.x  = vel;
     DPar[ip].xb.x = DPar[ip].x.x-vel*demaux[0].dt;
-    DPar[ip].v.z  = UC[0].Vz;
-    real3 trans = make_real3(0.0,0.0,UC[0].Dz);
-    Translate(Verts,Vertso,Par[ip],DPar[ip],trans);
+    // Prescribe the boundary displacement once, through the selected Domain
+    // integrator. For position Verlet this gives xa = 2x - xb = x + Dz; for
+    // velocity Verlet x += v_half*dt = x + Dz. Translating the vertices here as
+    // well would apply Dz twice and would only be correct for one scheme.
+    DPar[ip].v.z  = UC[0].Dz/demaux[0].dt;
+    DPar[ip].xb.z = DPar[ip].x.z-UC[0].Dz;
 }
 
 __global__ void SetupSaw(real3 * Verts, real3 * Vertso, DEM::ParticleCU * Par, DEM::DynParticleCU * DPar, bool * pcrossed, UdCu * UC, DEM::dem_aux const * demaux)
@@ -255,6 +258,8 @@ int main(int argc, char **argv) try
     if (argc>=3) Nproc =atoi(argv[2]);
     if (argc>=4) dthoot=atof(argv[3]);
     if (argc>=5) qin   =atof(argv[4]);
+    bool velocityVerlet = false;
+    if (argc>=6) velocityVerlet = atoi(argv[5])!=0;
     String filekey  (argv[1]);
     String filename (filekey+".inp");
     if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
@@ -336,6 +341,9 @@ int main(int argc, char **argv) try
     size_t cl = 0;
     if (contactlaw=="hertz") cl=1;
     DEM::Domain dom(&dat,cl);
+    // Optional final argument selects the integrator; the default is unchanged.
+    dom.UseVelocityVerlet = velocityVerlet;
+    printf("DEM_BENCHMARK_INTEGRATOR velocity_verlet=%d\n",int(dom.UseVelocityVerlet));
     dom.Alpha=verlet;
     dom.Dilate = true;
     //dom.Nthread = 128;

@@ -96,6 +96,21 @@ inline void RotationMatrix (Quaternion_t const & B, Mat3_t & C)
 
 #ifdef USE_CUDA
 //////////////////////////////// CUDA IMPLEMENTATION /////////////////////////////
+__host__ __device__ __inline__ real QScalar(real4 const & Q)
+{
+    return Q.w;
+}
+
+__host__ __device__ __inline__ real3 QVector(real4 const & Q)
+{
+    return make_real3(Q.x,Q.y,Q.z);
+}
+
+__host__ __device__ __inline__ real4 MakeQuat(real Scalar, real3 const & V)
+{
+    return make_real4(V.x,V.y,V.z,Scalar);
+}
+
 __host__ __device__ void NormalizeRotation (real Theta, real3 const & Axis, real4 & C)
 {
     //if (norm(Axis)<1.0e-12) throw new Fatal("Quaternion: the norm of the axis is too small, please chose a different one");
@@ -116,17 +131,12 @@ __host__ __device__ void Conjugate (real4 const & A, real4 & C)
 
 __host__ __device__ void GetVector (real4 const & A, real3 & C)
 {
-    C.x = A.x;
-    C.y = A.y;
-    C.z = A.z;
+    C = QVector(A);
 }
 
 __host__ __device__ void SetQuaternion (real Scalar, real3 const & A, real4 & C)
 {
-    C.x = A.x;
-    C.y = A.y;
-    C.z = A.z;
-    C.w = Scalar;
+    C = MakeQuat(Scalar,A);
 }
 
 __host__ __device__ void QuaternionProduct (real4 const & A, real4 const & B, real4 & C)
@@ -134,8 +144,8 @@ __host__ __device__ void QuaternionProduct (real4 const & A, real4 const & B, re
     real3 t1,t2;
     GetVector (A,t1);
     GetVector (B,t2);
-    real scalar = A.w*B.w - dotreal3(t1,t2);
-    real3 vector = A.w*t2 + B.w*t1 + cross(t1,t2);
+    real scalar = QScalar(A)*QScalar(B) - dotreal3(t1,t2);
+    real3 vector = QScalar(A)*t2 + QScalar(B)*t1 + cross(t1,t2);
     SetQuaternion (scalar,vector,C);
 }
 

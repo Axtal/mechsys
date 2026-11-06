@@ -1,0 +1,24 @@
+0.05    = Verlet:          Verlet distance for optimization
+0       = RenderVideo:     Write XDMF output if 1
+0.9     = fraction:        Fraction of particles to appear
+1.0e4   = Kn:              Normal stiffness
+1.0e4   = Kt:              Tangential stiffness
+0.1     = Gn:              Normal dissipative coefficient
+0.0     = Gt:              Tangential dissipative coefficient
+0.2     = Mu:              Microscopic friction coefficient
+0.1     = R:               Sphere radius
+0.9     = RRatio:          Radius ratio (1.0 = monodisperse, <1 = min/max radius ratio)
+1000    = seed:            Random seed of the dompargen packing
+5.0e-5  = dt:              Time step
+0.1     = dtOut:           Output interval
+2.0     = Lx:              Initial periodic cell length (x)
+2.0     = Ly:              Initial periodic cell width  (y)
+2.0     = Lz:              Initial periodic cell height (z)
+2.6     = rho:             Particle density
+50.0    = pressure:        Isotropic target pressure
+2.0     = isotropicEnd:    End time for isotropic compression
+0.002   = axialStrainRate: Axial strain rate during shear (positive compresses)
+4.0     = shearEnd:        Absolute end time for the triaxial shear phase
+0.5     = pidKp:           Proportional gain (normalized stress error -> strain rate)
+0.0     = pidKi:           Integral gain
+0.0     = pidKd:           Derivative gain
