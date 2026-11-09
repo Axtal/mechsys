@@ -2327,6 +2327,36 @@ struct Mat3
              + data[6]*(data[1]*data[5] - data[2]*data[4]);
     }
     
+    // Alternative 3x3 solver that does not throw on a singular matrix.
+    // This mirrors the arithmetic/order of the free SolAlt(Mat3_t,...) above;
+    // it is the device version used by the CUDA coupling kernels.
+    __host__ __device__ bool SolAlt(real3 const & B, real3 & X,
+                                    real Tol=real(1.0e-10)) const
+    {
+        real det =   (*this)(0,0)*((*this)(1,1)*(*this)(2,2)-(*this)(1,2)*(*this)(2,1))
+                   - (*this)(0,1)*((*this)(1,0)*(*this)(2,2)-(*this)(1,2)*(*this)(2,0))
+                   + (*this)(0,2)*((*this)(1,0)*(*this)(2,1)-(*this)(1,1)*(*this)(2,0));
+        if (fabs(det) < Tol) return false;
+
+        Mat3 Mi;
+        Mi(0,0) = ((*this)(1,1)*(*this)(2,2)-(*this)(1,2)*(*this)(2,1))/det;
+        Mi(0,1) = ((*this)(0,2)*(*this)(2,1)-(*this)(0,1)*(*this)(2,2))/det;
+        Mi(0,2) = ((*this)(0,1)*(*this)(1,2)-(*this)(0,2)*(*this)(1,1))/det;
+
+        Mi(1,0) = ((*this)(1,2)*(*this)(2,0)-(*this)(1,0)*(*this)(2,2))/det;
+        Mi(1,1) = ((*this)(0,0)*(*this)(2,2)-(*this)(0,2)*(*this)(2,0))/det;
+        Mi(1,2) = ((*this)(0,2)*(*this)(1,0)-(*this)(0,0)*(*this)(1,2))/det;
+
+        Mi(2,0) = ((*this)(1,0)*(*this)(2,1)-(*this)(1,1)*(*this)(2,0))/det;
+        Mi(2,1) = ((*this)(0,1)*(*this)(2,0)-(*this)(0,0)*(*this)(2,1))/det;
+        Mi(2,2) = ((*this)(0,0)*(*this)(1,1)-(*this)(0,1)*(*this)(1,0))/det;
+
+        X.x = Mi(0,0)*B.x + Mi(0,1)*B.y + Mi(0,2)*B.z;
+        X.y = Mi(1,0)*B.x + Mi(1,1)*B.y + Mi(1,2)*B.z;
+        X.z = Mi(2,0)*B.x + Mi(2,1)*B.y + Mi(2,2)*B.z;
+        return true;
+    }
+
     // Frobenius norm (sqrt of sum of squares of all elements)
     __host__ __device__ real frobeniusNorm() const {
         real sum = 0.0f;

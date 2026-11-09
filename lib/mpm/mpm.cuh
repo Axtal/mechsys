@@ -38,6 +38,8 @@ struct mpm_aux
     size_t Nz;           ///< Integer vector with the dimensions of the MPM node mesh
     size_t Nnodes;       ///< Integer vector with the dimensions of the MPM node mesh
     size_t Npart;        ///< Number of MPM particles
+    size_t Ncorners;     ///< Number of CPDI body-mesh corners
+    int    Error;         ///< non-zero if a CPDI kernel detected an invalid cell
     real3  Xlow;         ///< vectors of extreme positions of the MPM underlaying mesh 
     real3  Xhigh;
     bool   PeriodicX;    ///< Periodic particle-grid mapping along x
@@ -72,6 +74,8 @@ __global__ void cudaParticleToNode(ParticleCU * Par, real * Mass, real3 * Mn, re
     real3 Lp  = make_real3(fabs(Par[ic].Dx.x),fabs(Par[ic].Dx.y),fabs(Par[ic].Dx.z));
     Mat3 Vsp  = -Par[ic].V*Par[ic].S;
     real3 Fex = Par[ic].b;
+    real3 vp  = Par[ic].v;
+    real  mp  = Par[ic].m;
     real Dx   = mpmaux[0].Dx;
     real Dt   = mpmaux[0].Dt;
 
@@ -115,7 +119,83 @@ __global__ void cudaParticleToNode(ParticleCU * Par, real * Mass, real3 * Mn, re
         nlz = (int)nl; nhz = (int)nh;
     }
 
+    const int nxN = nhx-nlx+1;
+    const int nyN = nhy-nly+1;
+    const int nzN = nhz-nlz+1;
     Par[ic].Pnodes = 0;
+
+    // GIMP/B-spline are separable.  Evaluate the 1-D factors once per axis
+    // instead of recomputing all three factors for every 3-D node.
+    if (nxN<=8 && nyN<=8 && nzN<=8)
+    {
+        real   fx[8], fy[8], fz[8];
+        real   gx[8], gy[8], gz[8];
+        size_t ix[8], iy[8], iz[8];
+
+        #pragma unroll
+        for (int i=0; i<8; ++i)
+        {
+            if (i>=nxN) continue;
+            int nx = nlx+i;
+            real xc = nx*Dx + mpmaux[0].Xlow.x;
+            MPMShapeFunction1DCU(mpmaux[0].ShapeFunction,Xp.x,xc,Dx,Lp.x,fx[i],gx[i]);
+            ix[i] = mpmaux[0].PeriodicX ? PeriodicNodeIndexCU(nx,mpmaux[0].Nx) : (size_t)nx;
+        }
+        #pragma unroll
+        for (int j=0; j<8; ++j)
+        {
+            if (j>=nyN) continue;
+            int ny = nly+j;
+            real yc = ny*Dx + mpmaux[0].Xlow.y;
+            MPMShapeFunction1DCU(mpmaux[0].ShapeFunction,Xp.y,yc,Dx,Lp.y,fy[j],gy[j]);
+            iy[j] = mpmaux[0].PeriodicY ? PeriodicNodeIndexCU(ny,mpmaux[0].Ny) : (size_t)ny;
+        }
+        #pragma unroll
+        for (int k=0; k<8; ++k)
+        {
+            if (k>=nzN) continue;
+            int nz = nlz+k;
+            real zc = nz*Dx + mpmaux[0].Xlow.z;
+            MPMShapeFunction1DCU(mpmaux[0].ShapeFunction,Xp.z,zc,Dx,Lp.z,fz[k],gz[k]);
+            iz[k] = mpmaux[0].PeriodicZ ? PeriodicNodeIndexCU(nz,mpmaux[0].Nz) : (size_t)nz;
+        }
+
+        size_t pn = 0;
+        for (int i=0; i<nxN; ++i)
+        for (int j=0; j<nyN; ++j)
+        for (int k=0; k<nzN; ++k)
+        {
+            real Sf = fx[i]*fy[j]*fz[k];
+            if (Sf>0.0)
+            {
+                size_t nc = ix[i] + iy[j]*mpmaux[0].Nx + iz[k]*mpmaux[0].Nx*mpmaux[0].Ny;
+                real3 Gs = make_real3(gx[i]*fy[j]*fz[k],
+                                      fx[i]*gy[j]*fz[k],
+                                      fx[i]*fy[j]*gz[k]);
+                Par[ic].Nodes[pn] = nc;
+                Par[ic].Sfunc[pn] = Sf;
+                Par[ic].GSf  [pn] = Gs;
+                pn++;
+                real ms = Sf*mp;
+                real3 VspGs = Vsp*Gs;
+                real3 dF = Sf*Fex + VspGs;
+                atomicAdd(&Mass[nc], ms);
+                atomicAdd(&Mn[nc].x, ms*vp.x+Dt*dF.x);
+                atomicAdd(&Mn[nc].y, ms*vp.y+Dt*dF.y);
+                atomicAdd(&Mn[nc].z, ms*vp.z+Dt*dF.z);
+                atomicAdd(&Fn[nc].x, dF.x);
+                atomicAdd(&Fn[nc].y, dF.y);
+                atomicAdd(&Fn[nc].z, dF.z);
+                if (atomicExch(&valid[nc],1)==0)
+                {
+                    unsigned long long kk = atomicAdd(validn,1);
+                    SelIndexes[kk] = nc;
+                }
+            }
+        }
+        Par[ic].Pnodes = pn;
+        return;
+    }
 
     for (int nx=nlx; nx<=nhx; nx++)
     for (int ny=nly; ny<=nhy; ny++)
@@ -136,13 +216,13 @@ __global__ void cudaParticleToNode(ParticleCU * Par, real * Mass, real3 * Mn, re
             Par[ic].Sfunc[Par[ic].Pnodes] = Sf;
             Par[ic].GSf  [Par[ic].Pnodes] = Gs;
             Par[ic].Pnodes++;
-            real ms = Sf*Par[ic].m;
+            real ms = Sf*mp;
             real3 VspGs = Vsp*Gs;
             real3 dF = Sf*Fex + VspGs;
             atomicAdd(&Mass[nc], ms);
-            atomicAdd(&Mn[nc].x, ms*Par[ic].v.x+Dt*dF.x);
-            atomicAdd(&Mn[nc].y, ms*Par[ic].v.y+Dt*dF.y);
-            atomicAdd(&Mn[nc].z, ms*Par[ic].v.z+Dt*dF.z);
+            atomicAdd(&Mn[nc].x, ms*vp.x+Dt*dF.x);
+            atomicAdd(&Mn[nc].y, ms*vp.y+Dt*dF.y);
+            atomicAdd(&Mn[nc].z, ms*vp.z+Dt*dF.z);
             atomicAdd(&Fn[nc].x, dF.x);
             atomicAdd(&Fn[nc].y, dF.y);
             atomicAdd(&Fn[nc].z, dF.z);
@@ -157,6 +237,15 @@ __global__ void cudaParticleToNode(ParticleCU * Par, real * Mass, real3 * Mn, re
 
 //Nodal update over the touched list.  The launch covers all nodes and exits
 //early, so the host never needs the list size.
+__global__ void cudaComputeAn (real * Mass, real3 * Fn, real3 * An,
+                              size_t * SelIndexes, unsigned long long * validn)
+{
+    size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ic>=validn[0]) return;
+    size_t in = SelIndexes[ic];
+    An[in] = Fn[in]/Mass[in];
+}
+
 __global__ void cudaSolveNode(NodeCU * Nodes, real * Mass, real3 * Mn, real3 * Fn, real3 * Vn,
                               size_t * SelIndexes, unsigned long long * validn, mpm_aux * mpmaux)
 {
@@ -183,7 +272,7 @@ __global__ void cudaSolveNode(NodeCU * Nodes, real * Mass, real3 * Mn, real3 * F
 }
 
 //Gather.  Mass/Fn/Vn are read from the coalesced SoA arrays.
-__global__ void cudaNodeToParticle (ParticleCU * Par, real * Mass, real3 * Fn, real3 * Vn, mpm_aux * mpmaux)
+__global__ void cudaNodeToParticle (ParticleCU * Par, real3 * An, real3 * Vn, mpm_aux * mpmaux)
 {
     size_t ic = threadIdx.x + blockIdx.x * blockDim.x;
     if (ic>=mpmaux[0].Npart) return;
@@ -193,19 +282,24 @@ __global__ void cudaNodeToParticle (ParticleCU * Par, real * Mass, real3 * Fn, r
         mpmaux[0].Time += mpmaux[0].Dt;
     }
 
-    Par[ic].L.SetZero();
+    real3 v = Par[ic].v;
+    real3 x = Par[ic].x;
+    Mat3  L; L.SetZero();
+    real  Dt = mpmaux[0].Dt;
 
     for (size_t nn=0; nn<Par[ic].Pnodes; nn++)
     {
         size_t nc = Par[ic].Nodes[nn];
         real sf = Par[ic].Sfunc[nn];
         real3  gs = Par[ic].GSf[nn];
-        real3  an = Fn[nc]/Mass[nc];
-        Par[ic].v = Par[ic].v + sf*mpmaux[0].Dt*an;
-        Par[ic].x = Par[ic].x + sf*mpmaux[0].Dt*Vn[nc];
+        v = v + sf*Dt*An[nc];
+        x = x + sf*Dt*Vn[nc];
         Mat3 Gv = Dyad(gs,Vn[nc]);
-        Par[ic].L += Gv;
+        L += Gv;
     }
+    Par[ic].v = v;
+    Par[ic].x = x;
+    Par[ic].L = L;
 
     Par[ic].CalcVol   (mpmaux[0].Dt);
     Par[ic].CalcStress(mpmaux[0].Dt);
@@ -230,6 +324,180 @@ __global__ void cudaNodeToParticle (ParticleCU * Par, real * Mass, real3 * Fn, r
     }
 }
 
+// ---------------------------------------------------------------------------
+// CPDI (body-mesh) path
+//
+// The CPU CPDI update in Domain::OneStepCPI has this sequence:
+//   corner -> node scatter, particle -> node scatter, nodal update,
+//   corner motion, node -> particle gather.
+// Each stage is a separate launch so the next one sees the previous writes.
+// ---------------------------------------------------------------------------
+
+__global__ void cudaCornerToNode (CornerCU * Corners, real3 * Mn, real3 * Fn,
+                                  int * valid, size_t * SelIndexes,
+                                  unsigned long long * validn, mpm_aux * mpmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x*blockDim.x;
+    if (ic>=mpmaux[0].Ncorners) return;
+
+    real3 Xp  = Corners[ic].x;
+    real3 Fex = Corners[ic].h;
+    real  Dx  = mpmaux[0].Dx;
+    real  Dt  = mpmaux[0].Dt;
+    int   Nx  = (int)mpmaux[0].Nx;
+    int   Ny  = (int)mpmaux[0].Ny;
+    int   Nz  = (int)mpmaux[0].Nz;
+
+    int nlx = (int)trunc((Xp.x-mpmaux[0].Xlow.x)/Dx);
+    int nly = (int)trunc((Xp.y-mpmaux[0].Xlow.y)/Dx);
+    int nlz = (int)trunc((Xp.z-mpmaux[0].Xlow.z)/Dx);
+    int nhx = nlx+1;
+    int nhy = nly+1;
+    int nhz = nlz+1;
+
+    if (nlx<0 || nly<0 || nlz<0 || nhx>=Nx || nhy>=Ny || nhz>=Nz)
+    {
+        for (int i=0; i<8; ++i) { Corners[ic].Nodes[i] = 0; Corners[ic].Sfunc[i] = 0.0; }
+        mpmaux[0].Error = 1;
+        return;
+    }
+
+    int ncs = 0;
+    for (int nx=nlx; nx<=nhx; ++nx)
+    for (int ny=nly; ny<=nhy; ++ny)
+    for (int nz=nlz; nz<=nhz; ++nz)
+    {
+        real3 Xn = make_real3(nx*Dx,ny*Dx,nz*Dx);
+        Xn = Xn + mpmaux[0].Xlow;
+        real Sf = Shape3DCU(Xp,Xn,Dx);
+        size_t nc = (size_t)nx + (size_t)ny*Nx + (size_t)nz*Nx*Ny;
+
+        Corners[ic].Nodes[ncs] = nc;
+        Corners[ic].Sfunc[ncs] = Sf;
+        if (Sf==0.0) { ncs++; continue; } // keep the slot, but no contribution
+
+        if (Fex.x!=0.0 || Fex.y!=0.0 || Fex.z!=0.0)
+        {
+            real3 dF = Sf*Fex;
+            atomicAdd(&Mn[nc].x,Dt*dF.x);
+            atomicAdd(&Mn[nc].y,Dt*dF.y);
+            atomicAdd(&Mn[nc].z,Dt*dF.z);
+            atomicAdd(&Fn[nc].x,dF.x);
+            atomicAdd(&Fn[nc].y,dF.y);
+            atomicAdd(&Fn[nc].z,dF.z);
+        }
+
+        if (atomicExch(&valid[nc],1)==0)
+        {
+            unsigned long long k = atomicAdd(validn,1);
+            SelIndexes[k] = nc;
+        }
+        ncs++;
+    }
+}
+
+__global__ void cudaParticleToNodeCPDI (ParticleCU * Par, CornerCU * Corners,
+                                       real * Mass, real3 * Mn, real3 * Fn,
+                                       mpm_aux * mpmaux)
+{
+    size_t ip = threadIdx.x + blockIdx.x*blockDim.x;
+    if (ip>=mpmaux[0].Npart) return;
+
+    Mat3  Vsp = -Par[ip].V*Par[ip].S;
+    real3 Fex = Par[ip].b;
+    real3 vp  = Par[ip].v;
+    real  mp  = Par[ip].m;
+    real  Dt  = mpmaux[0].Dt;
+    for (size_t ic=0; ic<4; ++ic)
+    {
+        CornerCU & C = Corners[Par[ip].Corners[ic]];
+        for (size_t ics=0; ics<8; ++ics)
+        {
+            size_t nc = C.Nodes[ics];
+            real   sf = C.Sfunc[ics];
+            if (sf==0.0) continue; // node outside this corner's support
+            real   ms = sf*mp;
+            real3  Gs = sf*Par[ip].GradvecN[ic];
+            real3  VspGs = Vsp*Gs;
+            real3  dF = 0.25*sf*Fex + VspGs;
+
+            atomicAdd(&Mass[nc],0.25*ms);
+            atomicAdd(&Mn[nc].x,0.25*ms*vp.x + Dt*dF.x);
+            atomicAdd(&Mn[nc].y,0.25*ms*vp.y + Dt*dF.y);
+            atomicAdd(&Mn[nc].z,0.25*ms*vp.z + Dt*dF.z);
+            atomicAdd(&Fn[nc].x,dF.x);
+            atomicAdd(&Fn[nc].y,dF.y);
+            atomicAdd(&Fn[nc].z,dF.z);
+        }
+    }
+}
+
+__global__ void cudaMoveCorners (CornerCU * Corners, real3 * Vn, mpm_aux * mpmaux)
+{
+    size_t ic = threadIdx.x + blockIdx.x*blockDim.x;
+    if (ic>=mpmaux[0].Ncorners) return;
+
+    CornerCU & C = Corners[ic];
+    real Dt = mpmaux[0].Dt;
+    real3 x = C.x;
+    if (C.IsFree())
+    {
+        for (size_t ics=0; ics<8; ++ics)
+        {
+            real   sf = C.Sfunc[ics];
+            if (sf==0.0) continue;
+            size_t nc = C.Nodes[ics];
+            x = x + Dt*(sf*Vn[nc]);
+        }
+    }
+    else x = x + Dt*C.vf;
+
+    C.x = x;
+    C.Reset(Dt);
+}
+
+__global__ void cudaNodeToParticleCPDI (ParticleCU * Par, CornerCU * Corners,
+                                       real3 * An, real3 * Vn,
+                                       mpm_aux * mpmaux)
+{
+    size_t ip = threadIdx.x + blockIdx.x*blockDim.x;
+    if (ip>=mpmaux[0].Npart) return;
+    if (ip==0)
+    {
+        mpmaux[0].iter++;
+        mpmaux[0].Time += mpmaux[0].Dt;
+    }
+
+    real3 v = Par[ip].v;
+    Mat3  L; L.SetZero();
+    real  Dt = mpmaux[0].Dt;
+    for (size_t ic=0; ic<4; ++ic)
+    {
+        size_t ncor = Par[ip].Corners[ic];
+        CornerCU & C = Corners[ncor];
+        real3  grad = Par[ip].GradvecN[ic];
+        for (size_t ics=0; ics<8; ++ics)
+        {
+            size_t nc = C.Nodes[ics];
+            real   sf = C.Sfunc[ics];
+            if (sf==0.0) continue; // node outside this corner's support
+            real3  Gs = sf*grad;
+            v = v + Dt*(0.25*sf*An[nc]);
+            Mat3 Gv = Dyad(Gs,Vn[nc]);
+            L += Gv;
+        }
+    }
+    Par[ip].v = v;
+    Par[ip].L = L;
+
+    real3 c0 = Corners[Par[ip].Corners[0]].x;
+    real3 c1 = Corners[Par[ip].Corners[1]].x;
+    real3 c2 = Corners[Par[ip].Corners[2]].x;
+    real3 c3 = Corners[Par[ip].Corners[3]].x;
+    Par[ip].CalcVolCPI(mpmaux[0].Dt,c0,c1,c2,c3);
+    Par[ip].CalcStress(mpmaux[0].Dt);
+    Par[ip].Reset(mpmaux[0].Dt);
+}
 
 
 }

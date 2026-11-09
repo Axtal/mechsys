@@ -26,9 +26,12 @@
 #include <math.h>
 #include <iostream>
 #include <fstream>
+#include <string>
+#include <vector>
 
 struct UserData
 {
+    bool                      cpdi; //Use the CPDI body-mesh path
     Array<MPM::Corner   *> ForceCor; //Forced corners
     Array<MPM::Particle *> ForcePar; //Forced particles
     Array<MPM::Particle *> PlaneBeamPar0; //Particles at each plane of the beam
@@ -48,21 +51,29 @@ void Setup (MPM::Domain & dom, void * UD)
 {
     UserData & dat = (*static_cast<UserData *>(UD));
 
-    double F = std::min(10.0*dat.Fb*dom.Time/dat.Tf,dat.Fb)/dat.ForcePar.Size();
-    //double F = dat.Fb/dat.ForcePar.Size();
+    // CPDI carries the end load only on boundary corners; the
+    // non-CPDI/GIMP path carries it on the forced material points.
+    size_t nf = dat.cpdi ? dat.ForceCor.Size() : dat.ForcePar.Size();
+    if (nf==0) return;
+    double F = std::min(10.0*dat.Fb*dom.Time/dat.Tf,dat.Fb)/nf;
 
-    #pragma omp parallel for schedule(static) num_threads(dom.Nproc)
-    for (size_t ip=0; ip<dat.ForcePar.Size(); ip++)
+    if (dat.cpdi)
     {
-        dat.ForcePar[ip]->b = Vec3_t(0.0,0.0,-F);
+        #pragma omp parallel for schedule(static) num_threads(dom.Nproc)
+        for (size_t ic=0; ic<dat.ForceCor.Size(); ic++)
+        {
+            dat.ForceCor[ic]->h = Vec3_t(0.0,0.0,-F);
+        }
+    }
+    else
+    {
+        #pragma omp parallel for schedule(static) num_threads(dom.Nproc)
+        for (size_t ip=0; ip<dat.ForcePar.Size(); ip++)
+        {
+            dat.ForcePar[ip]->b = Vec3_t(0.0,0.0,-F);
+        }
     }
 
-    #pragma omp parallel for schedule(static) num_threads(dom.Nproc)
-    for (size_t ip=0; ip<dat.ForceCor.Size(); ip++)
-    {
-        dat.ForceCor[ip]->h = Vec3_t(0.0,0.0,-F);
-    }
-       
 }
 
 void Report (MPM::Domain & dom, void * UD)
@@ -101,9 +112,18 @@ int main(int argc, char **argv) try
     dom.UserData = &dat;
    
     size_t Nproc = 0.75*omp_get_max_threads();
-    if (argc>1) Nproc = atoi(argv[1]);
+    bool   cpdi  = false; // standard MPM by default; pass cpdi to enable CPDI
+    for (int i=1; i<argc; ++i)
+    {
+        std::string arg(argv[i]);
+        if (arg=="cpdi" || arg=="--cpdi") cpdi = true;
+        else if (arg=="mpm" || arg=="noncpdi" || arg=="nocpdi" || arg=="--mpm") cpdi = false;
+        else Nproc = atoi(argv[i]);
+    }
+    dat.cpdi = cpdi;
+    std::cout << "  MPM mode                          =  " << (cpdi ? "CPDI" : "non-CPDI") << std::endl;
     //size_t ndiv = 22; //number of divisions per x lenght
-    size_t ndiv = 50; //number of divisions per x lenght
+    size_t ndiv = cpdi ? 125 : 50; // CPDI uses the refined body mesh; keep the non-CPDI baseline
     double Nu	= 0.3;
     double	E	= 1.23e6;
     double  K   = E/(3.0*(1.0-2.0*Nu));
@@ -126,10 +146,16 @@ int main(int argc, char **argv) try
     
 
 
-    dom.AddRectangularBeam(-1, Vec3_t(0.0,0.0,0.0), Vec3_t(Lx,Ly,Lz), rho, ndiv);
-    //dom.AddRectangularBeamMesh(-1, Vec3_t(0.0,0.0,0.0), Vec3_t(Lx,Ly,Lz), rho, ndiv);
-    dom.ResizeDomain(Vec3_t(-0.5*Lx,-0.5*Lx,-0.5*Lx),Vec3_t(1.5*Lx,1.5*Lx,1.5*Lx), Dx);
-    //dom.ResizeDomainMesh(Vec3_t(-0.5*Lx,-0.5*Lx,-0.5*Lx),Vec3_t(1.5*Lx,1.5*Lx,1.5*Lx), 1.0);
+    if (cpdi)
+    {
+        dom.AddRectangularBeamMesh(-1, Vec3_t(0.0,0.0,0.0), Vec3_t(Lx,Ly,Lz), rho, ndiv);
+        dom.ResizeDomainMesh(Vec3_t(-0.5*Lx,-0.5*Lx,-0.5*Lx),Vec3_t(1.5*Lx,1.5*Lx,1.5*Lx), 1.0);
+    }
+    else
+    {
+        dom.AddRectangularBeam(-1, Vec3_t(0.0,0.0,0.0), Vec3_t(Lx,Ly,Lz), rho, ndiv);
+        dom.ResizeDomain(Vec3_t(-0.5*Lx,-0.5*Lx,-0.5*Lx),Vec3_t(1.5*Lx,1.5*Lx,1.5*Lx), Dx);
+    }
     //Setting properties for the material points
     for (size_t ip=0; ip < dom.Particles.Size(); ip++)
     {
@@ -140,7 +166,7 @@ int main(int argc, char **argv) try
             dom.Particles[ip]->FixVeloc();
             dom.Particles[ip]->Tag = -2;
         }
-        if (dom.Particles[ip]->x(0)>Lx*(ndiv-1.0)/ndiv)
+        if (!cpdi && dom.Particles[ip]->x(0)>Lx*(ndiv-1.0)/ndiv)
         {
             dom.Particles[ip]->Tag = -3;
             dat.ForcePar.Push(dom.Particles[ip]);
@@ -153,18 +179,25 @@ int main(int argc, char **argv) try
         }
     }
     
-    //Fixing positions and forces over corner points 
-    //for (size_t ic=0; ic < dom.Corners.Size(); ic++)
-    //{
-        //if ((*dom.Corners[ic]->x)(0)<Bc)
-        //{
-            //dom.Corners[ic]->FixVeloc();
-        //}
-        //if ((*dom.Corners[ic]->x)(0)>Lx*(ndiv-0.1)/ndiv)
-        //{
-            //dat.ForceCor.Push(dom.Corners[ic]);
-        //}
-    //}
+    // CPDI: the last cross-section of the rectangular beam is an external
+    // face, so every corner in the last mesh slice is already a boundary
+    // corner.  Selecting by x alone is enough here; no boundary-facet mask
+    // is needed.  Corners outside this slice are never loaded, and the base
+    // corners below Bc are fixed.
+    if (cpdi)
+    {
+        for (size_t ic=0; ic < dom.Corners.Size(); ic++)
+        {
+            if ((*dom.Corners[ic]->x)(0)<Bc)
+            {
+                dom.Corners[ic]->FixVeloc();
+            }
+            if ((*dom.Corners[ic]->x)(0)>Lx*(ndiv-0.1)/ndiv)
+            {
+                dat.ForceCor.Push(dom.Corners[ic]);
+            }
+        }
+    }
     
     //Setting properties for nodes
     for (size_t in=0; in < dom.Nnodes; in++)
@@ -179,10 +212,13 @@ int main(int argc, char **argv) try
 
     //dom.ParticleToNode();
     //dom.NodeToParticle();
+    std::cout << "  Load points: particles = " << dat.ForcePar.Size()
+              << ", boundary corners = " << dat.ForceCor.Size() << std::endl;
+
     dom.Gn = 1.0e0;
     double Tf = 5.0; // Final Time
     dat.Tf = Tf;     
-    dat.Fb = 1.0e-1;  // Force applied at the end
+    dat.Fb = 5.0e-2;  // Force applied at the end (reduced from 1.0e-1)
     //Mesh::Cell * Ce = dom.BodyMesh->Cells[1];
     //std::cout << Mesh::InsideCell(dom.Particles[2]->x,Ce) << std::endl;
     dom.Solve(Tf,dt,Tf/100,Setup,Report,"tmpm01",true,Nproc);

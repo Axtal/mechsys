@@ -180,27 +180,35 @@ public:
     void UpLoadDevice(size_t Nc=1);                                         ///< Upload the domain to cuda device
     void DnLoadDevice(size_t Nc=1);                                         ///< Download the key data from device
     thrust::device_vector<ParticleCU>      bParticlesCU;                    ///< device vector of particles
+    thrust::device_vector<CornerCU  >      bCornersCU  ;                    ///< device vector of CPDI corners
     thrust::device_vector<NodeCU    >      bNodeCU     ;                    ///< device vector of nodes
     thrust::device_vector<size_t    >      bSelIndexes ;                    ///< selected (touched) node indexes, built on the device
     thrust::device_vector<real      >      bMass       ;                    ///< hot node mass
     thrust::device_vector<real3     >      bMn         ;                    ///< hot node momentum
     thrust::device_vector<real3     >      bFn         ;                    ///< hot node force
     thrust::device_vector<real3     >      bVn         ;                    ///< hot node velocity
+    thrust::device_vector<real3     >      bAn         ;                    ///< hot node acceleration (Fn/Mass)
     thrust::device_vector<int       >      bValid      ;                    ///< hot node valid flag
     mpm_aux                                mpmaux      ;                    ///< structure with domain data                                              
 
     //Pointers to GPU arrays
     ParticleCU * pParticlesCU;
+    CornerCU   * pCornersCU;
     NodeCU     * pNodeCU;
     size_t     * pSelIndexes;
     unsigned long long * pValidNumber;
+    // Intentional two-counter ping-pong: the next sparse reset consumes the
+    // previous step's list count.  A single-counter reset is deterministic but
+    // changed the non-CPDI trajectory (final .res by 8.74e-3 m) with no gain.
     unsigned long long * pValidNumberPrev;
     real       * pMass;
     real3      * pMn;
     real3      * pFn;
     real3      * pVn;
+    real3      * pAn;
     int        * pValid;
     mpm_aux    * pmpmaux;
+    size_t       nCorners;                                                  ///< number of CPDI corners
 
 #endif
 
@@ -1477,6 +1485,7 @@ inline void Domain::OneStepCPI()
             {
                 size_t nc = Corners[ncor]->Nodes[ics];
                 double sf = Corners[ncor]->Sfunc[ics];
+                if (sf==0.0) continue; // node outside this corner's support
                 double ms = sf*Particles[ip]->m;
                 Vec3_t VspGs;
                 Vec3_t Gs   = sf*Particles[ip]->Gradvec[ic]/(6.0*Vp);
@@ -1559,6 +1568,7 @@ inline void Domain::OneStepCPI()
             {
                 size_t nc = Corners[ncor]->Nodes[ics];
                 double sf = Corners[ncor]->Sfunc[ics];
+                if (sf==0.0) continue; // node outside this corner's support
                 Vec3_t Gs = sf*Particles[ip]->Gradvec[ic]/(6.0*Vp);
                 Vec3_t an = Nodes[nc].Fn/Nodes[nc].Mass;
                 Particles[ip]->v += 0.25*sf*an*Dt;
@@ -1836,6 +1846,24 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
 #ifdef USE_CUDA
         if (BodyMesh!=NULL)
         {
+            // CPDI: body-mesh corners and material points share the background
+            // grid.  The launch order mirrors Domain::OneStepCPI exactly.
+            cudaResetNode<<<Nnodes/Nthread+1,Nthread>>>(pMass,pMn,pFn,pValid,pSelIndexes,pValidNumberPrev,pmpmaux);
+            cudaMemsetAsync(pValidNumber,0,sizeof(unsigned long long));
+
+            cudaCornerToNode<<<nCorners/Nthread+1,Nthread>>>(pCornersCU,pMn,pFn,pValid,pSelIndexes,pValidNumber,pmpmaux);
+
+            cudaParticleToNodeCPDI<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pCornersCU,pMass,pMn,pFn,pmpmaux);
+
+            cudaSolveNode<<<Nnodes/Nthread+1,Nthread>>>(pNodeCU,pMass,pMn,pFn,pVn,pSelIndexes,pValidNumber,pmpmaux);
+
+            cudaComputeAn<<<Nnodes/Nthread+1,Nthread>>>(pMass,pFn,pAn,pSelIndexes,pValidNumber);
+
+            std::swap(pValidNumber,pValidNumberPrev);
+
+            cudaMoveCorners<<<nCorners/Nthread+1,Nthread>>>(pCornersCU,pVn,pmpmaux);
+
+            cudaNodeToParticleCPDI<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pCornersCU,pAn,pVn,pmpmaux);
         }
         else
         {
@@ -1846,7 +1874,9 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
 
             cudaSolveNode<<<Nnodes/Nthread+1,Nthread>>>(pNodeCU,pMass,pMn,pFn,pVn,pSelIndexes,pValidNumber,pmpmaux);
 
-            cudaNodeToParticle<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pMass,pFn,pVn,pmpmaux);
+            cudaComputeAn<<<Nnodes/Nthread+1,Nthread>>>(pMass,pFn,pAn,pSelIndexes,pValidNumber);
+
+            cudaNodeToParticle<<<mpmaux.Npart/Nthread+1,Nthread>>>(pParticlesCU,pAn,pVn,pmpmaux);
 
             std::swap(pValidNumber,pValidNumberPrev);
 
@@ -1870,6 +1900,13 @@ inline void Domain::Solve(double Tf, double dt, double dtOut, ptDFun_t ptSetup, 
 #ifdef USE_CUDA
     //With no per-step host synchronization the loop may leave work queued.
     cudaDeviceSynchronize();
+    if (BodyMesh!=NULL)
+    {
+        mpm_aux h_aux;
+        cudaMemcpy(&h_aux,pmpmaux,sizeof(mpm_aux),cudaMemcpyDeviceToHost);
+        if (h_aux.Error!=0)
+            throw new Fatal("MPM::Domain::Solve: CUDA CPDI corner left the background grid");
+    }
 #endif
 }
 
@@ -1919,22 +1956,32 @@ inline void Domain::UpLoadDevice(size_t Nc)
     thrust::copy(hParticles.begin(),hParticles.end(),bParticlesCU.begin());
     thrust::copy(hNodes    .begin(),hNodes    .end(),bNodeCU     .begin());
 
+    nCorners = Corners.Size();
+    mpmaux.Ncorners = nCorners;
+    mpmaux.Error    = 0;
+    thrust::host_vector<CornerCU> hCorners(nCorners);
+    for (size_t ic=0; ic<nCorners; ++ic) UploadCorner(hCorners[ic],*Corners[ic]);
+    bCornersCU = hCorners;
+
     pParticlesCU = thrust::raw_pointer_cast(bParticlesCU.data());
+    pCornersCU   = thrust::raw_pointer_cast(bCornersCU  .data());
     pNodeCU      = thrust::raw_pointer_cast(bNodeCU     .data());
     pSelIndexes  = thrust::raw_pointer_cast(bSelIndexes .data());
 
     //Hot node fields are kept as separate arrays (SoA) so that the scatter
     //atomics and the gather reads of neighbouring particles are coalesced.
-    bMass .resize(Nnodes); bMn.resize(Nnodes); bFn.resize(Nnodes); bVn.resize(Nnodes); bValid.resize(Nnodes);
+    bMass .resize(Nnodes); bMn.resize(Nnodes); bFn.resize(Nnodes); bVn.resize(Nnodes); bAn.resize(Nnodes); bValid.resize(Nnodes);
     thrust::fill(bMass.begin(), bMass.end(), (real)0.0);
     thrust::fill(bMn  .begin(), bMn  .end(), make_real3(0.0,0.0,0.0));
     thrust::fill(bFn  .begin(), bFn  .end(), make_real3(0.0,0.0,0.0));
     thrust::fill(bVn  .begin(), bVn  .end(), make_real3(0.0,0.0,0.0));
+    thrust::fill(bAn  .begin(), bAn  .end(), make_real3(0.0,0.0,0.0));
     thrust::fill(bValid.begin(), bValid.end(), 0);
     pMass  = thrust::raw_pointer_cast(bMass .data());
     pMn    = thrust::raw_pointer_cast(bMn   .data());
     pFn    = thrust::raw_pointer_cast(bFn   .data());
     pVn    = thrust::raw_pointer_cast(bVn   .data());
+    pAn    = thrust::raw_pointer_cast(bAn   .data());
     pValid = thrust::raw_pointer_cast(bValid.data());
     cudaMalloc(&pValidNumber, sizeof(unsigned long long));
     cudaMalloc(&pValidNumberPrev, sizeof(unsigned long long));
@@ -1953,6 +2000,17 @@ inline void Domain::DnLoadDevice(size_t Nc)
     for (size_t ip=0;ip<Particles.Size();ip++)
     {
         DnloadParticle(hParticles[ip],*Particles[ip]);
+    }
+
+    if (BodyMesh!=NULL)
+    {
+        thrust::host_vector<CornerCU> hCorners = bCornersCU;
+        #pragma omp parallel for schedule(static) num_threads(Nc)
+        for (size_t ic=0;ic<nCorners;ic++)
+        {
+            DnloadCorner(hCorners[ic],*Corners[ic]);
+        }
+        UpdateMesh();
     }
 }
 

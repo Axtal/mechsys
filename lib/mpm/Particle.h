@@ -198,6 +198,12 @@ inline Particle::Particle (int TheTag, Vec3_t const & xt0, Vec3_t const & v0, do
     GrainRho        = 2000.0;
     MuIReg          = 1.0e-4;
 
+    for (size_t i=0; i<4; ++i)
+    {
+        Corners[i] = 0;
+        set_to_zero(Gradvec[i]);
+    }
+
     #ifdef USE_OMP
     omp_init_lock(&lck);    ///< to protect variables in multithreading
     #endif
@@ -712,6 +718,9 @@ struct ParticleCU
     real   V0;              ///< Initial volume assigned to the particle
     real   V;               ///< Volume assigned to the particleTrujillo-VelaTrujillo-VelasdfasdfsadfsdafasdfasdfsdafJHbvklhkljl;kjjkl;asdf
     real   Vt;              ///< Volume of the assigned tetrahedron
+    real3  Gradvec[4];      ///< CPDI geometry vectors at the four corners
+    real3  GradvecN[4];     ///< Gradvec/(6*Vt), reused by scatter and gather
+    size_t Corners[4];      ///< CPDI corner (body-mesh vertex) indexes
     real   m;               ///< Mass of the particle
     real3  x0;              ///< Initial position of particle
     real3  x;               ///< Position of particle
@@ -821,6 +830,38 @@ struct ParticleCU
 	    Dx.y =  Dx0.y*F(1,1);
 	    Dx.z =  Dx0.z*F(2,2);
         V = V0*F.determinant();
+    }
+
+    // CPDI update: the particle volume, centre and gradient vectors come from
+    // its four body-mesh corners.  c0..c3 are the current corner positions.
+    __host__ __device__ void CalcVolCPI (real dt, real3 const & c0,
+                                          real3 const & c1, real3 const & c2,
+                                          real3 const & c3)
+    {
+        Mat3 I;
+        F = (I + dt*L)*F;
+        V = V0*F.determinant();
+
+        real3 a14 = c0 - c3;
+        real3 a24 = c1 - c3;
+        real3 a34 = c2 - c3;
+        real3 a31 = c2 - c0;
+        real3 a21 = c1 - c0;
+
+        Vt = dotreal3(a34,cross(a24,a14))/6.0;
+        V  = Vt;
+
+        Gradvec[0] = cross(a34,a24);
+        Gradvec[1] = cross(a14,a34);
+        Gradvec[2] = cross(a24,a14);
+        Gradvec[3] = cross(a21,a31);
+        real gden = 6.0*Vt;
+        GradvecN[0] = Gradvec[0]/gden;
+        GradvecN[1] = Gradvec[1]/gden;
+        GradvecN[2] = Gradvec[2]/gden;
+        GradvecN[3] = Gradvec[3]/gden;
+
+        x = 0.25*(c0 + c1 + c2 + c3);
     }
 
     __host__ __device__ void CalcStress (real dt)
@@ -1184,6 +1225,13 @@ __host__ void UploadParticle (ParticleCU & PCu, const Particle & Par)
     PCu.V0    = Par.V0    ;        
     PCu.V     = Par.V     ;        
     PCu.Vt    = Par.Vt    ;        
+    for (size_t i=0; i<4; ++i)
+    {
+        PCu.Corners[i] = Par.Corners[i];
+        PCu.Gradvec[i] = make_real3(Par.Gradvec[i](0),Par.Gradvec[i](1),Par.Gradvec[i](2));
+        real gden = 6.0*Par.Vt;
+        PCu.GradvecN[i] = (gden!=0.0) ? PCu.Gradvec[i]/gden : make_real3(0.0,0.0,0.0);
+    }
     PCu.m     = Par.m     ;       
     PCu.x0 .x = Par.x0 (0);         
     PCu.x0 .y = Par.x0 (1);         
@@ -1263,9 +1311,14 @@ __host__ void DnloadParticle (const ParticleCU & PCu, Particle & Par)
 {
     Par.V      = PCu.V;
     Par.Vt     = PCu.Vt;
+    for (size_t i=0; i<4; ++i)
+        Par.Gradvec[i] = Vec3_t(PCu.Gradvec[i].x,PCu.Gradvec[i].y,PCu.Gradvec[i].z);
     Par.x  (0) = PCu.x  .x;         
     Par.x  (1) = PCu.x  .y;         
     Par.x  (2) = PCu.x  .z;         
+    Par.xb (0) = PCu.xb .x;
+    Par.xb (1) = PCu.xb .y;
+    Par.xb (2) = PCu.xb .z;
     Par.v  (0) = PCu.v  .x;         
     Par.v  (1) = PCu.v  .y;         
     Par.v  (2) = PCu.v  .z;         

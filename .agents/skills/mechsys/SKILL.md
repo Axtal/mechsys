@@ -51,7 +51,30 @@ when a durable lesson or corrected benchmark is learned.
 - CUDA MPM keeps hot node fields in SoA arrays; scatter builds the touched-node
   list, reset uses the previous list, and the final `cudaDeviceSynchronize()` in
   `Solve` must stay. `ParticleCU` has 64 node slots (cubic limit); GPU atomics
-  mean no general bitwise claim. See `CUDA_MPM_OPTIMIZATION_CHANGES.md`.
+  mean no general bitwise claim. The standalone `MPM::Domain::Solve` CPDI
+  branch is implemented and `tmpm01`/`tmpm_cu_01` now exercise the CPDI
+  beam; LBMMPM still uses CPU `MPMDOM.OneStepCPI`. See
+  `CUDA_MPM_OPTIMIZATION_CHANGES.md`.
+- Device `F` addressing uses `FLBM::FIDX(Ncells,Nneigh,il,k,ic)` from
+  `lib/flbm/lbm.cuh`; do not duplicate the direction-major index formula in
+  test kernels.
+- The device 3x3 solver is `Mat3::SolAlt` in `lib/linalg/matvec.h`; do not
+  duplicate it in LBMMPM kernels.
+- LBMMPM CUDA is D3Q15-only and leaves `MPMDOM.OneStepCPI` on the CPU.  The
+  facet marking pass must precede the force pass; build with `--fmad=false`
+  (CMake targets do) so `Gamma` edge classification matches CPU `SolAlt`.
+  `Solve` must imprint once after `UpLoadDevice` before the first output, or
+  `frame 0000` lacks the initial body `Gamma`.  Compare HDF5 datasets, not
+  whole files: at `frame 0000` datasets are exact but HDF5 metadata differs;
+  after one step the trajectories are not bitwise.  `Re`/velocity and t01
+  deflection agree reasonably; GPU `CD` is not validated because corner `h`
+  uses `atomicAdd` and a different update order.  The 2026-11-06 pass fuses
+  Rho/Vel into `cudaCollideMPM`, precomputes `1/Cs`/`1/rho`, and defers the
+  limiter stores; do not replace the fixed-point limiter with a single
+  `alpha=1` scan (negative-noneq directions can cross later).  Full t02
+  window `Solve` 4.993 -> 4.062 s, full t01 window 10.664 -> 8.938 s.
+  Keep `pValidNumberPrev`: removing it changed the non-CPDI `tmpm_cu_01`
+  `.res` by `8.74e-3 m` with no speedup.
 - Keep the separate `pTranslate` + `pRotate` fallback. Making fused movement
   unconditional broke `test_cu_04`.
 - The outer solve loop owns `Time`/`iter`; publish them to CUDA with `SetClock`.
@@ -114,6 +137,12 @@ For one-off cases, use the configured standalone compiler:
   permeability; use `u_physical = u_raw + 0.5*dt*fx*phi`.
 - Keep one-off FLBM cases outside the checkout; do not add them to `tflbm/`
   unless they belong in the library test suite.
+- Obstacle channel case: `/home/sergio/tflbm_triangle/tclbm_obstacle.cu`
+  (`--shape=rect|tri`, `Re=u_mean*D/nu`, `D=40`, 640x201). Walls are rows 0 and
+  `ny-1`, so `L=ny-2` and the mirror is `j <-> ny-1-j`; `L=ny-1` breaks
+  symmetry. At Re=40 both wakes are steady and symmetric: `Lr/D=1.88`
+  (60x40 rectangle) and `2.88` (triangle); no shedding up to Re=100 at 20%
+  blockage. `animate.py` writes the GIF with Pillow (no ffmpeg installed).
 
 ## After every prompt
 

@@ -277,15 +277,17 @@ DrawPlots()
 
 MPM uses a different grid name and attribute set.  Each `WriteXDMF` frame is
 a standalone single-state file with grid `MPM_points` (`Polyvertex` topology)
-and node attributes `Tag`, `Velocity`, `Pressure`, `Sigma`, `Strain`.  A
-verified point-cloud render is:
+and node attributes `Tag`, `Velocity`, `Pressure`, `Sigma`, `Strain`.  Use the
+project **fluid colormap, `turbo`** (`colorTableName = "turbo"`) for every
+fluid, solid, and animation plot unless the user explicitly requests another
+map.  A verified point-cloud render is:
 
 ```python
 OpenDatabase("granular_0019.xmf")
 DefineScalarExpression("speed", "magnitude(Velocity)")
 AddPlot("Pseudocolor", "speed")
 pc = PseudocolorAttributes()
-pc.colorTableName = "hot"
+pc.colorTableName = "turbo"         # project fluid colormap
 pc.limitsMode = 0; pc.min = 0.0; pc.max = 1.2   # fixed scale across frames
 pc.pointSizePixels = 3
 SetPlotOptions(pc)
@@ -310,7 +312,7 @@ flags; `limitsMode` itself only accepts `0` (`OriginalData`) or `1`
 ```python
 AddPlot("Pseudocolor", "Pressure")
 pc = PseudocolorAttributes()
-pc.colorTableName = "turbo"         # blue low -> red high
+pc.colorTableName = "turbo"         # project fluid colormap, blue low -> red high
 pc.limitsMode = 0
 pc.minFlag = 1; pc.maxFlag = 1
 pc.min = -30000.0; pc.max = 110000.0
@@ -644,6 +646,76 @@ make plot
 ```
 
 
+### 5.3 GPU FLBM: channel flow past an obstacle (triangle or rectangular box)
+
+A standalone case for flow past a single obstacle in a plane channel at a small
+Reynolds number is in `/home/sergio/tflbm_triangle/` (`tclbm_obstacle.cu`,
+`animate.py`, `README.md`, the frames and the `.res`).  One binary runs both
+shapes:
+
+```bash
+cd /home/sergio/tflbm_triangle
+/home/sergio/mechsys/mechsyscc -o tclbm_obstacle tclbm_obstacle.cu
+# rectangular box: 84 frames over the startup transient
+./tclbm_obstacle --shape=rect --Lx=60 --Tf=25000 --dtOut=300 --render=1 --prefix=tclbm_rect
+# triangle, converged field
+./tclbm_obstacle --shape=tri --Tf=60000.5 --dtOut=60000 --render=1 --prefix=steady
+python3 animate.py gif tclbm_rect --shape=rect --Lx=60 --dtout=300 --out tclbm_rect.gif
+```
+
+Walls are rows 0 and `ny-1`; the inlet is a Zou-He parabolic velocity profile
+and the outlet a zero-gradient velocity condition, both adapted from
+`tflbm/tclbm01.cu`.  `u_mean = (2/3) u_max` and `Re = u_mean*D/nu`, with `D`
+the cross-stream extent of the obstacle (20.1% blockage at `ny=201`, `D=40`).
+`--D=0` removes the obstacle and gives a control run.  The masks use closed
+bounds, so `D=40` is 41 rows thick and `Lx=60` is 61 columns long; `ny` is odd
+so both shapes are exactly symmetric about row `j=100`.
+
+The easy trap is the wall geometry: with rows 0 and `ny-1` solid, the half-way
+bounce-back walls sit at `y=0.5` and `y=ny-1.5`, so the fluid rows are
+`1..ny-2`, the channel width is `L=ny-2` and the symmetry mirror is
+`j <-> ny-1-j`.  Using `L=ny-1` shifts the inlet profile by one row and makes
+the whole solution asymmetric even though grid and obstacle are symmetric; it
+showed up as a frozen ~2% asymmetry in `ux` that persisted downstream.  The
+no-obstacle control run is the quickest check: with the correct profile the
+parabolic solution is preserved with `max|uy| = 6e-6` (1e-4 of `u_max`, the
+symmetric residual of the Zou-He inlet; centreline `uy ~ 1e-16`) and the mirror
+asymmetry stays at `1e-13`.
+
+Measured at 640x201, `Nthread=256`, `Re=40` (bulk velocity 0.04, `nu=0.04`,
+`Tau=0.62`):
+
+- rectangular box 60x40: 80,000 steps in 19.7 s wall, 2501 solid nodes,
+  realized `Re=40.00`; steady and exactly symmetric wake (centreline probe
+  `uy ~ 1e-16`, asymmetry `1.3e-13 u_max`), `Lr/D = 1.88` with a peak reverse
+  velocity of `0.15 u_mean`.  `Lr/D` overshoots to 2.05 at `t ~ 8000` and
+  relaxes by `t ~ 20 000`; the side faces stay attached (`ux > 0` at `j=121`),
+  separation is at the trailing edge.  Doubling the resolution (`D=80`,
+  `Lx=120`, 1280x401, `nu=0.08`) gives `Lr/D = 1.81`, 3.7% below the coarse
+  value, and `Lr` is 74/75 cells at `u_max = 0.03/0.10`, so this shape is
+  grid- and Mach-converged too.
+- triangular box (apex upstream, base 40): 60,000 steps in 15.0 s wall, 726
+  solid nodes, steady symmetric wake with `Lr/D = 2.88` and a peak reverse
+  velocity of `0.36 u_mean`.  Grid convergence (D=80, 1280x401, `nu=0.08`)
+  gives `Lr/D = 2.86`, and `Lr` is 115 cells at `u_max = 0.03, 0.06, 0.10`
+  (same `Re`, `nu` scaled with `u_mean`), so the scalar is grid- and
+  Mach-converged.  `Lr/D` is 1.65 at Re=20, 3.75 at Re=60, 4.4 at Re=80 and
+  4.8 at Re=100 (20% blockage), and 4.4 at Re=40 with 10% blockage (`ny=401`).
+- neither obstacle sheds in this confined configuration: the symmetric steady
+  wake persists to `Re=100` for the triangle, so a Karman street cannot be
+  produced without unconfining the domain.
+- the generalised binary reproduces the earlier triangle-only binary bit for
+  bit (all HDF5 datasets of frame 79 at `t=19 750`), so `--shape` did not
+  change the numerics.
+
+`animate.py gif` reads the `Velocity_0`/`Gamma` frames (`x` fastest, three
+velocity components per node) and writes a two-panel speed/vorticity GIF with a
+fixed axes box (no layout jitter) and a figure height derived from the panel
+aspect, so `--xmax` crops stay equal-aspect.  There is no
+`ffmpeg`/`convert`/`gifsicle` on this machine; assemble GIFs with
+`PIL.Image.save(..., save_all=True)`.
+
+
 ## 6. Accuracy verification procedure
 
 ### 6.1 Recreate a clean baseline
@@ -773,6 +845,16 @@ Other `ttt` facts:
   aliased.  Measured on the 49300-sphere packings: the local exponent of
   `<df^2>` rises to `1.8` and `K2` collapses below `T`; see
   `/home/sergio/ttt_compare/README.md`.
+- Post-processing facts worth not rediscovering: the increment flatness
+  `m4/m2^2 = K4/(K2^2 dt) = kappa4+3` of the force magnitude diverges as
+  `dt^-1` (`4.5 -> 79.8`, ordered; `4.0 -> 75.0`, random) between `dt=0.25` and
+  `dt=0.005`, which is the signature of contact birth/death jumps, not of a
+  diffusion.  So no `dt -> 0` Fokker--Planck limit exists and Pawula's theorem
+  yields only a deterministic transport equation there.
+- `/home/sergio/ttt_compare/pawula.py` exceeds the 600 s bash cap when it
+  processes both packings in one pass (it reads ~9 GB of `bf` frames per run).
+  It takes a run selector (`python3 pawula.py ord` / `rnd`) and merges into
+  `pdfform/pawula.json`.  `fine_lag.py` handles both in one pass.
 
 ## 8. Current working-tree state
 
@@ -790,10 +872,13 @@ As of 2026-11-03:
   `.agents/skills/mechsys/SKILL.md`).  Do not commit or push them unless asked.
 - Untracked build products: `tflbm/tclbm06..09`,
   `tlbmdem/tlbmdem0[12]`, `tlbmdem/tlbmdem_cu_0[1-4]`,
-  `tlbmmpm/tlbmmpm01`, `tlbmmpm/tlbmmpm02`, `tmpm/tmpm0[45]`,
-  `tmpm/tmpm_cu_0[1-5]`, `MPM_OPTIMIZATION_CHANGES.md`,
+  `tlbmmpm/tlbmmpm01`, `tlbmmpm/tlbmmpm02`, `tlbmmpm/tlbmmpm_cu_0[12]`,
+  `tmpm/tmpm0[45]`, `tmpm/tmpm_cu_0[1-5]`, `MPM_OPTIMIZATION_CHANGES.md`,
   `MECHSYS_CHANGES.txt` and the other MPM binaries from the build. They are
   regenerable and must not be deleted without asking.
+- New untracked LBMMPM CUDA sources are `lib/lbmmpm/lbmmpm.cuh` and
+  `tlbmmpm/tlbmmpm_cu_01/02.cu`; keep them with the tracked changes until a
+  commit is requested.
 
 ## 9. MPM and tmpm
 
@@ -839,7 +924,8 @@ cd /home/sergio/mechsys/tlbmmpm && make -j8 tlbmmpm01 tlbmmpm02
 
 | Case | Physics | Particles | Grid nodes | Time steps |
 |---|---|---|---|---|
-| `tmpm01`/`tmpm_cu_01` | 3-D column, fixed base, end force | 5,000 | 125,000 | ~86,000 |
+| `tmpm01`/`tmpm_cu_01` (non-CPDI default) | GIMP beam, fixed base, end force | 5,000 | 125,000 | ~86,000 |
+| `tmpm01`/`tmpm_cu_01` (`cpdi`) | CPDI tetrahedral beam, fixed base, end force | 44,032 | 238,328 | ~216,000 |
 | `tmpm02`/`tmpm_cu_02` | dry granular column, Drucker-Prager | ~26,000 | ~106,000 | ~580,000 |
 | `tmpm03`/`tmpm_cu_03` | closed-box water column, Tait EOS + vNRL | ~135,000 | ~358,000 | ~259,000 |
 | `tmpm04`/`tmpm_cu_04` | periodic square-duct flow vs analytic | 216,000 | ~39,000 | ~42,400 |
@@ -857,7 +943,7 @@ and output):
 
 | Smoke reduction | CPU wall | GPU wall |
 |---|---|---|
-| `tmpm01`: `ndiv 50->10`, `Tf 5->0.02` | 0.04 s | 1.49 s |
+| `tmpm01`/`tmpm_cu_01` CPDI `ndiv=50`, `Tf 5->0.5`, 10 frames | 51.8 s | 23.8 s |
 | `tmpm02`: `num_particles_x 40->10`, `Tf 1.5->0.02` | 0.87 s | 3.72 s |
 | `tmpm03`: `particles_per_diameter 70->20`, `Tf 5->0.02` | 0.39 s | 7.34 s |
 | `tmpm04`: `particles_per_diameter 60->10`, `tf 200->1` | 0.07 s | 1.78 s |
@@ -866,13 +952,133 @@ and output):
 All ten exit 0 and write 36-100 HDF5 frames with finite `Position`,
 `PVelocity`, `Pressure`, `Sigma`, and `Strain`.
 
+The CPDI smoke row above is the historical `ndiv=50` mesh, reducing only
+`Tf`; setup is about 17 s on both paths.  The checked-in CPDI case is now
+`ndiv=125`; the smoke is kept only as the CPU/GPU parity check.  `Solve` was
+33.88 s CPU versus 5.44 s GPU for the 8,640-step window.  That parity check
+used `Fb=0.1`; the current checked-in tip force is `Fb=5e-2`.  With `Nproc=1`, all 11 HDF5 frames had identical
+dataset payloads except one `PVelocity` value at frame 7 (`4.4e-16` absolute);
+the GPU sums use atomics, so this is the expected class of difference.
+
+Halving the tip force (`Fb 0.10 -> 0.05`, both sources) halves the absolute
+deflection, `2.297e-3 -> 1.148e-3 m`, but not the relative error: the
+full-`Tf=5` GPU run gives `1.14806452e-3 m` versus analytical
+`9.75102376e-4 m`, ratio `1.1774` (the `Fb=0.1` ratio was `1.1780`).  The
+`y/Fb` profiles collapse, so force scaling is not an accuracy fix.  The
+baseline and half-force result files are
+[`tmpm01_Comparison_F01.res`](tmpm/tmpm01_Comparison_F01.res) and
+[`tmpm01_Comparison_F005.res`](tmpm/tmpm01_Comparison_F005.res).
+
+CPDI body-mesh refinement with the current boundary-corner load (GPU,
+`Tf=5`, `Fb=0.05`, `beta=1`, `Nproc=1`).  `ResizeDomainMesh(...,1.0)` sets the
+background spacing to the largest body-cell dimension, so the underlying grid
+is refined with the body mesh:
+
+| `ndiv` | particles | grid nodes | `Dx` (m) | Tip (m) | MPM/analytic tip | MAE (m) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 3,315 | 17,576 | 7.551e-3 | 8.0449e-4 | 0.8250 | 6.842e-5 |
+| 75 | 10,045 | 50,653 | 5.266e-3 | 8.7912e-4 | 0.8878 | 4.554e-5 |
+| 100 | 23,180 | 125,000 | 3.962e-3 | 9.4365e-4 | 0.9486 | 2.065e-5 |
+| 125 | 44,032 | 238,328 | 3.204e-3 | 9.7016e-4 | 0.9694 | 1.217e-5 |
+
+Refinement moves the tip toward the analytical value and reduces MAE by about
+5.6x from `ndiv=50` to 125.  The checked-in CPDI case is `ndiv=125`;
+non-CPDI remains `ndiv=50`.  The pre-optimization GPU `Solve` was about
+17m23s at 125; the 2026-11-06 hot-path pass reduced it to 4m02.85s (see
+below).  An earlier `Tf=2` refinement test (ratios
+1.144/1.292/1.440) used the old combined particle+corner load; it does not
+describe the current CPDI load path.
+
+### 9.3 CPDI CUDA hot-path optimization (2026-11-06)
+
+The CPDI algorithm and the six-launch order are unchanged.  The full
+`ndiv=125` case (44,032 particles, 238,328 nodes) dropped from
+**17m23.33s to 4m02.85s** (`4.30x`); the reduced `ndiv=50` case dropped from
+**47.53s to 26.74s** (`1.78x`).
+
+| CPDI case | particles | grid nodes | before `Solve` | after `Solve` | speed-up |
+|---|---:|---:|---:|---:|---:|
+| `ndiv=50` | 3,315 | 17,576 | 47.53 s | 26.74 s | 1.78x |
+| `ndiv=125` | 44,032 | 238,328 | 1043.33 s | 242.85 s | 4.30x |
+
+The deflection is unchanged: tip `9.70156508e-4 m`, analytical
+`1.00081114e-3 m`, ratio `0.9693702`, MAE `1.2168888e-5 m`.  The optimized
+`.res` differs by at most `1e-16 m`; `ndiv=50` is bitwise identical.  HDF5
+fields shift by round-off (about `2e-8` relative in `Sigma`/`PVelocity`), not
+by a changed formula.
+
+What changed in `lib/mpm/mpm.cuh`, `lib/mpm/Domain.h` and
+`lib/mpm/Particle.h`:
+
+- `cudaComputeAn` precomputes `An=Fn/Mass` once per step; the gather no longer
+  divides for every contribution.
+- `ParticleCU::GradvecN[4]` caches `Gradvec/(6*Vt)` from `CalcVolCPI` and
+  `UploadParticle`; scatter/gather use it directly.
+- Particle `v/L/x`, corner `x`, and scatter `v/m` stay in registers.
+- CPDI particle scatter no longer marks nodes: the corner scatter already
+  visits every node it can touch, so the redundant `atomicExch`/`atomicAdd`
+  and `SelIndexes` write are gone.
+- Corner scatter skips momentum/force atomics for exactly zero corner forces
+  and skips node atomics for zero shape values; the `Nodes`/`Sfunc` slots are
+  still filled.
+- The non-CPDI path has a separate pass, described in Section 9.4.
+
+`beta` is the ratio `Dx/dmax`: below 1 is a finer background grid, above 1 is
+coarser.  At the current `ndiv=125`, `Fb=0.05`, full `Tf=5`:
+
+| `beta` | grid nodes | `Dx` (m) | tip/analytic | MAE (m) | GPU `Solve` |
+|---:|---:|---:|---:|---:|---:|
+| 1.00 | 238,328 | 3.204e-3 | 0.9694 | 1.217e-5 | 17m23s |
+| 1.25 | 117,649 | 4.005e-3 | 1.1652 | 8.878e-5 | 17m15s |
+| 1.50 | 68,921 | 4.806e-3 | 1.1392 | 7.653e-5 | 17m17s |
+
+`beta=1.0` is clearly best; coarsening overshoots.  The earlier positive
+impression of `beta=1.5` came from the old combined particle+corner load and
+does not transfer to the boundary-corner path.  Those beta timings are
+pre-optimization; at `ndiv=125` the optimized `Solve` is about 4m03s, so use
+beta for accuracy, not as a time knob.
+
+`tmpm01`/`tmpm_cu_01` now take an optional path argument:
+
+```bash
+./tmpm01 [Nproc] [cpdi|mpm]
+./tmpm_cu_01 [Nproc] [cpdi|mpm]
+```
+
+The default is `mpm` (standard particle-grid, `ndiv=50`); pass `cpdi` to
+enable the refined CPDI mesh (`ndiv=125`, `beta=1`).  In CPDI, the end load is
+applied **only to boundary corners in the tip slice**.  The last cross-section
+of the rectangular beam is an external face, so selecting corners by `x` alone
+is sufficient; no `BFac`/`BoundaryMesh` mask is needed.  `ForcePar` is empty.  Non-CPDI applies the
+load only to `ForcePar`, with `ForceCor` empty.
+
+Final frame at `Fb=0.05`, full `Tf=5`:
+
+| Path / load | Particles | Grid nodes | Tip (m) | Tip/analytic | MAE (m) |
+|---|---:|---:|---:|---:|---:|
+| Non-CPDI, particles, `ndiv=50` | 5,000 | 125,000 | 9.3456e-4 | 0.9623 | 1.539e-5 |
+| CPDI, boundary corners, `ndiv=50` (44) | 3,315 | 17,576 | 8.0449e-4 | 0.8250 | 6.842e-5 |
+| CPDI, boundary corners, `ndiv=75` (99) | 10,045 | 50,653 | 8.7912e-4 | 0.8878 | 4.554e-5 |
+| CPDI, boundary corners, `ndiv=100` (144) | 23,180 | 125,000 | 9.4365e-4 | 0.9486 | 2.065e-5 |
+| CPDI, boundary corners, `ndiv=125` (229, checked-in CPDI) | 44,032 | 238,328 | 9.7016e-4 | 0.9694 | 1.217e-5 |
+| CPDI, old particles + all tip corners, `ndiv=50` | 3,315 | 17,576 | 1.1481e-3 | 1.1774 | 6.191e-5 |
+
+The non-CPDI path remains closest to the analytical tip, but CPDI converges
+toward it as the body mesh is refined.  The checked-in CPDI path uses
+`ndiv=125`, `beta=1`, with no particle load.  The optimized non-CPDI final
+GPU `.res` matches the previous GPU baseline to `1e-13 m`; CPDI matches to
+`1e-16`.  CPU/GPU HDF5 payloads are not promised bitwise after the
+separable-shape/`An` caches; the observed `PVelocity` shift is at the `1e-8`
+relative level.  This is an accuracy comparison, not a general GPU speed
+claim.
+
 `tmpm04` at `particles_per_diameter = 20` (8,000 particles, 14,200 steps,
 `tf = 200`) ran in 22.9 s CPU wall. `Vx_max` converged to `8.57e-4 m/s` against
 the case's own analytic `7.37e-4 m/s` (`Rerror = 16.3%`); that resolution has
 only five cells across the pipe radius, so this is a convergence check, not an
 accuracy claim. The checked-in 60-ppd case (216,000 particles, 42,400 steps,
 96 OpenMP threads, `tf = 200`) completed in 1932 s (32 min 12 s) wall before
-the CPU optimization and 1676 s (27 min 56 s) after it (Section 9.3), with
+the CPU optimization and 1676 s (27 min 56 s) after it (Section 9.5), with
 `Vx_max = 7.68731e-4 m/s`, i.e. `Rerror = 4.35%` from `t = 100 s` to the end.
 That is the checked-in accuracy of this benchmark; it does not converge
 further with time.
@@ -898,7 +1104,30 @@ Do not present the 1.5 s state as static equilibrium; it is a steady deposit
 shape with persistent basal flow. A true static state needs basal friction,
 stronger damping, or a much longer run.
 
-### 9.3 CPU performance changes
+### 9.4 Non-CPDI CUDA pass (2026-11-06)
+
+The default GIMP beam (5,000 particles, 125,000 nodes, 86,393 steps) is now
+**5.46x** faster: `Solve` fell from **1m54.82s to 21.03s**.  The final `.res`
+matches the previous GPU baseline to `1e-13 m`: tip `9.34560567e-4 m`,
+analytical `9.71136179e-4 m`, ratio `0.9623373`, MAE `1.5385435e-5 m`.
+HDF5 fields shift by round-off (about `7.4e-8` relative in `PVelocity`,
+`2.0e-9` in `Sigma`).
+
+What changed:
+
+- GIMP and the B-splines are separable.  `cudaParticleToNode` evaluates the
+  1-D shape factors once per axis (`MPMShapeFunction1DCU`) and combines them,
+  instead of evaluating the full 3-D shape for every node.  For a 3x3x3
+  support that is 9 1-D evaluations instead of 81.  The direct 3-D path is
+  retained as a fallback when an axis exceeds 8 nodes.
+- The non-CPDI gather consumes the same precomputed `An=Fn/Mass` array as
+  CPDI, so it no longer divides at every particle-node contribution.
+- The gather keeps `v`, `x` and `L` in registers; the scatter keeps `v/m` in
+  registers.
+
+The CPDI kernels and their launch order are unchanged by this pass.
+
+### 9.5 CPU performance changes
 
 The grid transfer in `ParticleToNode`/`NodeToParticle` was optimized without
 changing the arithmetic; full design and measurements are in
@@ -919,14 +1148,14 @@ Measured speedups (`Solve` wall time unless stated; 96 threads on the
 |---|---:|---:|---:|
 | `tmpm03` reduced, 20 ppd, 998 steps | 2.03 s | 0.89 s | 2.29x |
 | `tmpm03` reduced, 50 ppd, 150 steps | 0.79 s | 0.40 s | 1.98x |
-| `tmpm01` full, 86,391 steps, 100 frames (wall) | 92.42 s | 33.77 s | 2.74x |
+| pre-CPDI `tmpm01` full (5,000 particles), 86,391 steps, 100 frames (wall) | 92.42 s | 33.77 s | 2.74x |
 | `tmpm04` full, 42,437 steps, 100 frames (wall) | 1932.08 s | 1676.27 s | 1.15x |
 
-`Nproc=1` output is dataset-bit-identical for GIMP (`tmpm01`),
+`Nproc=1` output is dataset-bit-identical for pre-CPDI GIMP (`tmpm01`),
 Drucker-Prager (`tmpm02`), Tait water (`tmpm03`) and mu(I) (`tmpm05`).  At
-`Nproc>1` only the floating-point reduction order can change; full `tmpm01`
-at 96 threads differs only in `PVelocity` by `2.8e-14` (7.6e-11 relative),
-and `tmpm04` frames differ by at most `~1e-14` relative in
+`Nproc>1` only the floating-point reduction order can change; full pre-CPDI
+`tmpm01` at 96 threads differs only in `PVelocity` by `2.8e-14` (7.6e-11
+relative), and `tmpm04` frames differ by at most `~1e-14` relative in
 `PVelocity`/`Sigma`.
 
 `tmpm04` is the dense limit: 216,000 particles on 38,880 nodes (~5.5 per
@@ -937,13 +1166,14 @@ threads than `0.75*MAXTHREADS` can be faster.  An eight-group partial-grid
 prototype reached 60.8 s at 96 threads but regressed sparse cases, so it was
 not kept.
 
-### 9.4 CUDA MPM performance changes
+### 9.6 CUDA MPM performance changes
 
 The GPU path was optimized after the CPU work; full design, phase profile and
 numbers are in
 [`CUDA_MPM_OPTIMIZATION_CHANGES.md`](CUDA_MPM_OPTIMIZATION_CHANGES.md).
 Files changed: `lib/mpm/mpm.cuh`, the `USE_CUDA` parts of
-`lib/mpm/Domain.h`, and `lib/mpm/Particle.h`.
+`lib/mpm/Domain.h`, `lib/mpm/Particle.h`, `lib/mpm/Corner.h` and
+`lib/mpm/shape_functions.h`.
 
 - Hot node fields (`Mass`, `Mn`, `Fn`, `Vn`, `valid`) are separate device
   arrays (SoA), so neighbouring nodes read/write consecutive addresses.  The
@@ -956,13 +1186,23 @@ Files changed: `lib/mpm/mpm.cuh`, the `USE_CUDA` parts of
 - Reset and solve are launched over `Nnodes` blocks and exit early on the
   device count, so the host never needs the valid-node count.
 - `ParticleCU` now stores 64 nodes per particle (`4^3`, enough for cubic
-  B-spline and for quadratic/GIMP at the usual particle size), down from 125;
-  `sizeof(ParticleCU)` drops from 6024 B to 3584 B.
+  B-spline and for quadratic/GIMP at the usual particle size), down from 125.
+  The grid-path size is 3584 B; the CPDI fields (`Corners`, `Gradvec`, `Vt`)
+  add 128 B, so the current structure is 3712 B.
+- `MPM::Domain::Solve` now has a CUDA CPDI/body-mesh branch.  It launches
+  `cudaCornerToNode`, `cudaParticleToNodeCPDI`, `cudaSolveNode`,
+  `cudaMoveCorners` and `cudaNodeToParticleCPDI` in the same order as
+  `OneStepCPI`, and downloads corners plus particles at output frames.  The
+  checked-in `tmpm_cu_01` mirrors `tmpm01` (`AddRectangularBeamMesh`,
+  `ResizeDomainMesh(...,1.0)`) and applies the tip load with a device
+  `ForceCor` list and `SetCornerForce`.  This is separate from the LBMMPM
+  coupling in §9.5, which still uses the CPU `MPMDOM.OneStepCPI`.
 - A final `cudaDeviceSynchronize()` makes `Solve` timing cover queued work.
 
-Reduced four-frame benchmarks (`Nthread=256`, RTX A6000) improved
+Reduced four-frame pre-CPDI benchmarks (`Nthread=256`, RTX A6000) improved
 `tmpm_cu_01/03/04/05` by 4/8/9/10%; `tmpm_cu_02` regressed by about 1%
-(short steps, frequent particle deletion/re-upload).  These are `Solve`
+(short steps, frequent particle deletion/re-upload).  `tmpm_cu_01` is now the
+CPDI beam, so its old four-frame timing is historical.  These are `Solve`
 times; see the report for wall times and the phase split.
 
 The GPU scatter uses floating-point atomics, so bitwise identity with the
@@ -978,6 +1218,144 @@ particle roughly larger than 1.5 cells would need five nodes per dimension
 (125 entries); use a smaller particle size or widen the arrays in
 `Particle.h` for that configuration.
 
+### 9.7 CUDA LBMMPM
+
+The LBMMPM CUDA path mirrors the CPU coupling in `lib/lbmmpm/Domain.h`; the
+kernels are in the new `lib/lbmmpm/lbmmpm.cuh`.  It currently supports
+**D3Q15 only** (`LBMDOM.Nneigh == 15` is checked in `Solve`).  In this
+two-domain coupling the MPM material-point update (`MPMDOM.OneStepCPI`)
+remains on the CPU; only the LBM and the immersed-boundary coupling run on
+the device.  Standalone `MPM::Domain::Solve` has a separate CUDA CPDI path
+(§9.4).  The detailed data map, upload
+schedule and launch order are in `CUDA_LBMMPM_STRUCTURE.txt`.
+
+Host-side work in `LBMMPM::Domain`:
+
+- `UpLoadDevice` uploads `F/Rho/Vel/BForce/IsSolid`, the body-cell and facet
+  vertex ids, corner positions/velocities/forces, and builds two compact work
+  lists: `(body cell, candidate lattice cell)` and `(facet, candidate cell)`.
+  The candidate cells come from the same AABB bounds as the CPU loops.
+- Immediately after `UpLoadDevice`, `Solve` calls `UpdateDeviceCorners` and
+  `ImprintLatticeCUDA` once before the first output.  Without that extra
+  imprint, `frame 0000` has `Gamma=0` in the initial body region while the CPU
+  has already imprinted, so the first HDF5 output differs.
+- `UpdateDeviceCorners` re-uploads moving corner `x/v` and clears `bCornerH`.
+- `ImprintLatticeCUDA` zeroes `Gamma` with `cudaMemsetAsync` and launches, in
+  order: `cudaImprintCells`, `cudaRefill`, `cudaMarkFacets` and
+  `cudaImprintFacets`.  The separate marking pass finalises `Gamma` before the
+  forcing pass reads the solid neighbour; without it a single mixed kernel
+  races marking against the `Gamma[ns]` read.
+- `DownloadCornerForces` copies the atomic corner forces back into
+  `MPMDOM.Corners[*]->h`.
+- Do not restore the legacy `ImprintLattice` assignment
+  `F[nxs][nys][nzs][k] = F[nx][ny][nz][k]`.  The current CPU and CUDA paths
+  both use the original solid-neighbour population; the assignment was
+  disabled in `e1ad057` and raises the current CPU cube `CD` from 6.83 to
+  31.5 at `Re~5` (formula 6.41).
+- The per-step LBM sequence is `cudaCollideMPM<15>`, pointer swap,
+  `cudaStreamMPM` (periodic), pointer swap.  `cudaCollideMPM` reconstructs
+  `Rho`/`Vel` itself, so there is no separate `cudaVelDen` launch.
+- Device `F` is direction-major.  Use `FLBM::FIDX(Ncells,Nneigh,il,k,ic)` from
+  `lib/flbm/lbm.cuh` for device addressing; the boundary kernels compute the
+  cell index `n` once and pass it to `FIDX`.  Do not add local copies of the
+  index formula.
+
+`cudaImprintFacets` intentionally keeps the CPU strict tests
+(`r>0, s>0, t>0, s+t<1`, normal dot `>0`).  The CPU free `SolAlt` and the
+device `Mat3::SolAlt` method in `lib/linalg/matvec.h` use the same arithmetic;
+on facet edges the CPU returns exact zeros and the device inverse leaves
+~1e-16 noise, which changes which surface cells are marked.  The CMake targets therefore compile the CUDA
+sources with **`--fmad=false`**; with FMA contraction the reduced and full t02
+cases disagree on 145 and 176 `Gamma` cells respectively, and with the flag
+`Gamma` is bitwise identical in those tests.  For one-off builds use
+
+```bash
+NVCC_PREPEND_FLAGS=--fmad=false /home/sergio/mechsys/mechsyscc case.cu
+```
+
+Build the two checked-in CUDA drivers from the root-configured tree:
+
+```bash
+cd /home/sergio/mechsys/tlbmmpm
+make -j8 tlbmmpm_cu_01 tlbmmpm_cu_02
+```
+
+`tlbmmpm_cu_01.cu` is the elastic-beam case with device inlet/outlet/top
+boundary kernels; `tlbmmpm_cu_02.cu` is the settled-cube case with a device
+`BForce = Rho*fluidforce` write in `Setup`.  Both use the same full grids and
+`Tf` as `tlbmmpm01/02`, so they are production-length runs; reduce a copy for a
+smoke test.  The CPU examples remain unchanged.
+
+Measured on the RTX A6000 (`Nthread=256`, 8 CPU threads for the CPU side,
+CUDA 12.4, double precision):
+
+| Case | Grid / steps | CPU solve (wall) | GPU solve (wall) | Speedup (solve) |
+|---|---|---:|---:|---:|
+| `t02` reduced, `Tf=100`, `dt=0.2` | 61x21x21, 500 | 0.937 s (1.02 s) | 0.617 s (0.81 s) | 1.5x |
+| `t02` full grid, window `Tf=200` | 241x61x61, 1000 | 39.62 s (39.93 s) | 5.80 s (6.16 s) | 6.8x |
+| `t01` reduced beam, `Tf=0.02`, `ndiv=40` | 40x40x40, 277 | 1.285 s (1.42 s) | 0.806 s (1.26 s) | 1.59x |
+| `t01` full-grid window, `Tf=0.002`, `ndiv=40` | 200x200x200, 28 | 14.69 s (16.62 s) | 6.35 s (8.63 s) | 2.31x |
+
+The 2026-11-06 hot-path pass keeps this order and tunes the kernels.  On the
+same RTX A6000 with `Nthread=256`, `-maxrregcount=128`, `--fmad=false`:
+
+| Case | Grid / steps | Before `Solve` | After `Solve` | Speedup |
+|---|---|---:|---:|---:|
+| `t02` full window, `Tf=200` | 241x61x61, 1001 | 4.993 s | 4.062 s | 1.23x |
+| `t01` full window, `Tf=0.01`, `ndiv=40` | 200x200x200, 139 | 10.664 s | 8.938 s | 1.19x |
+
+The pass fuses the velocity/density reconstruction into `cudaCollideMPM`,
+precomputes `1/Cs` and `1/rho`, removes the intermediate `Ftemp` stores from
+the entropic fixed-point loop, replaces stream `%` wrap with conditional
+add/subtract, and uses `cudaMemsetAsync` for `Gamma`.  A single-scan
+`alpha=1` limiter is faster but is **not** equivalent: a negative-noneq
+direction can become negative only after alpha is reduced, so the fixed-point
+loop must be retained.  Register caps 64/72/80/96/160/192, `Nthread=128/512`
+and a shared-memory `NonEq` variant gave no repeatable gain.
+
+Later frames are not bitwise.  Repeated baseline GPU runs already differ by
+about `7.2e-4` relative in `Density_0` and `2.2e-3` in `Velocity_0`; the
+optimized-vs-baseline difference is the same order, while `frame 0000` is
+byte-identical.  The reduced t01 final beam deflection differs by `5.6e-6 m`
+(`5.6e-5` relative).  Do not treat small later-frame LBM differences as an
+optimization regression without a baseline-vs-baseline rerun.
+
+The reduced t02 GPU run is 7.5x faster than the same case at `Nproc=1`
+(4.693 s solve).  On the reduced grid `Nthread=128` was 0.70 s and `Nthread=256`
+0.62 s in the final build; the difference is smaller than the run-to-run
+spread.  The full-grid window is 1000 of the checked-in 100,000 steps; it is a
+per-step benchmark, not the full case.
+
+Accuracy in those windows:
+
+- Reduced t02 at `t=50`: `Re` 26.021 (CPU) vs 25.789 (GPU), -0.9%; `CD` 8.369
+  vs 7.66, -8.5%.
+- Full t02 at `t=180.2`: `Re` 94.720 vs 94.679, -0.04%; `CD` 0.6727 vs 0.5109,
+  -24%.  At `t=20.2` the `CD` gap is already -8.5%.
+- Reduced t01 at `t=0.015`: `Re` 12.202 vs 12.257, +0.45%; beam deflection
+  `6.526e-3` vs `6.259e-3`, -4.1%; `CD` 0.6741 vs 0.6355, -5.7%.
+- Full-grid t01 at `t=0.001013` (28 steps): the printed `Re` and both
+  deflections were identical (`Re=0.330572695`, deflection `0`); this is a
+  short startup window before measurable bending, not a full `Tf=1.5` run.
+- `Gamma` was bitwise identical at the compared frames in both t02 windows.
+- At `frame 0000` all common LBM and MPM dataset payload bytes are identical
+  after the initial imprint fix.  The HDF5 files are still not byte-identical:
+  the raw files differ by 12 bytes (LBM) or 22 bytes (MPM) of HDF5 metadata,
+  mostly object timestamps; compare datasets rather than whole-file MD5.
+- After one step the payloads are not byte-identical.  Reduced t02 `frame 0001`
+  has `Gamma` exact but `Density_0`/`Velocity_0` differ (8706/28862 bytes).
+  Full t02 `frame 0001` differs in 2.95M/13.4M density/velocity bytes; t01
+  reduced `frame 0001` has MPM `Sigma/Strain/PVelocity/Position/Vertex`
+  differences.  The initial `frame 0000` exactness therefore does not imply a
+  bitwise trajectory.
+
+The velocity fields and `Re` agree closely, but the integrated corner force
+(`CD`) is not a validated GPU quantity: the CPU OpenMP facet loop and the GPU
+atomic corner sums update `F`/`h` in different orders, and this diagnostic is
+sensitive to local cancellation.  `atomicAdd` also makes repeated GPU runs
+non-bitwise (reduced `CD` varied by ~0.2% between runs).  Do not present the
+GPU `CD` as matching the CPU; the t01 deflection is the better mechanics check.
+
 ## 10. Documentation map
 
 | Document | Use |
@@ -992,6 +1370,7 @@ particle roughly larger than 1.5 cells would need five nodes per dimension
 | `REDUCED_TEST_CU_03_PERFORMANCE.md` | reduced CUDA thread/Verlet sweeps |
 | `MPM_OPTIMIZATION_CHANGES.md` | CPU MPM changes, exactness, benchmarks, dense-grid limit |
 | `CUDA_MPM_OPTIMIZATION_CHANGES.md` | CUDA MPM SoA/valid-list changes, phase profile, GPU benchmarks and 64-node limit |
+| `CUDA_LBMMPM_STRUCTURE.txt` | CUDA LBMMPM host/device data map, upload schedule, launch order, kernel responsibilities and extension checklist |
 | `benchmarks/cpu_voronoi/` | reproducible CPU Voronoi inputs |
 
 ## 11. Maintaining this knowledge

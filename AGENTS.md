@@ -81,6 +81,7 @@ make -j8 tmpm_cu_01 tmpm_cu_02 tmpm_cu_03 tmpm_cu_04 tmpm_cu_05
 
 cd /home/sergio/mechsys/tlbmmpm
 make -j8 tlbmmpm01 tlbmmpm02      # also compiles the MPM headers
+make -j8 tlbmmpm_cu_01 tlbmmpm_cu_02
 ```
 
 The `tmpm` cases are large (up to 216,000 particles and 580,000 steps). For a
@@ -122,6 +123,114 @@ make it fast.
   the raw second moment. The raw GPU value carries a constant `-0.5*nu*phi`
   bias in `K`; use `u_physical = u_raw + 0.5*dt*fx*phi` for permeability and
   state which convention a number uses.
+- Device population addressing uses `FLBM::FIDX(Ncells,Nneigh,il,k,ic)` from
+  `lib/flbm/lbm.cuh`; do not add local copies of the direction-major index
+  formula in test kernels.
+- The device 3x3 alternative solver is `Mat3::SolAlt` in
+  `lib/linalg/matvec.h`; do not add another `lbmmpm_sol_alt`-style copy in a
+  CUDA kernel.
+- LBMMPM CUDA (`lib/lbmmpm/lbmmpm.cuh`, `tlbmmpm/tlbmmpm_cu_01/02.cu`) is
+  D3Q15-only and keeps `MPMDOM.OneStepCPI` on the CPU.  Build it with
+  `--fmad=false` (the CMake targets do); without it the facet-edge `Gamma`
+  classification differs from the CPU.  MechSys host/CPU code is double.
+  CUDA precision is user-selectable with
+  `USE_GPU_DOUBLE`; `mechsyscc` and CMake enable it by default.  `Solve`
+  imprints once after
+  `UpLoadDevice` before the first output; without it `frame 0000` has no
+  initial body `Gamma`.  Compare HDF5 datasets, not whole files: `frame 0000`
+  payloads are exact but HDF5 timestamps differ, while later frames are not
+  bitwise.  The GPU `CD` diagnostic is not bitwise or quantitatively
+  validated; `Re`/velocity and t01 deflection are the usable checks.
+  `tlbmmpm_cu_01` is the elastic beam; `tlbmmpm_cu_02` is the settled cube
+  (the only case with `CD(formula)` in its `.res`).  Its MPM mesh is
+  24 tetrahedra/14 corners; body force is `0.25`.  CMAME 2021 reference:
+  P. Zhang, S. Sun, Y. Chen, W. Cui, S.A. Galindo-Torres, "Coupled material
+  point Lattice Boltzmann method for modeling fluid-structure interactions
+  with large deformations," Comput. Methods Appl. Mech. Eng. 385 (2021)
+  114040, doi:10.1016/j.cma.2021.114040.  The paper's built-in Eq. (38) is
+  `Cd=128*Re^-0.8/5.5`; its cube validation uses a six-tet body and
+  `b=2.5e-5`, so stock 24-tet/`b=0.25` is not directly paper-equivalent.
+  A manual 6-tet/8-corner
+  cube (12 BFac, exact volume) at `b=0.843` reaches
+  `Re=100.03`, `CD=0.3026` vs Eq. (38) `0.5844` (-48.2%); at matched Re it
+  is worse than the 24-tet body, so the mesh alone is not the fix.
+  Velocity inlet (Zou-He, x=0) + zero-gradient outlet (x=Nx-1) was tried:
+  at Re=100 six-tet CD=0.3201 (-45.2%); mini sweep Re=5..100 gives
+  -26.2..-45.2%, no match, so no full sweep.  The current `nu=0.0020833`
+  is ~1000x the CMAME 2021 low-viscosity value `2.0803e-6`;
+  `Tau=0.500125` is unstable with the current SRT/coupling.  LES is
+  implemented in `cudaCollideMPM` (`Sc=0.17` default, active; Sc=0 vs
+  0.17 changes 1k CD 0.2682 vs 0.3117), but does not stabilize the low
+  viscosity; all velocity-BC results
+  already had LES on.  Original `tlbmmpm_cu_02` stock 24-tet body sweep:
+  b=0.25 -> Re 37.99, b=0.80 -> 95.54, b=0.84 -> 98.91; b=0.84 is the
+  best Re~100 point (CD=0.3551 vs Eq.38 0.5897).  The facet
+  `-2 rho W Cs C` term is now always full; the former empirical
+  `ForceCorrection` member and its 0.6 default were removed.  Historical
+  FC=0.6 results (CD=0.5858 at Re99.2, 1.2803 at Re38) are no longer
+  reproducible without re-adding that scaling.  The CMAME 2021 low-viscosity
+  run (`nu=2.0803e-6`,
+  `bforce=2.5e-5`)
+  is unstable at low Tau: full run `Re=10.553`, `CD=-9170` vs Eq. (38)
+  `3.533`; 24-tet also negative; Sc=2 gives 161.5.  Full cube `.res` run:
+  `CD` 41.1 -> 0.913, formula 22.25 -> 1.268, final -28.0%.  A longer
+  streamwise box helps modestly (at matched `Re=30`, error -25.5% for
+  241x61x61 vs -24.1% for 361x61x61 and -23.2% for 481x61x61), but a wider
+  transverse box hurts badly (-39.2%/-41.5% for 81/91 at `Re=30`).  Do not
+  treat a uniformly larger box as a fix.  The legacy `ImprintLattice`
+  differs by one assignment that overwrites the solid-neighbour population;
+  it was reactivated in the CUDA facet kernel by user request, then removed
+  again on 2026-11-08.  With the copy it was a GPU data race and full-force
+  cube drag was `CD=1.88`/`5.17` at `b=0.84`/`0.25` (historical FC=0.6:
+  `2.07`/`5.49`); without it the fresh stock `b=0.25` run is `Re=37.9866`,
+  `CD=0.912101` vs Eq. (38) `1.268068` (-28.07%, Mach about 0.076), so do not
+  use the copy for validation.  The legacy CPU
+  `tlbmmpm02` at `b=0.25`/`0.84` with 64 threads gives `CD=4.878`/`1.965`
+  vs Eq. (38) `1.250`/`0.581` (+290%/+238%), confirming the legacy cube
+  itself was not accurate and that the GPU race is not the only cause.  The
+  same copy is what matches the 10 mm MDPI flap deflection at Re=9
+  (`Appl. Sci. 10(18):6177`), while no-copy is about 7x too stiff; the
+  paper defines `Re=v*w/nu` with a uniform inlet `v` and flap width `w`.
+  The MDPI model is **3D**: its abstract says three-dimensional transient
+  simulations and Section 2.2.1 gives the tank as (150w,20w,12.5w); its
+  bending lines are 2D projections, not a 2D simulation.  The old t01
+  parabola used `umax=1.5*Re*nu/Ly` and `dVel[j]`, so it varied
+  along z (length), not width.  t01 now uses the paper's uniform inlet
+  `v=Re*nu/Ly` at Re=9; its no-copy deflection is 8.78 mm versus 4.99 mm for
+  the old parabolic mean-Re=9 case (the parabola was nearly zero at the
+  clamp).  The current slab mesh is `ndiv=64`: 3586 tets, 1624 surface
+  triangles, minimum surface edge 1.937 mm, so every triangle remains larger
+  than the 1.5 mm LBM cell.  Full refined run: mean `dx=9.314 mm`, wall
+  1170 s.  `ndiv=80` gives min 1.646 mm (1.10 dx); do not refine past about
+  `ndiv=80` without checking the generated facets.  `tlbmmpm_cu_01` takes an
+  optional `argv[2]` domain size (default 0.3 m, `n=200`), `argv[3]` inlet
+  velocity (default `v=1.815 m/s`), `argv[5]` slab thickness (default
+  0.01 m), `argv[6]` `ndiv` and `argv[7]` MPM grid `beta`; the body/report
+  centre is `xc=0.5*n*dx`.  Measured `t>=0.75 s` means: 0.2 m -> 8.839 mm
+  (std 0.048), 0.3 m -> 9.314 mm (std 0.168), 0.5 m -> 7.867 mm
+  (std 0.768).  Larger is not better; 0.3 m is the best compromise.  Current
+  default is `Ldom=0.3`, `v=1.815 m/s` (`Re=44.27`), giving a 39.6 mm
+  centreline tip; the response is sensitive near v=1.81--1.83, so do not
+  overclaim a precise target velocity.  Final centreline plot
+  `/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_middle_line.png` and
+  100-frame VisIt animation
+  `/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_fluid.gif`.  Do not
+  tune a global `ForceCorrection` to satisfy both, and treat the copy as an
+  unvalidated ghost-population closure.  It is phase-correct for
+  post-streaming data, but the current CUDA copy sits inside the facet loop
+  after `newF`; a consistent version needs a separate post-streaming
+  `Fghost` pass used by both bounce-back and force.  VisIt animation of the
+  refined (`ndiv=64`) run is
+  `/home/sergio/DATA/t01_ndiv64_uniform/t01_ndiv64_fluid.gif`.  GPU body-force sweep: `b=2.5e-5`
+  gives `Re=0.005`, `CD=4657` vs Eq. (38) 1505; `b=0.25` gives `Re=38`,
+  0.913 vs 1.268.  At matched Re, CD depends on bforce, so instantaneous
+  constant-force points are not a quasi-steady validation.  The
+  2026-11-06 pass fuses Rho/Vel into `cudaCollideMPM` (no `cudaVelDen`
+  launch), precomputes `1/Cs`/`1/rho`, and uses the fixed-point limiter
+  without intermediate `Ftemp` stores; a single-scan limiter is not
+  equivalent.  Measured `Solve`: full t02 window 4.993 -> 4.062 s, full t01
+  window 10.664 -> 8.938 s.  Later-frame differences are within the GPU's own
+  atomic run-to-run spread; `frame 0000` is exact.
 - One-off cases should live outside the checkout and be compiled with
   `/home/sergio/mechsys/mechsyscc case.cu`; do not add them to `tflbm/` unless
   they belong in the library test suite.
@@ -152,8 +261,21 @@ make it fast.
   on static solids), while `mass_total` matches `S(t-t_on)`. Production
   512x512, phi=0.70, seed=12345, fx=1e-2, D=0.02, S=1e-4, t=20k..60k: 67.4 s
   wall, `mass_total=4.0`, `Cmax=1.09e-3`; the plume wraps between 55k and 60k.
+- Obstacle channel case: `/home/sergio/tflbm_triangle/` (`tclbm_obstacle.cu`,
+  `--shape=rect|tri`, `Re=u_mean*D/nu`, 640x201, `D=40`). Rows 0 and `ny-1`
+  are solid, so the walls are at `y=0.5` and `y=ny-1.5`, the channel width is
+  `L=ny-2` and the symmetry mirror is `j <-> ny-1-j`; using `L=ny-1` makes the
+  whole solution asymmetric. At Re=40 both wakes are steady and symmetric:
+  `Lr/D=1.88` for the 60x40 rectangle and `2.88` for the triangular box
+  (grid-converged 2.86, Mach-independent); no shedding up to Re=100 at 20%
+  blockage.
 
 ## VisIt visualization
+
+**Always use the project fluid colormap, `turbo`, for plots and animations**
+(`colorTableName = "turbo"` in VisIt; `matplotlib.colormaps["turbo"]` in
+Python).  Do not substitute `hot`, `bwr`, `jet`, or a custom blue-white-red
+map unless the user explicitly asks for a different map.
 
 VisIt 3.3.2 is installed at `/usr/local/visit/bin/visit`; `~/.profile` adds
 `/usr/local/visit/bin` to `PATH`.  Use it headlessly:
@@ -184,6 +306,35 @@ For pseudocolor, use the full variable name for a standalone file
 the Threshold variable must likewise be `DEM_Faces/Tag` versus `Tag`.
 `SaveWindow` appends a frame number to the requested filename
 (`visit.png0000.png`).
+
+For the t01 LBM/MPM slab animation, create `lbm.visit`/`mpm.visit`
+playlists, plot `speed=magnitude(Velocity_0)` with `turbo` on a `Slice`
+plane (`y=0.15`, normal `+y`), overlay the deformed `MPM_mesh`, and call
+`quit()` after the save loop.  A `Slice` is ~3 s/frame at 900x900; a `Clip`
+of the same 200^3 grid is much slower.  Current target run:
+`/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_fluid.gif`; fixed speed
+range 0--2.0 m/s for v=1.815 m/s.  The direct `position.res` plot is
+`/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_position_file.png`
+(`plot_position_res.py`); the file has normalized `(x-xc)/Lz` and `z/Lz`
+columns, 731 rows including the clamped z<0 section.  The `Delta z` vs
+`Delta x` version is
+`/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_position_delta.png`
+(`plot_position_delta.py`); initial coordinates come from the matching
+frame-0 particle ids.  The requested `z` vs `Delta x` plot is
+`/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_position_z_dx.png`
+(`plot_position_z_dx.py`).  For a half-thickness slab (`Lx=0.005 m`) keep the
+MPM x padding at `PadX=Lz`, not `10*Lx`; the narrower box crashes with
+`nhigh out of bounds`.  Completed half run:
+`/home/sergio/DATA/t01_L030_v1815_Lx005_padLz/`, mean tip 83.34 mm, final
+83.11 mm, wall 1081.20 s.  Refining the thickness grid
+(`ndiv=80,beta=0.75` or `beta=0.5`) is unstable, so that run is
+under-resolved/qualitative.  Both middle planes are overlaid in
+`/home/sergio/DATA/t01_L030_v1815_uniform/t01_v1815_middle_planes_10_5mm.png`
+(`plot_both_middle_planes.py`), using `z` vs `x-xc` for both.  Its
+100-frame animation is
+`/home/sergio/DATA/t01_L030_v1815_Lx005_padLz_video/t01_Lx005_fluid.gif`
+(poster `t01_Lx005_fluid_poster.png`); the video rerun took 1137.84 s and
+VisIt rendering 137.70 s.
 
 ## Exactness rules (critical)
 
@@ -266,11 +417,35 @@ These are easy to break accidentally:
 13. **CUDA MPM hot path.** Hot node fields are SoA arrays
     (`pMass/pMn/pFn/pVn/pValid`); the scatter builds the touched-node list
     with `atomicExch` + `atomicAdd`, the previous list is reset first, and the
-    counter is ping-ponged. Reset/solve launch over `Nnodes` and exit early on
+    counter is ping-ponged. Do not remove `pValidNumberPrev` as "redundant":
+    a single-counter trial stayed deterministic but moved the non-CPDI
+    `tmpm_cu_01` trajectory (final `.res` difference `8.74e-3 m`) and gave no
+    speedup; CPDI stayed exact. Reset/solve launch over `Nnodes` and exit early on
     the device count. Keep the final `cudaDeviceSynchronize()` in `Solve`.
     `ParticleCU` now holds 64 nodes per particle (cubic B-spline limit);
     quadratic/GIMP normally use 27. GPU sums use atomics, so never promise
-    bitwise equality. See
+    bitwise equality. The `BodyMesh!=NULL` CPDI branch is implemented with
+    `cudaCornerToNode`, `cudaParticleToNodeCPDI`, `cudaMoveCorners` and
+    `cudaNodeToParticleCPDI`; keep the launch order matching `OneStepCPI`.
+    LBMMPM still runs `MPMDOM.OneStepCPI` on the CPU.  The checked-in
+    `tmpm01`/`tmpm_cu_01` pair takes `[Nproc] [cpdi|mpm]` (default non-CPDI).
+    CPDI uses `ndiv=125`, `beta=1`, and loads only boundary corners in the tip
+    slice; non-CPDI keeps `ndiv=50` and loads only `ForcePar`.  The CUDA version keeps `ForceCor` as a device index list and
+    sets corner `h` with `SetCornerForce`.  The 2026-11-06 CPDI pass caches
+    `An=Fn/Mass` (`cudaComputeAn`) and `GradvecN=Gradvec/(6*Vt)` in
+    `ParticleCU`, keeps particle/corner state in registers, and drops the
+    redundant valid-node rebuild in `cudaParticleToNodeCPDI` because the corner
+    scatter already covers every node.  It cut `ndiv=125` `Solve` from
+    17m23s to 4m03s; CPDI `.res` is unchanged to `1e-16`, while HDF5 fields
+    shift by round-off.  The non-CPDI scatter evaluates separable 1-D GIMP/
+    B-spline factors (`MPMShapeFunction1DCU`) and its gather also uses
+    `An=Fn/Mass`; `Solve` fell from 1m54.8s to 21.03s, with the final `.res`
+    matching the previous GPU baseline to `1e-13 m`.  HDF5 payloads are not
+    promised bitwise after these caches; the observed `PVelocity` shift is
+    about `7e-8` relative.  For this rectangular beam, the CPDI tip load
+    selects corners by `x` alone because the last cross-section is an external
+    face; do not generalize that shortcut to a body mesh that can have
+    interior vertices in the last slice.  See
     [`CUDA_MPM_OPTIMIZATION_CHANGES.md`](CUDA_MPM_OPTIMIZATION_CHANGES.md).
 
 ## Performance rules

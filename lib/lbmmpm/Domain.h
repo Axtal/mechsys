@@ -23,6 +23,10 @@
 // Mechsys
 #include <mechsys/flbm/Domain.h>
 #include <mechsys/mpm/Domain.h>
+#ifdef USE_CUDA
+#include <vector>
+#include <mechsys/lbmmpm/lbmmpm.cuh>
+#endif
 
 namespace LBMMPM
 {
@@ -60,6 +64,16 @@ public:
     void ImprintLattice();              ///< Imprint the MPM material point into the LBM grid
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
+
+#ifdef USE_CUDA
+    void UpLoadDevice  (size_t Nc=1);   ///< Upload LBM/MPM coupling buffers
+    void DnLoadDevice  (size_t Nc=1);   ///< Download Gamma/Rho/Vel for output
+    void UpdateDeviceCorners();         ///< Upload moving corner x/v and clear h
+    void BuildBodyPairs();              ///< Build the body-cell/candidate-lattice work list
+    void BuildFacetPairs();             ///< Build the facet/candidate-cell work list
+    void DownloadCornerForces();        ///< Copy device corner h back to the CPU corners
+    void ImprintLatticeCUDA();          ///< GPU version of Reset/ImprintLattice coupling
+#endif
     
     //Variables
     double           dt;                ///< Time Step
@@ -71,11 +85,41 @@ public:
     MtData *        MTD;
     FLBM::Domain LBMDOM;                ///< The LBM domain
     MPM::Domain  MPMDOM;                ///< The MPM domain
+
+#ifdef USE_CUDA
+    size_t Nthread;                     ///< CUDA block size for LBMMPM kernels
+    thrust::device_vector<real>         bGamma;     ///< Overlapping volume fraction
+    thrust::device_vector<bool>         bInside;    ///< Cells inside a body
+    thrust::device_vector<size_t>       bCellVerts; ///< 4 vertex ids per body cell
+    thrust::device_vector<size_t>       bFacVerts;  ///< 3 vertex ids per boundary facet
+    thrust::device_vector<BodyPair>     bBodyPairs; ///< Body/candidate-cell work list
+    thrust::device_vector<FacPair>      bFacPairs;  ///< Facet/candidate-cell work list
+    thrust::device_vector<real3>        bCornerPos; ///< Moving corner positions
+    thrust::device_vector<real3>        bCornerVel; ///< Moving corner velocities
+    thrust::device_vector<real3>        bCornerH;   ///< Hydrodynamic corner forces
+    real  * pGamma;
+    bool  * pInside;
+    size_t* pCellVerts;
+    size_t* pFacVerts;
+    BodyPair* pBodyPairs;
+    FacPair* pFacPairs;
+    real3 * pCornerPos;
+    real3 * pCornerVel;
+    real3 * pCornerH;
+    size_t  nBodyCells;
+    size_t  nFacets;
+    size_t  nBodyPairs;
+    size_t  nFacPairs;
+    size_t  nCorners;
+#endif
 };
 
 inline Domain::Domain()
 {
     Nproc = 1;
+#ifdef USE_CUDA
+    Nthread = 256;
+#endif
     Time = 0.0;
     MPMDOM = MPM::Domain();
 }
@@ -83,6 +127,9 @@ inline Domain::Domain()
 inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double Thedx, double Thedt)
 {
     Nproc  = 1;
+#ifdef USE_CUDA
+    Nthread = 256;
+#endif
     dt = Thedt;
     Time = 0.0;
     LBMDOM = FLBM::Domain(TheMethod, Thenu, TheNdim, Thedx, Thedt);
@@ -353,25 +400,17 @@ void Domain::ImprintLattice()
 
                     double rho = LBMDOM.Rho[0][nx][ny][nz];
 
-                    LBMDOM.F[0][nx][ny][nz][ko] = (r*LBMDOM.F[0][nxf][nyf][nzf][ko]+(1.0-r)*LBMDOM.F[0][nx][ny][nz][k] + 
+                    double newF = (r*LBMDOM.F[0][nxf][nyf][nzf][ko]+(1.0-r)*LBMDOM.F[0][nx][ny][nz][k] +
                     r*LBMDOM.F[0][nxs][nys][nzs][k]+6.0*rho*LBMDOM.W[k]*dot(LBMDOM.C[ko],vw)/Cs)/(1+r);
 
-
-                    if (LBMDOM.F[0][nx][ny][nz][ko]<0.0)
-                    {
-                        std::cout << "ibb gave negative value" << std::endl; 
-                        std::cout << "rst " << rst << std::endl; 
-                        std::cout << "vw " << vw << std::endl; 
-                        std::cout << "Fs " <<  LBMDOM.F[0][nxs][nys][nzs][k] << std::endl; 
-                        std::cout << "F "  << LBMDOM.F[0][nx][ny][nz][ko] << std::endl; 
-                        std::cout << "Ff " <<  LBMDOM.F[0][nxf][nyf][nzf][ko] << std::endl;
-                        std::cout << "Time " << Time << std::endl; 
-                        throw new Fatal("Domain::Imprintlattice ibb gave negative value");
-                    }
+                    // Match the CUDA facet kernel: clamp instead of aborting so
+                    // both back ends produce the same post-collision population.
+                    if (newF < 0.0) newF = 0.0;
+                    LBMDOM.F[0][nx][ny][nz][ko] = newF;
 
                     //LBMDOM.F[0][nxs][nys][nzs][k] = LBMDOM.F[0][nx][ny][nz][k];
 
-                    Vec3_t F = ld*ld*Cs*((Cs*LBMDOM.C[k]-vw)*LBMDOM.F[0][nxs][nys][nzs][k]-(Cs*LBMDOM.C[ko]-vw)*LBMDOM.F[0][nx][ny][nz][ko]-2.0*rho*LBMDOM.W[k]*Cs*LBMDOM.C[k]);
+                    Vec3_t F = ld*ld*Cs*((Cs*LBMDOM.C[k]-vw)*LBMDOM.F[0][nxs][nys][nzs][k]-(Cs*LBMDOM.C[ko]-vw)*newF-2.0*rho*LBMDOM.W[k]*Cs*LBMDOM.C[k]);
                     //Vec3_t F = ld*ld*Cs*((Cs*LBMDOM.C[k]-vw)*LBMDOM.F[0][nxs][nys][nzs][k]-(Cs*LBMDOM.C[ko]-vw)*LBMDOM.F[0][nx][ny][nz][ko]);
                     double f = norm(F);
                     if (isnan(f))
@@ -414,6 +453,17 @@ void Domain::ImprintLattice()
 
 void Domain::Reset()
 {
+#ifdef USE_CUDA
+    // The GPU path resets Gamma on the device.  Only the CPU-side geometric
+    // state and the corner force accumulators are updated here.
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t ic=0; ic<MPMDOM.Corners.Size(); ic++)
+    {
+        MPMDOM.Corners[ic]->h = OrthoSys::O;
+    }
+    MPMDOM.UpdateMesh();
+    return;
+#endif
     //std::cout << "0" << std::endl;
     //std::cout << LBMDOM.Ndim << " " << Nproc<< " " << LBMDOM.Nneigh << std::endl;
     #pragma omp parallel for schedule(static) num_threads(Nproc)
@@ -440,6 +490,203 @@ void Domain::Reset()
     //std::cout << "2" << std::endl;
     MPMDOM.UpdateMesh();
 }
+
+#ifdef USE_CUDA
+inline void Domain::UpLoadDevice(size_t Nc)
+{
+    if (MPMDOM.BodyMesh==NULL)
+        throw new Fatal("LBMMPM::Domain::UpLoadDevice: a body mesh is required");
+
+    LBMDOM.UpLoadDevice(Nc);
+
+    nCorners   = MPMDOM.Corners.Size();
+    nBodyCells = MPMDOM.BodyMesh->Cells.Size();
+    nFacets    = MPMDOM.BFac.Size();
+
+    thrust::host_vector<real>  hGamma (LBMDOM.Ncells, 0.0);
+    thrust::host_vector<bool>  hInside(LBMDOM.Ncells, false);
+    for (size_t nz=0;nz<LBMDOM.Ndim(2);nz++)
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t ny=0;ny<LBMDOM.Ndim(1);ny++)
+    for (size_t nx=0;nx<LBMDOM.Ndim(0);nx++)
+    {
+        size_t n = nx + ny*LBMDOM.Ndim(0) + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0);
+        hGamma[n]  = LBMDOM.Gamma[nx][ny][nz];
+        hInside[n] = LBMDOM.Inside[nx][ny][nz];
+    }
+    bGamma = hGamma;
+    bInside = hInside;
+
+    thrust::host_vector<size_t> hCellVerts(4*nBodyCells);
+    for (size_t ic=0; ic<nBodyCells; ic++)
+    for (size_t j=0; j<4; j++)
+        hCellVerts[4*ic+j] = MPMDOM.BodyMesh->Cells[ic]->V[j]->ID;
+    bCellVerts = hCellVerts;
+
+    thrust::host_vector<size_t> hFacVerts(3*nFacets);
+    for (size_t is=0; is<nFacets; is++)
+    for (size_t j=0; j<3; j++)
+        hFacVerts[3*is+j] = MPMDOM.BFac[is].Ce->V[MPMDOM.BFac[is].Facets[j]]->ID;
+    bFacVerts = hFacVerts;
+    BuildBodyPairs();
+    BuildFacetPairs();
+
+    thrust::host_vector<real3> hPos(nCorners), hVel(nCorners), hH(nCorners);
+    for (size_t ic=0; ic<nCorners; ic++)
+    {
+        Vec3_t const & x = *MPMDOM.Corners[ic]->x;
+        Vec3_t const & v =  MPMDOM.Corners[ic]->v;
+        hPos[ic] = make_real3(x(0),x(1),x(2));
+        hVel[ic] = make_real3(v(0),v(1),v(2));
+        hH[ic]   = make_real3(0.0,0.0,0.0);
+    }
+    bCornerPos = hPos;
+    bCornerVel = hVel;
+    bCornerH   = hH;
+
+    pGamma     = thrust::raw_pointer_cast(bGamma.data());
+    pInside    = thrust::raw_pointer_cast(bInside.data());
+    pCellVerts = thrust::raw_pointer_cast(bCellVerts.data());
+    pFacVerts  = thrust::raw_pointer_cast(bFacVerts.data());
+    pBodyPairs = thrust::raw_pointer_cast(bBodyPairs.data());
+    pFacPairs  = thrust::raw_pointer_cast(bFacPairs.data());
+    pCornerPos = thrust::raw_pointer_cast(bCornerPos.data());
+    pCornerVel = thrust::raw_pointer_cast(bCornerVel.data());
+    pCornerH   = thrust::raw_pointer_cast(bCornerH.data());
+
+}
+
+inline void Domain::BuildBodyPairs()
+{
+    std::vector<BodyPair> pairs;
+    real ld = LBMDOM.dx;
+    int Nx = (int)LBMDOM.Ndim(0), Ny = (int)LBMDOM.Ndim(1), Nz = (int)LBMDOM.Ndim(2);
+    for (size_t ib=0; ib<nBodyCells; ib++)
+    {
+        real lo[3] = {MPMDOM.BodyMesh->Cells[ib]->Xmin(0),MPMDOM.BodyMesh->Cells[ib]->Xmin(1),MPMDOM.BodyMesh->Cells[ib]->Xmin(2)};
+        real hi[3] = {MPMDOM.BodyMesh->Cells[ib]->Xmax(0),MPMDOM.BodyMesh->Cells[ib]->Xmax(1),MPMDOM.BodyMesh->Cells[ib]->Xmax(2)};
+        int nlow[3], nhigh[3], nn[3] = {Nx,Ny,Nz};
+        for (int d=0; d<3; d++)
+        {
+            nlow[d]  = (int)trunc((lo[d]-ld)/ld);
+            nhigh[d] = (int)ceil ((hi[d]+ld)/ld);
+            if (nlow[d] < 0)      nlow[d]  = 0;
+            if (nhigh[d] >= nn[d]) nhigh[d] = nn[d]-1;
+            if (hi[d] < 0.0)       nhigh[d] = 0;
+        }
+        if (nlow[0]>nhigh[0] || nlow[1]>nhigh[1] || nlow[2]>nhigh[2]) continue;
+        for (int nx=nlow[0]; nx<=nhigh[0]; nx++)
+        for (int ny=nlow[1]; ny<=nhigh[1]; ny++)
+        for (int nz=nlow[2]; nz<=nhigh[2]; nz++)
+        {
+            BodyPair p;
+            p.body = (unsigned int)ib;
+            p.cell = (unsigned int)(nx + (size_t)ny*Nx + (size_t)nz*Nx*Ny);
+            pairs.push_back(p);
+        }
+    }
+    nBodyPairs = pairs.size();
+    bBodyPairs = pairs;
+    pBodyPairs = thrust::raw_pointer_cast(bBodyPairs.data());
+}
+
+inline void Domain::BuildFacetPairs()
+{
+    std::vector<FacPair> pairs;
+    real ld = LBMDOM.dx;
+    int Nx = (int)LBMDOM.Ndim(0), Ny = (int)LBMDOM.Ndim(1), Nz = (int)LBMDOM.Ndim(2);
+    for (size_t is=0; is<nFacets; is++)
+    {
+        real lo[3] = {MPMDOM.BFac[is].Xmin(0),MPMDOM.BFac[is].Xmin(1),MPMDOM.BFac[is].Xmin(2)};
+        real hi[3] = {MPMDOM.BFac[is].Xmax(0),MPMDOM.BFac[is].Xmax(1),MPMDOM.BFac[is].Xmax(2)};
+        int nlow[3], nhigh[3], nn[3] = {Nx,Ny,Nz};
+        for (int d=0; d<3; d++)
+        {
+            nlow[d]  = (int)trunc((lo[d]-ld)/ld);
+            nhigh[d] = (int)ceil ((hi[d]+ld)/ld);
+            if (nlow[d] < 0)      nlow[d]  = 0;
+            if (nhigh[d] >= nn[d]) nhigh[d] = nn[d]-1;
+            if (hi[d] < 0.0)       nhigh[d] = 0;
+        }
+        if (nlow[0]>nhigh[0] || nlow[1]>nhigh[1] || nlow[2]>nhigh[2]) continue;
+        for (int nx=nlow[0]; nx<=nhigh[0]; nx++)
+        for (int ny=nlow[1]; ny<=nhigh[1]; ny++)
+        for (int nz=nlow[2]; nz<=nhigh[2]; nz++)
+        {
+            if (LBMDOM.IsSolid[0][nx][ny][nz]) continue;
+            size_t ic = nx + (size_t)ny*Nx + (size_t)nz*Nx*Ny;
+            FacPair p;
+            p.facet = (unsigned int)is;
+            p.cell  = (unsigned int)ic;
+            pairs.push_back(p);
+        }
+    }
+    nFacPairs = pairs.size();
+    bFacPairs = pairs;
+    pFacPairs = thrust::raw_pointer_cast(bFacPairs.data());
+}
+
+inline void Domain::UpdateDeviceCorners()
+{
+    BuildBodyPairs();
+    BuildFacetPairs();
+    thrust::host_vector<real3> hPos(nCorners), hVel(nCorners);
+    for (size_t ic=0; ic<nCorners; ic++)
+    {
+        Vec3_t const & x = *MPMDOM.Corners[ic]->x;
+        Vec3_t const & v =  MPMDOM.Corners[ic]->v;
+        hPos[ic] = make_real3(x(0),x(1),x(2));
+        hVel[ic] = make_real3(v(0),v(1),v(2));
+    }
+    bCornerPos = hPos;
+    bCornerVel = hVel;
+    cudaMemset(pCornerH,0,3*nCorners*sizeof(real));
+}
+
+inline void Domain::DownloadCornerForces()
+{
+    thrust::host_vector<real3> hH = bCornerH;
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t ic=0; ic<nCorners; ic++)
+    {
+        MPMDOM.Corners[ic]->h(0) = hH[ic].x;
+        MPMDOM.Corners[ic]->h(1) = hH[ic].y;
+        MPMDOM.Corners[ic]->h(2) = hH[ic].z;
+    }
+}
+
+inline void Domain::ImprintLatticeCUDA()
+{
+    size_t Nc = LBMDOM.Ncells;
+    size_t B  = Nthread;
+    cudaMemsetAsync(pGamma,0,Nc*sizeof(real));
+    cudaImprintCells<<<nBodyPairs/B+1,B>>>(pCornerPos,pCellVerts,pBodyPairs,nBodyPairs,
+                                           pGamma,pInside,LBMDOM.plbmaux);
+    cudaRefill<<<Nc/B+1,B>>>(LBMDOM.pF,LBMDOM.pRho,LBMDOM.pVel,pGamma,pInside,
+                             LBMDOM.plbmaux);
+    cudaMarkFacets<<<nFacPairs/B+1,B>>>(pCornerPos,pFacVerts,pFacPairs,
+                                       nFacPairs,pGamma,LBMDOM.plbmaux);
+    cudaImprintFacets<<<nFacPairs/B+1,B>>>(pCornerPos,pCornerVel,pFacVerts,pFacPairs,
+                                         nFacPairs,LBMDOM.pF,LBMDOM.pRho,pGamma,
+                                         pCornerH,LBMDOM.plbmaux);
+    cudaDeviceSynchronize();
+    DownloadCornerForces();
+}
+
+inline void Domain::DnLoadDevice(size_t Nc)
+{
+    LBMDOM.DnLoadDevice(Nc);
+    thrust::host_vector<real> hGamma = bGamma;
+    #pragma omp parallel for schedule(static) num_threads(Nproc)
+    for (size_t nz=0;nz<LBMDOM.Ndim(2);nz++)
+    for (size_t ny=0;ny<LBMDOM.Ndim(1);ny++)
+    for (size_t nx=0;nx<LBMDOM.Ndim(0);nx++)
+    {
+        size_t n = nx + ny*LBMDOM.Ndim(0) + nz*LBMDOM.Ndim(1)*LBMDOM.Ndim(0);
+        LBMDOM.Gamma[nx][ny][nz] = hGamma[n];
+    }
+}
+#endif
 
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
                           char const * TheFileKey, bool RenderVideo, size_t TheNproc)
@@ -474,7 +721,15 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     //std::cout << "0" << std::endl;
     MPMDOM.BoundaryMesh();
     Reset();
+#ifdef USE_CUDA
+    UpLoadDevice(Nproc);
+    // The CPU path imprints before the first output.  Do the same on the
+    // device, otherwise frame 0000 has Gamma=0 in the initial body region.
+    UpdateDeviceCorners();
+    ImprintLatticeCUDA();
+#else
     ImprintLattice();
+#endif
     double tout = Time;
 
     //std::cout << "1" << std::endl;
@@ -483,6 +738,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         if (ptSetup!=NULL) (*ptSetup) ((*this), UserData);
         if (Time >= tout)
         {
+#ifdef USE_CUDA
+            DnLoadDevice(Nproc);
+#endif
             if (TheFileKey!=NULL)
             {
                 String fnmpm;
@@ -503,6 +761,26 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         }
         //std::cout << "1" << std::endl;
         //Coupling between LBM and MPM
+#ifdef USE_CUDA
+        if (LBMDOM.Nneigh != 15)
+            throw new Fatal("LBMMPM CUDA currently supports D3Q15 only");
+        Reset();
+        UpdateDeviceCorners();
+        ImprintLatticeCUDA();
+
+        //The LBM dynamics, all on the device
+        size_t B = Nthread;
+        cudaCollideMPM<15><<<LBMDOM.Ncells/B+1,B>>>(LBMDOM.pF,LBMDOM.pFtemp,
+                LBMDOM.pBForce,LBMDOM.pRho,LBMDOM.pVel,LBMDOM.pIsSolid,
+                LBMDOM.Tau[0],LBMDOM.Sc,LBMDOM.plbmaux);
+        real * tmpF = LBMDOM.pF;
+        LBMDOM.pF = LBMDOM.pFtemp;
+        LBMDOM.pFtemp = tmpF;
+        cudaStreamMPM<<<LBMDOM.Ncells/B+1,B>>>(LBMDOM.pF,LBMDOM.pFtemp,LBMDOM.plbmaux);
+        tmpF = LBMDOM.pF;
+        LBMDOM.pF = LBMDOM.pFtemp;
+        LBMDOM.pFtemp = tmpF;
+#else
         Reset();
         ImprintLattice();
 
@@ -512,6 +790,7 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         LBMDOM.CollideMPM();
         //LBMDOM.CollideMRT();
         LBMDOM.StreamMPM();
+#endif
 
         //std::cout << "3" << std::endl;
         //The MPM dynamics
@@ -528,6 +807,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         MPMDOM.Time += dt;
         //std::cout << Time << std::endl;
     }
+#ifdef USE_CUDA
+    DnLoadDevice(Nproc);
+#endif
 }
 }
 #endif

@@ -105,5 +105,59 @@ inline void Corner::Reset(double dt)
     }
     xb = *x;
 }
+
+#ifdef USE_CUDA
+/** Device-side mirror of an MPM body-mesh corner. */
+struct CornerCU
+{
+    real3  x, xb, v, vf, h;
+    bool   vxf, vyf, vzf;
+    size_t Nodes[8];
+    real   Sfunc[8];
+
+    __host__ __device__ bool IsFree () const { return !vxf && !vyf && !vzf; }
+
+    __host__ __device__ void Reset (real dt)
+    {
+        v = (x - xb)/dt;
+        if (vxf) { v.x = vf.x; x.x = xb.x + v.x*dt; }
+        if (vyf) { v.y = vf.y; x.y = xb.y + v.y*dt; }
+        if (vzf) { v.z = vf.z; x.z = xb.z + v.z*dt; }
+        xb = x;
+    }
+};
+
+__host__ __inline__ void UploadCorner (CornerCU & Cu, Corner const & C)
+{
+    Cu.x  = make_real3((*C.x )(0),(*C.x )(1),(*C.x )(2));
+    Cu.xb = make_real3( C.xb (0), C.xb (1), C.xb (2));
+    Cu.v  = make_real3( C.v  (0), C.v  (1), C.v  (2));
+    Cu.vf = make_real3( C.vf (0), C.vf (1), C.vf (2));
+    Cu.h  = make_real3( C.h  (0), C.h  (1), C.h  (2));
+    Cu.vxf = C.vxf;
+    Cu.vyf = C.vyf;
+    Cu.vzf = C.vzf;
+    for (size_t i=0; i<8; ++i)
+    {
+        Cu.Nodes[i] = C.Nodes[i];
+        Cu.Sfunc[i] = real(C.Sfunc[i]);
+    }
+}
+
+__host__ __inline__ void DnloadCorner (CornerCU const & Cu, Corner & C)
+{
+    *C.x  = Vec3_t(Cu.x.x,  Cu.x.y,  Cu.x.z );
+    C.xb  = Vec3_t(Cu.xb.x, Cu.xb.y, Cu.xb.z);
+    C.v   = Vec3_t(Cu.v.x,  Cu.v.y,  Cu.v.z );
+    C.vf  = Vec3_t(Cu.vf.x, Cu.vf.y, Cu.vf.z);
+    C.h   = Vec3_t(Cu.h.x,  Cu.h.y,  Cu.h.z );
+    for (size_t i=0; i<8; ++i)
+    {
+        C.Nodes[i] = Cu.Nodes[i];
+        C.Sfunc[i] = double(Cu.Sfunc[i]);
+    }
+}
+#endif
+
 }
 #endif //MECHSYS_MPM_CORNER_H

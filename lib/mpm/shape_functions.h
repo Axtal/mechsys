@@ -285,6 +285,17 @@ double Shape3D(Vec3_t const & x, Vec3_t const & xc, double lx)
 }
 
 #ifdef USE_CUDA
+// Device version of the CPDI corner shape function (trilinear tent).
+__device__ __inline__ real ShapeCU (real x, real xc, real lx)
+{
+    real da = fabs(x-xc);
+    return da<lx ? 1.0-da/lx : 0.0;
+}
+
+__device__ __inline__ real Shape3DCU (real3 const & x, real3 const & xc, real lx)
+{
+    return ShapeCU(x.x,xc.x,lx)*ShapeCU(x.y,xc.y,lx)*ShapeCU(x.z,xc.z,lx);
+}
 
 __device__ __inline__ void GIMPCU(real x, real xc, real lx, real lpx, real & n, real & gn)
 {
@@ -468,6 +479,21 @@ __device__ __inline__ size_t PeriodicNodeIndexCU(int n, size_t nmax)
 {
     int m = n%(int)nmax;
     return (size_t)((m<0) ? m + (int)nmax : m);
+}
+
+__device__ __inline__ void MPMShapeFunction1DCU(int ShapeFunction, real x, real xc, real lx, real lpx, real & n, real & gn)
+{
+    if (ShapeFunction==SHAPE_BSPLINE_QUADRATIC)
+    {
+        BSplineQuadraticCU(x,xc,lx,n,gn);
+        return;
+    }
+    if (ShapeFunction==SHAPE_BSPLINE_CUBIC)
+    {
+        BSplineCubicCU(x,xc,lx,n,gn);
+        return;
+    }
+    GIMPCU(x,xc,lx,lpx,n,gn);
 }
 
 __device__ __inline__ void MPMShapeFunction3DCU(int ShapeFunction, real3 const & x, real3 const & xc, real lx, real3 const & lp, real & n, real3 & gn)
