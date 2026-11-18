@@ -133,6 +133,228 @@ after movement, and `MaxDisplacement` compares current vertices against
 `Vertso`, which is reset by `ResetDisplacements()` during
 `Domain::UpdateContacts()`.
 
+### 3.2.1 Integrator and energy tracks (position Verlet / velocity Verlet)
+
+`DEM::Domain` carries two runtime switches; both are plain members that must be
+set **before** `Solve`, and neither is part of a saved state:
+
+| member | values | effect |
+| --- | --- | --- |
+| `UseVelocityVerlet` | `false` (default) / `true` | position Verlet / velocity Verlet |
+| `EnergyBalance` (set with `SetEnergyBalance(bool)`) | `false` (default) / `true` | baseline contact kernels / kernels that also record `Epot`, `dEvis`, `dEfric`, `Fndpot`, `Ftdpot`, `Nc`, `NormalOverlap` |
+
+`Solve` splits one iteration into three stages chosen once by
+`SelectStages()`: a pre-force stage (`NULL` for position Verlet; half kick,
+drift, rotational update and a list-validity check on the post-drift geometry
+for velocity Verlet), the force pass, and a post-force stage (velocity
+finalisation for velocity Verlet, translate/rotate plus the list check for
+position Verlet). The loop body itself tests nothing:
+
+```c++
+if (pPreForce != NULL) (this->*pPreForce)();
+(this->*pCalcForce)();
+(this->*pPostForce)();
+```
+
+The three calls are indirect *host* calls, one each per iteration, measured at
+**5.3 ns/iteration** against 1.8 ns for direct calls (a throwaway `-O3`
+program: two loops of 2e8 iterations, one calling a member function directly and
+one through a member pointer, so it measures call overhead only; it is not worth
+keeping in the tree). The cheapest step
+in the suite is `tdem/test_cu_01` at 73 us, so the overhead is 0.007 % there and
+below 1e-4 % on coupled runs. `LBMDEM::Domain::Solve` drives the same stages
+(`DEMDOM.SelectStages()` before its loop) and exposes
+`SetDEMIntegrator(bool)` / `SetDEMEnergyBalance(bool)`; its CPU coupling loop
+remains position-Verlet only and refuses velocity Verlet with a `Fatal`.
+
+The default contact kernels are the pre-existing ones **verbatim**: an
+unmodified position-Verlet run must stay bit-identical to the pre-change
+library. Verified on this tree: `tdem/test_cu_04` reports
+`0 / 0.00914244 / 0.00244635` with and without the new options, and the coupled
+Stokes case (`stokes_main.cu 1 256 0 0`) writes a `cur_stokes_force.res`
+byte-identical to the pre-change build. The energy-track kernels therefore only
+add recording; they do not change the contact law.
+
+**Trap:** in `tdem/test_cu_04` the phase-2 wall prescription (`MoveTopPar`) is
+integrator-specific. Position Verlet keeps the original
+`Translate(Verts,Vertso,Par[ip],DPar[ip],trans)` call, because its step recovers
+the prescribed displacement from the translated position; velocity Verlet
+instead prescribes `v.z = Dz/dt` and `xb.z = x.z - Dz`, because the drift reads
+`v_half*dt`. Applying both mechanisms moves the wall twice. The choice is the
+`vv` field of `UdCu`, not a per-step test inside the kernel.
+
+**Position Verlet vs velocity Verlet, measured.** `tdem/test_cu_04` with a
+local reduced copy of `tpercu.inp` (sphere packing, `R=0.05`, `dt=2e-5`, 34
+parameters, named `cu04.inp` because the driver reads `<key>.inp`; `tpercu.inp`
+itself is the large Voronoi case) as `test_cu_04 cu04 1 4.0
+0.0 <vv> 0` at `dt = 2e-5, 1e-5, 5e-6, 2.5e-6` (the input's `dt` line, 501+1001
+steps at the stock value). Reported observable: the kinematic energy, i.e. the
+only energy `CalcEnergy` fills here (`Potential energy` prints 0 because gravity
+enters as `Ff`, not as a potential).
+
+| phase | PV, dt=2e-5 | PV, dt/8 | PV dt->0 | VV, dt=2e-5 | VV, dt/8 | VV dt->0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| end of compression `T0` | 0.00914244 | 0.00904751 | 0.00904955 (+1.03 % at stock dt) | 0.00905745 | 0.00905192 | 0.00904988 (+0.08 %) |
+| end of `T0+Tf` | 0.00244635 | 0.00195421 | 0.00194917 (+25.5 % at stock dt) | 0.0117339 | 0.0117279 | 0.0117313 (dt-flat) |
+
+PV converges at an observed order of 2.2-2.6 and needs about `dt/4` to be within
+0.1 % of the limit. VV is already dt-flat at the stock step (spread <=0.15 %, the
+noise floor of a chaotic packing) and its `T0` limit matches PV's to 0.004 %.
+The 6x difference in the second row is *not* an integrator error: the residual
+kinetic energy of a static jammed packing is a chaotic rattle and the two schemes
+settle into different microscopic attractors (the damping is read from the
+half-step velocity in VV and from the step-start velocity in PV). The
+macroscopic packing agrees at every dt: height `1.004566 vs 1.004565` at `T0`
+and `0.894047 vs 0.894053` at the end (2e-6 relative), coordination
+`Z=2.250 vs 2.228`, mean normal overlap `4.33e-4 vs 4.38e-4`, max overlap
+`3.49e-3` in both.
+
+Cross-checks with an answer: `tdem/test_cu_01` (sliding block, 1e6 steps) gives
+`Observed L = 51.0019` against `Theoretical L = 51.0204` (-0.036 %) for **both**
+integrators, final kinematic energy `0.0200495` vs `0.0200358`; `tdem/test_cu_03`
+(1000-particle sheared packing, 1e5 steps) gives a steady-state total kinematic
+energy of `32105.9` (PV) vs `32154.3` (VV), 0.15 % apart, at 799 vs 804 steps
+between list updates.
+
+**The CPU path has the same switch.** `SelectStages` chooses the stages
+independently of `USE_CUDA`: on the CPU, `CalcForcesVV` installs
+`v_half`/`w_half`, accumulates directly into `Particle::F/T` under per-particle
+locks and keeps the `CalcForceSphere` fast path; `PreForceVV` does
+`UpdateVelocityHalf`, `UpdateAngularVelocityHalf`, `TranslateVelVerlet` and
+`RotateVelVerlet` plus the post-drift list check; `PostForceVV` does
+`UpdateVelocityFull`, `UpdateAngularVelocityFull` and the post-move check.
+`test_01`, `test_02` and `test_periodic` now take `[integrator] [energy]`
+(`test_periodic`: `<key> [Nproc] [dthoot] [integrator] [energy]`) beside
+`test_saveload`. Measured on CPU:
+
+- `test_01 0 0` vs `test_01 1 0` (cube sliding on a plane, 1e6 steps,
+  `OMP_NUM_THREADS` default): `Observed L = 51.0012` vs `51.0013` against
+  `Theoretical L = 51.0204` (-0.038 % both), solve 2.674 vs 2.602 s.
+- `test_periodic tper 4 4.0 <vv> <eb>` on a reduced 6^3 sphere packing
+  (`T0=0.01`, `Tf=0.02`, `dt=5e-5`, hertz): `PV 0.120176/1.05864`,
+  `VV 0.120678/1.13789`. With the energy tracks on, the CPU VV run is
+  **bit-identical** to plain VV (unlike the GPU, where the extra `atomicAdd`s
+  reorder the force sums): `Evis=2.666e-4` and `Efric=2.329e-6` after `T0`,
+  `Evis=7.463e-4` and `Efric=1.328e-4` after `Tf`, 87146 sphere contacts.
+- `test_02 <vv> <eb>` (cube rolling on a turntable, `Tf=30`, `dt=1e-5`,
+  3e6 steps) prints the analytic orbit `xt`/`yt`; the deviation of the integrated
+  position from it is the cleanest CPU accuracy probe: final
+  `1.175e-2` (PV) vs `1.795e-3` (VV), mean `5.82e-3` vs `9.41e-4`, i.e. **VV is
+  6.5x closer to the analytic orbit at the same step**. Total energy
+  `269131` vs `269136` (2e-5 relative).
+- CPU cost, same packing, per step: `Nproc=1` PV 14.758 ms vs VV 14.735 ms
+  (equal); `Nproc=4` PV 6.956 ms vs VV 4.322 ms (**VV 38 % faster**). The
+  reason is structural: the legacy CPU PV force pass zeroes and reduces
+  per-thread `MTD[i].F/T` arrays (`O(Nproc*N)` traffic per step plus a
+  reduction), while the VV force pass accumulates in place. The two paths
+  therefore have different summation orders; neither is bitwise reproducible
+  at `Nproc>1`.
+- The CPU coupling loop in `LBMDEM::Domain` still refuses velocity Verlet
+  (`Fatal: LBM-DEM velocity Verlet requires the CUDA path`), so
+  `tlbmdem01`/`tlbmdem02` are position-Verlet only.
+
+**Cost.** Within noise on real workloads, because VV trades the fused move for a
+half-kick and a pre-force list check:
+
+| workload | steps | PV | VV |
+| --- | --- | --- | --- |
+| `test_cu_03`, 1000 particles | 1e5 | 1.8492 ms/step | 1.8606 ms/step (+0.6 %) |
+| `test_cu_04` phase 2, `dt=2.5e-6` | 8000 | 99.11 us/step | 98.23 us/step (-0.9 %) |
+| coupled Stokes 64^3 | 1251 | 3.349 ms/step | 3.325 ms/step (-0.7 %) |
+| `test_cu_01`, single body | 1e6 | 72.66 s | 75.36 s (+3.7 %) |
+
+The single-body case is latency bound (73 us/step), so VV's two extra kernel
+launches cost 2.7 us there; do not quote that as a throughput loss.
+
+**Test switches.** Every DEM and LBM-DEM test takes the same two trailing
+arguments, `<integrator> <energy>` (`0`/`1` each; both default to `0`). No test
+prints them itself: `Domain::Solve` reports both in its banner, immediately
+after the Verlet distance, so the library -- not each driver -- says what ran:
+
+```
+  Verlet distance                           =  0.05
+  Velocity Verlet integrator                =  on
+  Energy balance tracking                   =  on
+```
+
+The coupled `LBMDEM::Domain::Solve` prints the same two lines for its DEM
+sub-domain. Keep the reporting in `Solve`: a driver that echoes the flags is
+duplicating the library and goes stale when the defaults change.
+
+```bash
+cd /home/sergio/mechsys/tdem
+./test_01 1 0                   # CPU: <integrator> <energy>
+./test_02 1 0
+./test_periodic tper 4 4.0 1 0  # <key> <Nproc> <dthoot> <integrator> <energy>
+./test_saveload 1 100 100 1 1   # <Nproc> <steps before save> <steps after load>
+./test_cu_01 1 10.0 1 0         # <Nproc> <Tf> <integrator> <energy>
+./test_cu_02 1 10.0 1 0
+./test_cu_03 1 0.05 128 10.0 1 1  # <Nproc> <Alpha> <Nthread> <Tf>
+./test_cu_04 tpercu 1 4.0 0.0 1 1  # <key> <Nproc> <dthoot> <qin>; reads <key>.inp
+cd ../tlbmdem
+./tlbmdem01 1 1 0                  # <Nproc>; the CPU coupling refuses VV
+./tlbmdem_cu_01 1 1 1
+./tlbmdem_cu_02 1 256 1 1          # <Nproc> <nthread>
+./tlbmdem_cu_03 1 256 1 1
+./tlbmdem_cu_04 1 256 1 1
+./tlbmdem02 1 256 1 1
+```
+
+**The coupled solver has the switch on the CUDA path only.** `LBMDEM::Domain`
+forwards it to its DEM sub-domain (`SetDEMIntegrator`/`SetDEMEnergyBalance`) and
+`LBMDEM::Domain::Solve` drives the same three stages, putting the fluid
+imprint at the top of the step; the CPU coupling loop does not drive the
+stages and refuses velocity Verlet
+(`Fatal: LBM-DEM velocity Verlet requires the CUDA path`). All six tlbmdem
+programs accept the two trailing arguments. Verified with reduced copies (grid
+and `Tf` cut, same physics parameters, `RenderVideo` off), PV vs VV:
+
+| case | reduced setup | result |
+| --- | --- | --- |
+| `tlbmdem_cu_01` (sphere in a channel, drag) | `Tf=200`, 301x61x61 | `_force.res` **identical in every column over 200 rows**: `Re=33.3418`, `CD=2.24298`, `CDsphere=2.00553` |
+| `tlbmdem_cu_02` (Stokes terminal velocity) | 100^3, `Tf=100` | `\|Flbm\| 2.42949` vs `2.44483`, `\|v\| 0.0429552` vs `0.0429540` (**2.5e-5 relative** in the terminal velocity) |
+| `tlbmdem_cu_03` (settling sphere) | `Tf=100` | `_force.res` **identical**, `Ft=0.162860` in both |
+| `tlbmdem_cu_04` (gravity settling) | `Tf=2e3` | both integrators run to completion, 18.65 s wall each |
+| `tlbmdem01`/`tlbmdem02` (CPU coupling) | — | `Fatal: LBM-DEM velocity Verlet requires the CUDA path` |
+
+**HDF5 `name already exists` on multi-layer output (fixed).** `FLBM::Domain`
+has three HDF5 writers -- `WriteXDMF`, `WriteXDMF_DEM` and the restart `Save`
+-- and all three created the per-file grid datasets (`Nx`/`Ny`/`Nz`, and
+`Ncell` in `Save`) *inside* their `for (j=0;j<Nl;j++)` layer loop. With
+`Nl>1` every extra layer re-created them, so HDF5 dumped a `H5Dcreate2 ...
+name already exists` trace per frame per layer and kept going: the files were
+complete, the errors were failed duplicate creates. It shows up in any two-layer
+case (`tlbmdem_cu_04` has `nu(2)`, layers 0/1 with different densities;
+`tclbm03`; the `tlbmdem_cu_02` layers), with either integrator, and is not a
+velocity-Verlet problem. The three writers now guard those datasets with
+`if (j==0)`, so one set is written per file. Verified: the reduced two-layer
+coupled case went from 600 error lines to 0 over 200 frames, the real
+`tlbmdem_cu_04 24 256 1 1` produces 0, and `tclbm03` (which exercises `Save` as
+well) writes `F_0/F_1/Ncell/Nx/Ny/Nz/Solid_0/...` with 0 errors.
+
+Output volume to expect: at 100^3 a `_lbm_%04d.h5` frame is ~34 MB, so
+`tlbmdem_cu_04`'s 400 frames are >10 GB of LBM frames alone, beside the `_dem_`
+and `_dem_bf_` sets (150 s of running produced 11 GB).
+
+The switch is a plain domain member in every case (`dom.UseVelocityVerlet`,
+`dom.SetEnergyBalance(eb)`; `dom.SetDEMIntegrator(vv)`/
+`dom.SetDEMEnergyBalance(eb)` for a coupled domain), so any other driver sets
+the same two fields before `Solve`. `EnergyBalance` only adds recording to the
+contact kernels; a position-Verlet run with it off must stay bit-identical to
+the pre-change library, and a CPU run with it on is bit-identical to the same
+run with it off because the host path has no atomics (the GPU path does, so its
+force sums reorder and the trajectories drift apart).
+
+`tdem/test_saveload <Nproc> <K> <M> <integrator> <energy>` runs one
+combination per invocation (three `Solve` calls: the pre-save run, the
+continuation, and the reloaded copy), so check all four with
+`for k in 0 1; do for m in 0 1; do ./test_saveload 1 100 100 $k $m; done; done`
+-- each must print `RESULT: PASS`; with the energy tracks on it also compares every contact's
+`Epot`/`dEvis`/`dEfric`/`Fndpot`/`Ftdpot`/`Nc`/`NormalOverlap` bitwise. Note
+that `PairtoCInt` is an `unordered_map`, so its iteration order (and therefore
+the last bit of a domain total summed from it) can differ after a restart; the
+test sums the totals in sorted-key order for the comparison.
+
 ### 3.3 Feature pairs and Verlet lists
 
 For non-spherical particles, a contact pair is evaluated through feature
@@ -532,6 +754,12 @@ porous medium lives outside the checkout, so it is not a CMake target:
 /home/sergio/tflbm10_porous/tclbm10.cu   (plus Makefile, README, results)
 ```
 
+**Note (2026-11-17):** `/home/sergio/tflbm10_porous/` no longer exists on this
+machine (nor `permeability_sweep/`, `validation/`, `solute_source/`); the
+numbers below are kept as measurements, but there is no source tree to rerun.
+The reproducible plane-Poiseuille validation now lives in
+`/home/sergio/tflbm_poiseuille/` (section 5.1.1).
+
 Build and run it with the configured standalone compiler:
 
 ```bash
@@ -551,11 +779,21 @@ the raw second-moment velocity and a `K = nu*<ux>/fx` estimate, with the
 Measured on the RTX A6000 (double precision, 512×256×1, 20,000 steps,
 `Nthread=256`): solver 5.37 s, total wall 5.64 s, realised porosity 0.900002,
 steady `<ux>_fluid = 6.677e-4`, `<ux>_Darcy = 6.009e-4`, `K = 1.08` lattice
-units (raw second moment 1.00). The raw GPU moment carries a constant
-`-0.5*nu*phi` bias in `K`; the physical value uses
-`u_physical = u_raw + 0.5*dt*fx*phi`. Two identical 128×64 runs produced
-identical `.res` time series (no atomics in this path), and `K` changes by less
-than 0.02% over `fx = 1e-5 … 1e-3`, confirming the Darcy regime.
+units (raw second moment 1.00). Two identical 128×64 runs produced identical
+`.res` time series (no atomics in this path), and `K` changes by less than
+0.02% over `fx = 1e-5 … 1e-3`, confirming the Darcy regime.
+
+The velocity convention for those numbers: **both** active paths report the raw
+second moment `u = sum_k f_k c_k / rho` (`StreamSC` on the CPU, the fused
+stream kernel on the GPU). The `+0.5*dt*BForce` term only exists in
+`StreamEFS_SRT`, which `Solve` does not call, so the "CPU path adds the
+half-force velocity" statement of earlier revisions was wrong (verified
+2026-11-17 against the CPU and GPU Poiseuille profiles, which agree to
+`1.4e-16`). Any half-force correction must therefore be *measured*, not assumed:
+in a forced channel the raw profile is the analytical parabola minus a constant
+slip, see 5.1.1. The porous `K` values above were derived with the old
+"`u_raw + 0.5*dt*fx*phi`" reading and are about `0.5*nu*phi` high in `K`; treat
+them as relative/ordering data, not as absolute validated permeabilities.
 
 A permeability sweep over `phi = 0.50 … 0.85` (512×512, 3 seeds, `fx=1e-3`,
 20,000 steps) is in `/home/sergio/tflbm10_porous/permeability_sweep/`; every
@@ -566,15 +804,109 @@ is random site percolation, the fluid does not span the domain below
 `K(0.85)=0.5441`. A 1024×1024 check changes `K` by less than 1% at
 `phi=0.60/0.65`.
 
-The half-force convention is independently validated by a plane-Poiseuille
-case in `/home/sergio/tflbm10_porous/validation/`. With walls at `y=0.5` and
-`y=H+0.5`, the exact permeability is `H^2/12`. The corrected `K` converges to
-that value with approximately second-order accuracy: relative error `1.56e-2`
-at `H=8`, `3.91e-3` at `H=16`, `9.77e-4` at `H=32`, `1.99e-4` at `H=64`, and
-`1.63e-5` at `H=128`. At `H=32`, varying the force over a 16x range changes `K`
-by only `2e-12` relative. Scale the force with `H^2` to keep `u_max ~ 0.01`; a
-high-Mach run (`H=128`, `fx=1e-4`, `u_max ~ 1.23`) is not valid.
+### 5.1.1 Reproducible plane-Poiseuille validation
 
+`/home/sergio/tflbm_poiseuille/` (`poiseuille.cu`, `analyze.py`, `summary.py`,
+`plot.py`, `profile_table.py`, `README.md`, `results.md`, four PNGs). Same
+recipe as the porous case: D2Q9, `nx x (H+2*nsolid)`, `IsSolid` walls, constant
+`+x` force rewritten into `BForce` (device `pBForce`) by `Setup` every step,
+`Dom.Sc = 0` so the Smagorinsky term does not change `tau`, `fx = 8 nu u_max/H^2`
+with `u_max ~ 0.01`, `Tf = 40 H^2` (the viscous time is `H^2/nu`).
+
+```bash
+cd /home/sergio/tflbm_poiseuille
+/home/sergio/mechsys/mechsyscc poiseuille.cu -o poiseuille_gpu
+./poiseuille_gpu 32 8 0.01 0.16666666666666666 256 40 1
+python3 profile_table.py data/H032_nu0.166667
+```
+
+Walls are at `y = 0.5` and `y = H+0.5` (half-way bounce-back, `H` = number of
+fluid rows, not `H+1`; `nsolid=1/3/6` gives bit-identical profiles), and the
+exact permeability is `H^2/12`. Measured on the RTX A6000 (`Nthread=256`,
+double, `nx=8`), `nu=1/6` (`tau=1`):
+
+| `H` | steps | L2 rel. | max rel. | `nu_fit` | `K_raw` | `K/H^2*12 - 1` | wall |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 8 | 2,560 | 7.131e-3 | 5.291e-3 | 0.1666667 | 5.333333 | -1.3e-14 | 0.31 s |
+| 16 | 10,240 | 1.783e-3 | 1.307e-3 | 0.1666667 | 21.333333 | -5.0e-15 | 0.45 s |
+| 32 | 40,960 | 4.457e-4 | 3.258e-4 | 0.1666667 | 85.333333 | +4.5e-13 | 1.80 s |
+| 64 | 163,840 | 1.114e-4 | 8.140e-5 | 0.1666667 | 341.333333 | +3.1e-12 | 6.3 s |
+| 128 | 655,360 | 2.786e-5 | 2.035e-5 | 0.1666667 | 1365.333333 | +1.4e-11 | 24.6 s |
+
+The steady profile is **exactly parabolic in the cell index** (quadratic fit
+residual `1e-13`) with the input viscosity and a *uniform* offset, i.e. a
+spurious wall slip:
+
+```text
+u_raw(y) = a/(2 nu) (y-y_w)(y_t-y) - c(tau) a ,   a = fx/rho,
+c(tau)   = 1/(8 nu) - 6 nu + 1/2          (dx = dt = 1, raw second moment)
+```
+
+`c` fits 23 independent runs to four digits, is independent of `H` (checked
+`H=32` vs `H=64`), linear in `fx`, independent of the initial condition (rest,
+analytical parabola, plug flow give the same fixed point to `1e-17`), and
+identical on CPU and GPU (`1.4e-16`, round-off from `NonEq/tau` vs
+`NonEq*itau`); repeated GPU runs are bit-identical. It vanishes at
+`nu = 0.1919` (`tau = 1.0757`), which is why the pointwise error is smallest
+near `tau = 1.1`. Consequences:
+
+- the pointwise error is *only* that constant, so it is second order in the
+  grid: `u_slip/u_max = (1-48 nu^2+4 nu)/H^2`;
+- at `tau=1` the cell-averaged bulk velocity gives `K_raw = H^2/12` to `1e-11`
+  with **no** correction (the slip happens to cancel the `dx^2/12` sampling
+  bias of the cell average), and `|dK/K| <= 1.1e-3` for `0.56 <= tau <= 1.1`
+  at `H=32`, four times smaller at `H=64`;
+- the naive half-force velocity `u_raw + 0.5 a dt` is *not* the right
+  correction: it makes the `tau=1` bulk error `+0.098%` instead of `0` and only
+  halves the pointwise error at `tau=0.65`.
+
+Controls: doubling `fx` doubles the profile exactly; `nx=32` instead of `8` is
+identical; `nsolid=1/3/6` identical; CPU `StreamSC` and the GPU kernel agree to
+round-off. Scale the force with `H^2` to keep `u_max ~ 0.01`; high-Mach runs
+are invalid (the old `H=128`, `fx=1e-4`, `u_max ~ 1.23` case).
+
+
+### 5.1.2 Random porous media: permeability sweep (validated)
+
+`/home/sergio/tflbm_porous/` (`porous.cu`, `run_sweep.sh`,
+`run_size_study.sh`, `validate_slabs.sh`, `analyze_porous.py`,
+`plot_porous.py`, `README.md`, figures, `permeability.csv`). Fully periodic
+`N x N` box, `round((1-phi)N^2)` cells tagged solid from a reproducible
+`xorshift64*` stream seeded with `seed`, constant `+x` force re-written into
+`BForce`/`pBForce` by `Setup` every step, `Sc=0`, `fx=5e-5`, `Tf=20000`.
+
+```bash
+cd /home/sergio/tflbm_porous
+/home/sergio/mechsys/mechsyscc porous.cu -o porous_gpu
+./porous_gpu 256 0.70 12345 5e-5 0.16666666666666666 256 20000
+N=512 ./run_sweep.sh          # phi=0.50..0.90, 3 seeds, ~9.5 s per 512^2 run
+./validate_slabs.sh           # exact-channel validation
+python3 analyze_porous.py --csv && python3 plot_porous.py
+```
+
+`K = nu <u>_Darcy/a`, `<u>_Darcy = (1/N^2) sum_all u_x`, `u_x` = raw second
+moment. **Convention settled:** periodic straight channels (solid row every
+`SLABS` rows, gap `H=SLABS-1`) give `K=phi*H^2/12` exactly with the raw moment
+(rel. error `1e-13` for `H=3/7/15`), while `K+0.5*nu*phi` is high by exactly
+`0.5*nu*phi`. So the raw moment is the physical velocity and the older
+`u+0.5*dt*fx` numbers (including the `tflbm10_porous` sweep: `K(0.90)=1.08`,
+`K(0.70)=0.1163`, `K(0.60)=0.0422`) are that variant; subtract `0.5*nu*phi`
+to compare (`K(0.90)=1.00`, `K(0.70)=0.0581`, `K(0.60)=-0.0077`).
+
+Measured (`N=512`, 3 seeds, mean `+-` half-range): `phi=0.50 -2.93e-2`,
+`0.55 -2.21e-2`, `0.60 -7.65e-3`, `0.65 +1.74e-2`, `0.70 +5.81e-2`,
+`0.75 +1.27e-1`, `0.80 +2.47e-1`, `0.85 +4.76e-1`, `0.90 +9.99e-1`. The
+seed spread is `<1%`. `K` is independent of `N=128..1024` at `phi=0.60/0.90`
+(the staircase error is below the scatter).
+
+**Accuracy floor:** below `phi_c=0.5927` the 4-connected fluid is disconnected
+(largest cluster `<2%`) but the D2Q9 diagonal links still transport mass
+through corner contacts (8-connected: one cluster, 98%), so the averaged `K` is
+`-0.02..-0.03` instead of `0`, independent of `fx`, `nu` and `N`. Treat
+`|K| <~ 0.03` as unresolved; `phi >= 0.70` is reliable. Do not fit a
+near-threshold critical exponent with this data. For a physically cleaner
+medium use a 4-connected solid mask (no diagonal-only contacts) or a finer
+grid, and normalise by the percolating cluster only.
 
 ### 5.2 GPU FLBM advection-diffusion point source
 
@@ -794,6 +1126,19 @@ These caused real failures during optimization work.
   but restore the source afterward.
 - The full `tlbmdem01` is large and can exceed a 300 s timeout; a reduced copy
   is the practical smoke test.
+- The single-body DEM checks are paired by number and are *not* interchangeable
+  with `test_periodic`: `tdem/test_01` (CPU sliding block, Tf=10, prints
+  `Observed L`) with `tdem/test_cu_01` (GPU, same physics), and
+  `tdem/test_02` (CPU turning table, Tf=30, `dt=1e-5` -> 3e6 steps) with
+  `tdem/test_cu_02` (GPU). The "02" pair also writes a `<FileKey>_trayectory.res`
+  trajectory (`Time x y xt yt`, `xt`/`yt` being the ideal rolling orbit) via the
+  `Report` callback, which is the cheapest way to check a rolling-contact change
+  without comparing HDF5 frames.
+- `test_01`/`test_02`/`test_periodic` pass no `Nproc` to `Solve`, so they inherit
+  the OpenMP default and run multithreaded (`test_01` shows `CPU 18.8s` against
+  a `2.57s` wall). That reorders force accumulation; for an exactness comparison
+  run them with `OMP_NUM_THREADS=1` and check that the printed `CPU` time equals
+  the wall time before trusting a bitwise result.
 - `Array::Find()` returns `-1` on failure; assigning it to `size_t` is a bug.
   Check the signed result before using it as an index.
 - `std::is_same`-based feature counters can be wrong because feature
@@ -801,6 +1146,46 @@ These caused real failures during optimization work.
   explicit type traits or per-container logic.
 - Warning policy: the only expected third-party warning is Blitz
   `tinymat.h(60): warning #191-D`. Keep MechSys sources warning-free.
+- **The `benchmarks/cpu_voronoi/` directory does not exist in this checkout**
+  (referenced by section 3.5 and by `SKILL.md`). To reproduce the reduced
+  exactness run, derive it from `tdem/tper.inp`: set `ptype = voronoi`,
+  `Lx=Ly=Lz=10`, `nx=ny=nz=10`, `T0=Tf=0.01` (400 steps at `dt=5e-5`). The
+  unmodified `tper.inp` is `sphereboxhcp` with `Tf=100`, so it exercises the
+  **sphere** contact path, not the polyhedral one.
+- `test_periodic` writes both `<key>_a.hdf5`/`<key>_b.hdf5` (full state,
+  one dataset per particle field) and `<key>_a.h5` / `<key>_a_0000.h5`
+  (19 flat visualisation arrays). The `.hdf5` files carry ~15k–430k datasets;
+  a sphere run is far larger than a Voronoi run.
+- `Interactons/Fdvv`, `Interactons/Fdr` and per-particle `Diam` are written
+  from **uninitialised buffers** in `Domain::Save` (`new double[3*NI]` filled
+  only for sphere pairs, written unconditionally). They differ between two
+  identical baseline runs (`Fdr` 3e-3, `Diam` denormal). Exclude them from any
+  HDF5 dataset comparison; they are pre-existing, not a regression signal.
+- `PAngacceleration` at frame 0 came from an uninitialised `Particle::wa` in
+  the baseline (reproducible garbage); it is deterministic and zero when `wa`
+  is initialised.
+
+### `MostlySpheres` segfaults on sphere-sphere contacts
+
+`Domain::ResetContacts` builds the pair list with
+
+```cpp
+if (!MostlySpheres) PairtoCInt[hash] = new CInteractonSphere(...);
+...
+if (PairtoCInt[hash]->UpdateContacts(Alpha,Per,iter)) ...
+```
+
+With `MostlySpheres = true` the key is never inserted, `operator[]` returns a
+default-constructed **NULL** pointer, and `->UpdateContacts` segfaults. It is
+reproducible with two touching spheres at `Nproc=1`, in both the current
+`HEAD` and in PR #2, for contact law 0; `gdb` stops in
+`DEM::Domain::ResetContacts()` under `GOMP_parallel`. The linear
+`Domain::CalcForceSphere` fast path is therefore unreachable for contacting
+spheres, and `ttt <key> <ncores> 1` cannot work as written. PR #2 fixes only
+the `ContactLaw==1` case (it adds `|| ContactLaw==1` to the creation test);
+the linear case still crashes. Treat `MostlySpheres` as broken until
+`PairtoCInt[hash]` is null-checked, and prefer `MostlySpheres = false` +
+`CInteractonSphere` (as `PID_v2`, `TX_PID_periodic` and the new tests do).
 
 ### `tdem/ttt` triaxial test: restart does not work
 

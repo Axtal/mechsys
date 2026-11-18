@@ -18,6 +18,495 @@ optimization reports are:
 - [`CUDA_OPTIMIZATION_CHANGES.md`](CUDA_OPTIMIZATION_CHANGES.md)
 - [`REDUCED_TEST_CU_03_PERFORMANCE.md`](REDUCED_TEST_CU_03_PERFORMANCE.md)
 
+## 0. Reviewing an incoming DEM pull request
+
+The upstream PR workflow that has actually been used here:
+
+```bash
+git fetch origin 'refs/pull/*/head:refs/remotes/pr/*'   # PR refs are fetchable
+git worktree add --detach /tmp/pr2_base origin/main      # baseline
+git worktree add --detach /tmp/pr2_head pr/2             # the PR under review
+ln -sfn lib /tmp/pr2_base/mechsys; ln -sfn lib /tmp/pr2_head/mechsys
+cmake -S . -B . -DA_WITH_TDEM=ON -DA_MAKE_USE_GPU_DOUBLE=ON \
+      -DA_USE_GMSH_STATIC=ON -DA_USE_HDF5=ON -DA_USE_OMP=ON -DA_USE_VTK=OFF
+```
+
+`git merge-tree --write-tree origin/main pr/N` dry-runs the merge without
+touching a worktree. `gh` is **not** installed and the GitHub REST API is
+rate-limited from this host; `git ls-remote origin` does work.
+
+Verification done for PR #2 (2026-11, Marco Previtali) and reusable:
+
+- CPU `test_periodic` at `Nproc=1`, Voronoi and `sphereboxhcp`, 400 and 2000
+  steps, HDF5 datasets compared recursively with `h5py.visititems` (the files
+  are group-per-particle, so a root-level loop silently compares nothing).
+- CUDA `test_cu_01` (Tf=10) and `test_cu_02` (Tf=30) full windows, `test_cu_03`
+  reduced, `test_cu_04` from `tests/dem_contact/inputs/test_cu_04.inp`. Build
+  the PR's regressions with the group target `dem_contact_regression_binaries`
+  (individual target names are `dem_test_<name>_cpu`). After 2026-11-13 the PR
+  as reviewed adds no CMake option: `tests/dem_contact` is configured from the
+  root file whenever `A_WITH_TDEM` is on (the default), the two
+  `A_WITH_*` regression/coupling switches are gone, and the experimental
+  coupled VV session (`lib/lbmdem/experimental/`, `tlbmdem_cu_benchmark`,
+  `dem_test_coupling`) was deleted with them, so a stale build directory must
+  be reconfigured and the registered test count is 10. The PR's own
+  `scripts/verify_dem_contribution.py` then passes every stage.
+- LBM-DEM: a reduced `tlbmdem01` copy (61x31x31, `Tf=100` -> 6250 steps)
+  compiled with each tree's own `mechsyscc` is a cheap coupling check.
+
+**Comparison hygiene.** Sort every HDF5 dataset diff by field name, and exclude
+`Diam`, `Interactons/Fdvv`, `Interactons/Fdr` — they come from uninitialised
+buffers and differ between two runs of the *same* binary. Both trees must be
+run in their own output directory because `test_periodic` reuses a fixed
+FileKey prefix. Do not write these runs to a small tmpfs: one sphere
+`<key>_a.hdf5` has ~430k datasets and a full `test_cu_02` writes 300 files.
+
+**PR #2 measured outcome** (Marco Previtali, three commits on `789a2de`,
+"velocity Verlet, sphere Coulomb modes, contact output"). Mergeable, builds
+clean (only the Blitz `tinymat.h` warning), and its eleven regressions pass
+(88 CPU analytic contact cases, 32 fast-path cases, 5 CPU ctests).
+
+- The default DEM numerics are preserved to floating-point reassociation only.
+  `Nproc=1`, 2000 steps: Voronoi `x` 1.9e-14, `v` 6.0e-9, `w` 1.8e-7 relative;
+  sphere `x` 2.4e-8, `v` 5.0e-5, `w` 1.5e-4 relative. Kinetic energy agrees to
+  6 digits in both. CUDA `test_cu_01` `Observed L` is identical, `test_cu_02`
+  final `Position` 1.6e-8 relative. LBM-DEM `tlbmdem01` (reduced, 6250 steps)
+  is **bit-identical** including `_force.res`. There is no bitwise `neq []`
+  for the CPU DEM paths, so the handbook's exactness gate is not met.
+- **The whole sphere-path divergence is one change:** the new
+  `Fdvv = 0` when `delta<=0` in `CInteractonSphere::CalcForce`. Rebuilding the
+  PR with *only* that reset removed gives, over the same 2000 steps,
+  `x` 1.7e-13, `v` 3.4e-10, `w` 6.0e-10, `Q` 3.3e-12 relative against the
+  baseline - i.e. pure reassociation, the same magnitude as the Voronoi path.
+  It also restores the saved friction-history row count exactly (baseline
+  24467, PR 20266, PR-without-reset 24467). Everything else on the CPU sphere
+  path (`F` reordering, `Epot`, `dEfric`, mode plumbing) is roundoff only.
+- Two further default-path changes are *reporting* only (`Epot`/`dEfric` feed
+  `CalcEnergy` and the `.res` file, never the dynamics): `Epot` is now
+  accumulated, so `tper_sph` total energy moves 2.45 -> 2.55 (4%),
+  `test_cu_02` grows by `Epot`, and CUDA `test_cu_03` (polyhedral, which had
+  **no** `Epot` in `lib/dem/dem.cuh` at all in the baseline) reports
+  `Epot=0.0739` instead of 0; `dEfric` becomes
+  `friction_limit*|plastic_disp|` instead of `Kt*dot(Fdvv,vt)*dt`, but the
+  `dem.cuh` polyhedral kernel keeps the old `dotreal3(ft,vt)*dt` form, so the
+  diagnostic is now inconsistent between paths.
+- **Do not read a dynamics change out of `test_cu_03` energies.** Two runs of
+  the *same* baseline binary at `Nproc=1, Alpha=0.05, Nthread=128, Tf=10`
+  (1,000,001 steps, 959-972 s wall) gave `Ekin` 0.0790183 and 0.0082049 - a
+  10x run-to-run spread from `atomicAdd`. The PR's 0.00636631 is inside that
+  spread. Only `Epot` moving off zero is conclusive there.
+- `MostlySpheres` dispatch changed. `PairtoCInt` is now also populated when
+  `ContactLaw==1`, and the linear `CalcForceSphere` fast path is gated on
+  `ContactLaw==0`. Do **not** describe this as "hertz silently used a linear
+  law" in the old code: with `MostlySpheres=true` a sphere-sphere pair leaves
+  `PairtoCInt` empty, and `ResetContacts` then does
+  `PairtoCInt[hash]->UpdateContacts(...)` on a NULL map entry, so the baseline
+  **segfaults** for both laws (verified with a two-sphere probe, both trees,
+  `gdb` frame `DEM::Domain::ResetContacts()`). The PR only makes
+  `MostlySpheres`+hertz work; `MostlySpheres`+linear still segfaults in both.
+  `CalcForceSphere`'s linear law is effectively dead code for contacting
+  spheres.
+- `test_cu_04`'s `MoveTopPar` is the one test-side physics change in the PR: it
+  replaced the baseline `Translate(Verts,Vertso,Par[ip],DPar[ip],trans)` wall
+  push with a `v.z=Dz/dt` + `xb.z=x.z-Dz` prescription so that velocity Verlet
+  also receives `Dz`. The two mechanisms disagree (`5e-3` in `PVelocity`) and
+  applying both moves the wall twice, so in this checkout the branch is on the
+  integrator (`UdCu.vv`): PV keeps the baseline call and reproduces
+  `0 / 0.00914244 / 0.00244635` bit-for-bit, VV uses the prescription. Without
+  that branch the ported PV path silently differs from the baseline in phase 2
+  (`0.012008` instead of `0.00244635`).
+- The PR's `WriteBF` writes the rolling force into the existing `Rolling`
+  dataset (the baseline put the normal force there) and widens which contacts
+  are exported, so `_bf_` files are not backward compatible. `Rolling` is only
+  emitted when `n_rl>0` (contacts where *both* particles have `Verts.Size()==1`),
+  so a sphere on a quad plane never produces it; the four added datasets
+  (`NormalOverlap`, `TangentialOverlap`, `DashpotForceNormal`,
+  `DashpotForceTangential`) appear in every `_bf_` file.
+
+**PR #2 on `test_01`/`test_02` (the canonical single-body DEM cases).** The
+pairing is `tdem/test_01` = CPU sliding block, `tdem/test_cu_01` = GPU sliding
+bodies, `tdem/test_02` = CPU turning table, `tdem/test_cu_02` = GPU turning
+table; the two "02" variants write `<FileKey>_trayectory.res` via a `Report`
+callback (columns `Time x y xt yt`, 300 rows at `dtOut=0.1`). Defaults already
+match across trees (Tf=10, Tf=30, Nproc=1), so run the baseline with no
+arguments and the PR as `test_cu_0N 1`.
+
+- `test_02` CPU at `OMP_NUM_THREADS=1` is **bit-identical** between baseline and
+  PR across all 300 `.res` rows and all 300 frames: `max|dx|=max|dy|=0` over
+  3e6 steps, final `x=-3.726376620`, `y=-0.581608691`. The ball rolls in
+  unbroken contact, so the PR's `delta<=0` history reset never fires.
+- `test_01` CPU is roundoff only: final `Position` 1.8e-11 and `Velocity`
+  3.7e-11 relative; `AngVelocity`/`PAngacceleration` look large in relative
+  terms only because those components are ~1e-10.
+- GPU `test_cu_02`: the **baseline** departs from the CPU reference by
+  `max|dr|=1.37e-4` (285/300 rows), while the PR agrees with the CPU to
+  `1.3e-8`. The PR improves GPU/CPU agreement on this case by four orders of
+  magnitude; do not present this as the PR breaking GPU results.
+- `PEkin` is the one CPU field that never matches: it is
+  `float(P->Ekin + P->Erot)`, cached inside `Translate`/`Rotate`, and the PR
+  refreshes those caches at a different point, so it differs on every frame
+  after the first by <=9.8e-7 relative *while `Position`/`Velocity`/`Quaternion`
+  are bit-identical*. Do not treat a `PEkin` diff as a dynamics regression.
+- Measured at `Nproc=1`/`OMP_NUM_THREADS=1` (wall, single runs, sequential):
+  CPU `test_01` 2.37 s base vs 2.58 s PR; CPU `test_02` 5.24 s vs 5.80 s;
+  GPU `test_cu_01` 81.30 s vs 72.41 s; GPU `test_cu_02` 221.10 s vs 207.86 s.
+  The CPU cases are two particles, so the 9-11% CPU delta is option plumbing,
+  not a trend; the GPU numbers are single runs on a shared A6000.
+
+**`test_cu_04` with `tper.inp`: the noisy-case protocol.** The correct command
+is `./test_cu_04 <filekey> <Nproc>` (`tdem/test_cu_04 tper 1`): it reads
+`<filekey>.inp` from the current directory and writes `<filekey>_b_walls.res`
+with `Time sx ey`. Do **not** confuse it with `tdem/test_cu_03`, which takes
+`Nproc Alpha Nthread` and writes no `.res` at all — `./test_cu_03 tper 4`
+silently means `Nproc=atoi("tper")=0` and `Alpha=atof("4")=4.0`, i.e. a wrong
+run that still starts. `tper.inp` packs **18,616 spheres** (the log's
+`Num of particles`; `nx/ny/nz` are *not* the particle count, so do not guess the
+size from the input file), with `L=5.2`, `R=0.1`, `dt=5e-5`, `T0=10`, `Tf=100`,
+200001 + 2200000 steps; the
+full run takes ~25 min per tree on the GPU at `Nproc=1`, so keep `tper.inp` and
+every output in a scratch directory — `tdem/tper_b_walls.res` in the checkout is
+an untracked **reference** left by an earlier full run and will be overwritten
+by a run started from `tdem/`.
+
+This case is chaotic, and the baseline is **not** reproducible run to run
+(`cmp` of two baseline `.res` files differs; `atomicAdd` force accumulation).
+Do not compare final values: the last `sx` point differs by 5% between two
+baseline runs. Compare time averages over the last N points instead, and quote
+the baseline's own repeat as the noise floor. Measured at `Nproc=1`, rms over
+all 1000 rows: base-vs-base2 `sx` 0.0487 (max 0.181), base-vs-reference 0.0521,
+base-vs-PR 0.0525 — i.e. the PR is indistinguishable from a re-run of the
+baseline. Time-averaged `sx` over the last 100/300/500 points: base-PR
+4.3e-4 / 6.4e-4 / 6.3e-3 against base-base2 1.5e-2 / 7.3e-4 / 1.3e-4, so
+averaging collapses a 12% pointwise scatter to <=0.1% and the residual is at
+the level of the baseline's own variability. `ey` has a small mean and larger
+relative fluctuation; use the same treatment.
+
+`test_cu_04` is also **~45-60% slower in the PR on this case**, and this is not
+a build artifact (identical `CUDA_FLAGS`, `-O3 -DUSE_CUDA`, `sm_86`, equal step
+counts). Reduced input (`T0=2`, `Tf=3`, 100k steps), alternating repeats:
+baseline 77.01 / 76.93 s, PR 122.61 / 122.46 s; full run 1477 / 1498 s vs
+2226 s. Note `USER` time rises with `WALL`; that is CUDA driver spin-wait, so it
+is *not* evidence of host-side cost.
+
+Decomposed with a stable 40k-step input (`T0=Tf=1`, ~8 s of packing included):
+baseline 37.6-38.8 s, PR 55.0-55.7 s, i.e. +45%. Each number below is a
+temporary rebuild (all reverted; both worktrees verified clean with
+`git diff --stat`):
+
+| variant | wall | share |
+|---|---|---|
+| baseline | 37.8 s | - |
+| baseline with `ComInteractonCU` padded 64 -> 176 B | 42.3 s | ~9% |
+| PR with the 8 new `Reset` writes disabled | 45.8 s | ~17% saved |
+| PR with the diagnostic atomics off | 54.8 s | ~0% |
+
+So: `ComInteractonCU` grew 64 -> 176 B and `DynInteractonCU` 136 -> 152 B
+(hurts every strided access, ~9%); the `Reset` kernel now zeroes 8 extra fields
+for **every candidate pair** each step, not just for active contacts (~17%);
+the remaining ~18% is the force-kernel additions (writing `Ft=0`/`InContact`/
+`PrevDelta` on the `delta<=0` path for every non-contacting candidate, plus
+new branches). The per-contact atomics I first suspected are irrelevant.
+
+All of it is **reporting-only state**, so it is removable: `Epot`, `dEvis`,
+`dEfric`, `Fndpot` and `Ftdpot` can be derived at output time from `Fnnet`/
+`Ftnet`/`NormalOverlap` (energies are only needed in `CalcEnergy`, which runs at
+output frames), which shrinks the struct back to ~88 B and removes both the
+extra `Reset` writes and the extra force-kernel stores. Keep `Nc` and
+`NormalOverlap` (12 B) if the contact-count output needs them.
+
+Profilers are unavailable on this box: `ncu` returns `ERR_NVGPUCTRPERM` (no
+performance-counter permission), `nsys` produces a `.qdstrm` but the
+`QdstrmImporter` is not installed, and `libcudart` is linked statically so an
+`LD_PRELOAD` shim cannot intercept the CUDA runtime API. Isolate by rebuilding
+variants and timing them.
+
+**Fix that works: keep the baseline kernel bodies as the default and make the
+PR versions opt-in.** The CUDA contact kernels are already dispatched through
+function pointers (`pForceVV`, `pReset`, `pForceEE/VF/FV`) assigned in the
+`Domain` constructor, so the PR should have *added* `*_EnergyBalance` kernels
+instead of modifying the originals. Implemented on the `pr/2` worktree: original
+bodies keep the plain names, the PR versions are `CalcForceVV_EnergyBalance`,
+`CalcForceVV_Hertz_EnergyBalance`, `Reset_EnergyBalance`,
+`CalcForceEEPre_EnergyBalance`, `CalcForceVFPre_EnergyBalance`,
+`CalcForceFVPre_EnergyBalance`; `Domain::SetEnergyBalance(bool)` switches them
+(default false), and the four energy-balance datasets plus their XDMF attributes
+are written only when the flag is set. Call this feature "energy balance", never
+"diagnostic". On the CPU path `EmitEnergyBalance()` returns true
+unconditionally, because the CPU force
+code fills those fields anyway and the PR's CPU output must not change. The
+change is uncommitted on local branch `pr2-optional-contact-kernels` in the
+permanent worktree `/home/sergio/mechsys-pr2` (branch point `pr/2` = `74ca119`),
+because `/home/sergio/mechsys` is on `main` at `ca43286` and does not contain
+the PR code at all. That worktree is plain-configured and `tdem/test_cu_04`
+builds and runs there (0 compiler errors; 40.67 s on the 40k-step input with
+`Epot = 0` and the baseline 7 datasets); its four modified files differ from the
+timed copies only in trailing blanks and one relocated comment.
+
+Same 40k-step input as above (`T0=Tf=1`, GPU, `Nproc=1`):
+
+| build | wall |
+|---|---|
+| baseline | 37.8-38.8 s |
+| PR as submitted | 55.0 s |
+| PR + opt-in kernels, default | **42.1 s** |
+| PR + `SetEnergyBalance(true)` | 54.8 s |
+
+Full `tper.inp` window (2.2e6 steps): baseline 1477 / 1498 s, PR 2226 s,
+default kernels 1661 s; the `_walls.res` time averages of the default agree
+with the baseline at the level of a baseline repeat.
+
+The default now reports `Epot = 0` and writes the baseline 7 datasets, so the
+behaviour matches the baseline exactly, and the kernel cost is fully recovered.
+The leftover ~4 s (11%) is the `sizeof(ComInteractonCU)` growth alone: padding
+the *baseline* struct to 176 B gives 42.3 s, i.e. the same wall time. Removing
+that needs the energy-balance fields moved to a separate optional array
+(`ComInteractonDiagCU`) so the default struct stays at 64 B; a kernel switch
+alone cannot recover it. Add the hook with care in `tdem/test_cu_04.cu`: it has
+CRLF line endings, so edit it as bytes (`open(...,'rb')`/`'wb'`).
+
+**Velocity Verlet (`UseVelocityVerlet`).** Every DEM and LBM-DEM test takes it
+as a trailing `<integrator> <energy>` argument pair, and `Domain::Solve` prints
+`Velocity Verlet integrator = on|off` and `Energy balance tracking = on|off`
+right after the `Verlet distance` line (the coupled `LBMDEM::Domain::Solve`
+prints the same for its DEM sub-domain). Report it from the library, never from
+the individual drivers -- duplicated per-test echoes go stale.
+
+Cost on `tper.inp`, GPU, `Nproc=1`, wall: 40k-step input 42.01 s default vs
+42.99 s VV (3 interleaved repeats each, +2.3%; compression phase +5.0%, shearing
+main phase +0.6%), full 2.2e6-step window 1661.2 s vs 1701.0 s (+2.4%). On the
+2-particle `test_cu_02` (3e6 steps) it is 205.6/207.6 s vs 223.8 s (+8.8%),
+because VV's extra per-step kernels cost about 6 us/step and there is almost no
+force work to amortize them against.
+
+Accuracy: the `tper` packing is chaotic, so use the averaged `.res`. VV's
+whole-window mean `sx` is 1.141080 vs reference 1.145234 (-0.36%) and default
+1.149644 (+0.39%); pointwise rms vs the reference is 0.0619 against a
+baseline-repeat floor of 0.0487, and the last-100/300/500/1000 averages sit
+1.8e-2/1.5e-2/1.2e-2/4.2e-3 below the reference (the default sits within
++/-5.7e-3). That is the size of the default integrator's own discretization
+error, not a VV defect; resolving which is closer to the truth needs a
+`tper` dt-refinement, which was not run.
+
+The clean accuracy measurement is `test_cu_02`, whose `.res` carries the
+analytic rolling trajectory: over 30 s at `dt=1e-5` the default integrator is
+6.76e-3 rms off the analytic curve (max 1.17e-2) and VV is 1.05e-3 (max 1.84e-3),
+i.e. **VV is 6.4x more accurate**, and repeated default runs are bit-identical,
+so that ratio is not noise. Figure:
+`/home/sergio/DATA/pr2_tper4/tt_integrator_error.png`.
+
+**VV is rejected by the coupled LBM-DEM solver.** `LBMDEM::Domain::Solve` begins
+with `if (DEMDOM.UseVelocityVerlet || DEMDOM.CheckpointReady) throw new
+Fatal("LBM-DEM Solve uses legacy integration; use the opt-in experimental
+benchmark coupling API for supported VV cases. Coupled restart is unsupported")`,
+so neither `tlbmdem01/02` nor `tlbmdem_cu_01/02` can run with VV, and in
+particular the Stokes comparison in their `_force.res`
+(`|Flbm|`, `|v|`, `6*pi*nu*R*|v|`) is unavailable with VV. The only supported
+route is `tlbmdem/tlbmdem_cu_benchmark.cu`, which is gated behind
+`-DA_WITH_EXPERIMENTAL_VV_COUPLING=ON` (default OFF) and must be configured in;
+usage `./tlbmdem_cu_benchmark vv|pv 01|02|03|tiny:FIXTURE STEPS CADENCE OUTDIR
+--experimental` (the trailing `--experimental` token is mandatory, the output
+directory must not exist). Fixture `02`/`moving` is the Stokes case: its
+`report.csv` carries `Flbmx/y/z` and a `reference` column equal to
+`6*pi*nu*R*|v|`.
+
+Measured there (`Nproc=1`, D3Q15, 200^3 lattice, nu=1.6, R=1.8, dt=0.016,
+driving force `m*0.1 = 2.4428`, so ideal Stokes terminal velocity 0.0450), 2000
+steps: force balance `|Flbm|/Ff` reaches 0.9990 (PV) and 0.9995 (VV); drag at
+matched velocity differs by 0.1-0.4% (VV lower); extrapolated terminal velocity
+0.0402 (PV) vs 0.0409 (VV); effective `6*pi*mu*R` is 62.2 (PV) and 59.8 (VV)
+against the ideal 54.3, i.e. both stay 10-15% above ideal Stokes because the
+fixture sphere is only 3.6 cells across. So VV does not degrade the Stokes
+comparison, and the absolute offset is spatial resolution, not integration.
+Timing is unmeasurable there: the coupled 200^3 D3Q15 step is 65-77 ms, so VV's
+~6 us/step is under 0.01%, and repeated walls scatter by about 6% (67.9/74.9,
+65.6/66.6 and 150.9/142.1 s for pv/vv at 600/600/2000 steps).
+
+**PR #2 inventory, for review or rebase.** Base is `789a2de` ("MPM by Mario
+merged into mechsys"), head `74ca119`, three commits (`8f867a3` feature,
+`4308abf` Coulomb projection, `74ca119` build/docs), 51 files, +8658/-397. The
+branch is *not* rebased: current `main` (`ca43286`) carries 18 files of MPM
+CUDA work the branch lacks, so `git diff main pr/2` shows `tlbmmpm_cu_0*.cu` and
+the MPM headers as deletions; diff against the merge base to see the PR itself.
+Build options: `A_WITH_DEM_CONTACT_REGRESSIONS` (OFF) adds `tests/dem_contact`
+with ten ctests; adding `A_WITH_EXPERIMENTAL_VV_COUPLING=ON` makes eleven by
+registering `dem_coupling_smoke`. `dem_test_history_cpu/gpu` are built but not
+registered with ctest -- `tests/dem_contact/check_histories.py` runs them from
+`scripts/verify_dem_contribution.py`, so they are covered, just not by ctest.
+
+**PR #2's `lib/dem/checkpoint.h` (386 lines) is a VV restart, not a duplicate of
+Save/Load.** `Domain::Save`/`Load` is the HDF5 output dump: per particle `x, xb,
+v, w, wb, Q, V, I, m, Diam, Dmax, Rho/SR/Flags/Index, Tag, Ff, Tf` plus the
+polyhedral geometry; per contact `Fdvv`, `Fdr` and the polyhedra maps EE/VF/FV
+(as `key_EE/val_EE`, ...) with stored `Kn/Kt/Gn/Gt/Mu`; plus `Time`, `Iter` and
+the bbox. That is FP64 and bit-exact (`tdem/test_saveload`). `Load` restores all of it, so the live
+sphere and 3-map polyhedral friction history is already in Save/Load --
+`tdem/test_saveload.cpp` (main, commit `bd2409a`) proves the round trip is
+bit-for-bit and then continues both runs. I verified it is a full **VV** restart
+too: copying that test with `UseVelocityVerlet=true` on both the original and
+the reloaded domain gives max|dx|=dv=dxb=dw=dwb=dQ=0 after 100 further steps,
+`Fdvv`/`Fdr` identical, PASS. What the checkpoint actually adds, corrected: the
+new contact scalars `PrevDelta`/`InContact` (live only with
+`SphereFirstContactCorrection`/`SphereTensileCutoff`, both default off;
+`PrevDelta` also feeds the Hertz `Ft` upload on CUDA), the VV arrays
+(`v_half`, `w_half`, `wa`, `A`, `Wdot`, `F`, `T`) which are reconstructible and
+demonstrably exact without them, `vt_prev` (**never read** anywhere in the
+library -- dead state), the VT/TV/VC/CV maps (torus/cylinder, and the checkpoint
+refuses tori/cylinders, so unreachable), the candidate list by persistent id,
+`NextPersistentId`, and the whole run configuration (`Dt`, `Alpha`, `Beta`, `Evis/Efric/Wext`, thermostat
+range, `ContactLaw`, `SphereCoulombMode`, `RotPar`, tensile, activation,
+`FricCoeff`). Format is boost property_tree text at `setprecision(17)`, with
+`magic/version/precision/phase` and all-or-nothing `need()` refusals; it refuses
+non-stock kernels, bonds, `MostlySpheres`, torus/cylinders and `UserData`, needs
+a fresh empty Domain and the same `dt`, and only saves at a completed VV full
+step. Fidelity is tested by `check_histories.py`: 32-step reference vs 16 +
+resume for 16, matching within `1e-10 + 1e-9*|x|` on CPU and GPU. My review
+position: the capability is needed, the third serialization format is not -- it
+fits in `Save`/`Load`. `Save` is an explicit snapshot (`<FileKey>.hdf5`,
+`H5F_ACC_TRUNC`), *not* the per-frame visualization writer: that is `WriteBF`,
+which writes float32 `_bf_<idx>.h5` plus XDMF, and `Solve` no longer calls
+`Save` at all. `Load` already restores 13 props per particle from a flat `(NP,13)`
+array and tolerates missing datasets through `H5LTfind_dataset` (`/Time`,
+`/Iter`), so additive datasets keep old files readable.
+
+Folded in, in `/home/sergio/mechsys-pr2` (branch
+`pr2-optional-contact-kernels`): `Save` also writes `/RestartVersion`, the run
+scalars, `/RestartPersistentId`, `/RestartForce` (NP,12: `F,T,A,Wdot`),
+`/Interactons/PrevDelta`, `/Interactons/InContact`, and `/ContactOrder`+
+`/ContactData` (the active list with its 17 exported values); `Load` restores
+them. There is no separate restart API: the PR's `lib/dem/checkpoint.h` and its
+`SaveCheckpoint`/`LoadCheckpoint` wrappers are gone, and the helpers plus
+`AssignPersistentIds`/`SaveRestartState`/`LoadRestartState` live at the end of
+`lib/dem/domain.h` (one file format, nothing extra for a caller to know).  The
+helpers are plain `inline` functions in `DEM` -- the helper namespace wrapper was
+removed on request, and they are not class members either, since they are
+stateless and only take the `hid_t`.
+Two facts the
+386-line version carried that a bare "80 lines" estimate misses, both learned
+the hard way: (1) a report taken right after `Load` prints per-particle `F`/`T`
+and the per-contact decomposition, so the last force evaluation **and** the
+active contact list are part of the visible state -- without them
+`check_histories.py` fails on its first row with `F=0`; (2) on CUDA
+`DnLoadDevice` does not bring `T`/`F`/`A`/`Wdot` back to the host and
+`UpLoadDevice` throws `VV device upload requires initialized acceleration
+state`, so the writer mirrors `bParticlesCU`/`bDynParticlesCU`/`bA`/`bWdot`
+first. `/EnergyBalance` must be stored too: it selects the kernel variant, and
+without it a resumed run stops refreshing `Fndpot` (it stays frozen at the
+restored value). No device history dump is needed: `UpLoadDevice` seeds
+`Ft`/`Fr`/`PrevDelta`/`InContact` from the restored CPU contacts, so
+`RestoreCheckpointDevice` and `CheckpointVV..` can be deleted. Verified after
+all the deletions: `test_saveload` (PV) and the same source with
+`UseVelocityVerlet = true` are bit-identical across save+load on CPU and CUDA,
+an old 73 KB file still loads, and `tdem/test_cu_04` with
+`UseVelocityVerlet=1 EnergyBalance=1` runs to 501+1501 iterations with
+`Total energy = 0.00913382 / 0.0117137`.
+
+**The opt-in must be explicit in every driver that wants the decomposition.**
+`tests/dem_contact/*` was the PR's regression tree and is deleted; the drivers
+that remain take the flag from the command line (`tdem/test_cu_04` has
+`[integrator] [energy_balance]` as its 5th/6th optional arguments) or call
+`d.SetEnergyBalance(true)`. Without it the baseline kernels never fill
+`Fndpot`/`NormalOverlap`, so a reader of the HDF5 file sees
+`object 'NormalOverlap' doesn't exist`.
+
+**Coupled LBM-DEM:** velocity Verlet is available on the CUDA path only
+(`SetDEMIntegrator`), and all six tlbmdem programs take `<integrator>
+<energy>`. Reduced-copy checks: `tlbmdem_cu_01` and `tlbmdem_cu_03` produce
+`_force.res` files identical between PV and VV, `tlbmdem_cu_02` agrees on the
+terminal velocity to 2.5e-5, and the CPU coupling exits with
+`Fatal: LBM-DEM velocity Verlet requires the CUDA path`. `tlbmdem_cu_04` turns `RenderVideo` on in its own source, so a full run writes
+>10 GB; and any `Nl>1` FLBM output used to emit `H5Dcreate2 ... name already
+exists` because `WriteXDMF`, `WriteXDMF_DEM` and `Save` all created
+`Nx`/`Ny`/`Nz`/`Ncell` inside their layer loop -- fixed with `if (j==0)`, so
+those traces are not evidence of a data problem (the frames were complete). Those coupled frames are large (a 100^3 field set is ~30 MB per
+frame, 400 frames = 12 GB); smoke-test with a reduced copy, `Render=true` ->
+`false` and a small output cadence, and check `df -h` first.
+
+**CPU velocity Verlet exists and is worth using.** The stage selection is not
+`USE_CUDA`-specific: `CalcForcesVV`/`PreForceVV`/`PostForceVV` have full host
+bodies (`TranslateVelVerlet`, `RotateVelVerlet`, `UpdateVelocityHalf/Full`,
+`UpdateAngularVelocityHalf/Full`). `test_saveload`, `test_01`, `test_02` and
+`test_periodic` expose it. Verified: `test_01` gives `Observed L=51.0012` (PV)
+vs `51.0013` (VV) against `Theoretical L=51.0204`; `test_02`'s rolling orbit is
+`1.175e-2` (PV) vs `1.795e-3` (VV) away from the analytic `xt/yt` (6.5x better
+for VV); the CPU energy-track run is
+bit-identical to plain VV (no atomics on the host); `test_saveload` passes in
+all four vv/eb combinations. Cost at 4 threads on a 216-sphere packing: PV
+6.96 ms/step vs VV 4.32 ms/step, because the legacy CPU PV force pass
+zeroes/reduces per-thread `MTD[i].F/T` arrays while VV accumulates in place; at
+`Nproc=1` they are equal (14.76 vs 14.74 ms/step). The coupled CPU loop still
+refuses VV.
+
+**PV vs VV accuracy, measured (`test_cu_04`, dt sweep to dt/8).** At the stock
+`dt=2e-5` PV's kinematic energy is +1.03 % off its `dt->0` value after the
+compression phase and +25.5 % off after the driven phase; VV is dt-flat there
+(<=0.15 %, the chaotic-packing noise floor) and its compression-phase limit
+matches PV's to 0.004 %. So VV is the better production choice at normal step
+sizes, and PV needs about `dt/4` for 0.1 %. The 6x difference in the end-of-run
+energy between the schemes is a chaotic rattle attractor, not an integrator
+error: height (2e-6 relative), coordination number (~1 %), mean and max normal
+overlap (~1 %, 0.1 %) agree, `test_cu_01` gives `Observed L=51.0019` vs theory
+`51.0204` for both, and `test_cu_03`'s steady-state energy agrees to 0.15 %.
+Cost is within noise (`test_cu_03` +0.6 %, coupled 64^3 -0.7 %, `test_cu_04`
+-0.9 %) except the latency-bound single-body `test_cu_01` (+3.7 %, two extra
+kernel launches at 73 us/step).
+
+**The PV path was verified bit-identical to the pre-change library in main.**
+`tdem/test_cu_04 cu04 1 4.0 0.0` (three runs each; `cu04.inp` is a local
+reduced copy of the checked-in `tpercu.inp` -- the driver reads `<key>.inp`, so
+keep that fixture beside the run) gives `0 / 0.00914244 /
+0.00244635` for both the pre-port build and the ported default; the coupled
+Stokes case writes a byte-identical `cur_stokes_force.res`; `tdem/test_01`
+prints `Observed L = 51.0012` in both. The dispatch itself costs
+**5.3 ns/iteration** (1.78 direct vs 7.10 through member pointers, `-O3`,
+2e8 iterations), i.e. 0.007 % of the 73 us `test_cu_01` step, so the three
+member-pointer stages stay. Energy tracks are a recording switch: the
+`*_EnergyBalance` kernels return the baseline forces, and `CalcEnergy` now
+actually sums `Evis`/`Efric` (they previously always read zero). `test_cu_04`
+with the tracks matches the default strain to ~1.2 % and VV to ~1.6 %, the
+expected chaotic-packing spread, and the coupled terminal velocity agrees to
+5e-5. `test_saveload` passes bit-for-bit in all four vv/eb combinations; sum
+the domain totals in sorted-key order because `PairtoCInt` is an
+`unordered_map`.
+
+**`Domain::Solve` has no integrator test inside the time loop** (done in
+`/home/sergio/mechsys-pr2`, uncommitted). Two member function pointers,
+`pPreForce` and `pPostForce`, are chosen once at the top of `Solve` from
+`UseVelocityVerlet`: VV gets `PreForceVV` (half kick, drift, post-drift list
+check, forces with the half-step velocities) plus `PostForceVV` (velocity
+finalisation); PV gets `pPreForce = NULL` and `PostForcePV` (one force pass and
+the move). Both `#ifdef USE_CUDA` and CPU bodies exist, Allman braces, and the
+contact-list statistics (`NumUp`, `IterUp`, `IterUpBase`) had to become members
+because the phases touch them. Behaviour-preserving by construction and by
+measurement: `test_saveload` PV/VV bit-identical, `test_cu_04` same energies,
+coupled Stokes `.res` byte-identical to the pristine tree.
+`LBMDEM::Domain::Solve` now drives the same three DEM stages, so the coupled
+solver runs either integrator: `DEMDOM.SelectStages()` once before its loop,
+then `pPreForce`/`pCalcForce`/`pPostForce` per step, with
+`InitVerletAccelerations()` plus `UpLoadDevice(Nproc,true,true)` as the
+velocity-Verlet bootstrap and only `CheckpointReady` refused. Two traps found
+there: forgetting `SelectStages()` calls a NULL member pointer (segfault at the
+first step), and moving the fluid imprint from the top of the step to
+"between forces and move" makes the drag diverge (|Flbm| up to 5.7e4).
+
+**PR scaffolding removed** (all uncommitted on `pr2-optional-contact-kernels`):
+every PR-added file without a namesake in `/home/sergio/mechsys` is gone --
+`lib/dem/checkpoint.h`, `lib/dem/sphere_cube_robust.h`,
+`lib/lbmdem/experimental/*`, `scripts/verify_dem_contribution.py`,
+`tests/dem_contact/*` (22 files), the four example drivers
+(`test_2spheres{,_gpu}.cpp`, `PID_v2.cpp`, `TX_PID_periodic.{cpp,cu}`,
+`shearbox_LE_const_vol.cu`) with their `.inp`, and
+`tlbmdem/tlbmdem_cu_benchmark.cu`. `test_2spheres*`/`PID_v2`/`TX_PID_periodic*`/
+`shearbox_LE_const_vol` were then dropped from `tdem/CMakeLists.txt` and the
+`tests/dem_contact` subdirectory from the root one. No `docs/` directory is
+added: MechSys keeps its documentation in the root markdown files
+(`MECHSYS_HANDBOOK.md` for the feature design and the test switches,
+`MEMORY.md` for the distilled facts, the `*_CHANGES.md` reports for
+optimisation work), so the ported feature description lives in the handbook.
+Net: 46 files, +1477/-6795. Rebuild everything (`make -j8` for the tdem and
+tlbmdem targets) after such a sweep; in an in-source build the deleted targets
+leave stale untracked executables behind (`tdem/PID_v2`,
+`tlbmdem/tlbmdem_cu_benchmark`, ...) that must be removed by hand.
+
 This file is intentionally shorter than the handbook. It records the things
 that are easy to get wrong and the shortest path to a trustworthy result.
 
@@ -836,6 +1325,11 @@ LBMMPM CUDA facts (`lib/lbmmpm/lbmmpm.cuh`):
   `t>=0.75` mean is 83.30 mm (final 82.94 mm, `CD=0.3001`), consistent
   with the no-video run.  VisIt rendering took 137.70 s; camera focus
   `(0.17,0.15,0.045)`, `parallelScale=0.13`, speed range 0--2.0 m/s.
+  The raw `*.h5`/`*.xmf` frames for both the 10 mm reference and the
+  half-thickness video run were deleted after producing the GIFs/plots.
+  To re-render or post-process fields, rerun with `RenderVideo=1`; the
+  retained products are the GIFs, posters, `position.res`, `time.res`, and
+  scripts.
   A 100-frame 800x800 bending animation was rendered from the older
   `ndiv=40` MPM HDF5 mesh with VTK 9.5 offscreen + Pillow GIF (12.5 fps,
   dx colour range 0--16 mm, project `turbo` fluid colormap):

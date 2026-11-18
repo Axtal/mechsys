@@ -93,7 +93,11 @@ void Report (LBMDEM::Domain & dom, void * UD)
 
 int main(int argc, char **argv) try
 {
+    // Optional: <Nproc> <integrator: 0 position Verlet, 1 velocity Verlet> <energy: 0|1>
     size_t Nproc = 0.75*omp_get_max_threads();
+    bool   vv    = (argc>=3)&&atoi(argv[2])!=0;
+    bool   eb    = (argc>=4)&&atoi(argv[3])!=0;
+    if (argc>=2) Nproc = atoi(argv[1]);
 
         
     double nu = 1.0;
@@ -127,6 +131,8 @@ int main(int argc, char **argv) try
     dom.Alpha = 4.0*dx;
 
     double Tf = 1.0e4;
+    dom.SetDEMIntegrator   (vv);
+    dom.SetDEMEnergyBalance(eb);
     dom.Solve(Tf,Tf/200,Setup,Report,"tlbmdem01",true,Nproc);
 }
 MECHSYS_CATCH

@@ -80,6 +80,11 @@ public:
     void ResetParCell();             ///< Reset the information of particle cell contacts
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
+
+    // DEM integrator and energy accounting for the embedded DEM domain.  Both must be set
+    // before Solve: the coupled loop reads them when it selects the DEM stages.
+    void SetDEMIntegrator   (bool VelocityVerlet) { DEMDOM.UseVelocityVerlet = VelocityVerlet; } ///< false = position Verlet, true = velocity Verlet
+    void SetDEMEnergyBalance(bool On)             { DEMDOM.SetEnergyBalance(On); }               ///< record the DEM energy tracks
     
 #ifdef USE_HDF5    
     void WriteXDMF         (char const * FileKey);                                      ///< Save a xdmf file for visualization
@@ -634,6 +639,18 @@ inline void LaunchFusedStreamMacro (size_t Nneigh, size_t Nblk, size_t Nthread, 
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
                           char const * TheFileKey, bool RenderVideo, size_t TheNproc)
 {
+    if (DEMDOM.CheckpointReady)
+    {
+        throw new Fatal("LBM-DEM Solve cannot resume from a checkpoint");
+    }
+#ifndef USE_CUDA
+    // The CPU coupling loop below is the legacy position-Verlet one.
+    if (DEMDOM.UseVelocityVerlet)
+    {
+        throw new Fatal("LBM-DEM velocity Verlet requires the CUDA path");
+    }
+#endif
+
     FileKey.Printf("%s",TheFileKey);
     idx_out = 0;
     Finished = false;
@@ -722,6 +739,8 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     printf("%s  Time step                                 =  %g%s\n"        ,TERM_CLR2, dt                                                        , TERM_RST);
     printf("%s  Simulated Time                            =  %g%s\n"        ,TERM_CLR2, Tf                                                        , TERM_RST);
     printf("%s  Verlet distance                           =  %g%s\n"        ,TERM_CLR2, Alpha                                                     , TERM_RST);
+    printf("%s  Velocity Verlet integrator                =  %s%s\n"        ,TERM_CLR2, DEMDOM.UseVelocityVerlet?"on":"off"        , TERM_RST);
+    printf("%s  Energy balance tracking                   =  %s%s\n"        ,TERM_CLR2, DEMDOM.EnergyBalance?"on":"off"            , TERM_RST);
     printf("%s  Suggested Time Step                       =  %g%s\n"        ,TERM_CLR5, 0.1*sqrt(MinMass/(MaxKn+MaxBn))                           , TERM_RST);
     printf("%s  Suggested Verlet distance                 =  %g or  %g%s\n" ,TERM_CLR5, 0.5*MinDmax, 0.25*(MinDmax + DEMDOM.MaxDmax)              , TERM_RST);
     if (PeriodicX)
@@ -782,7 +801,18 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         }
     }
 #ifdef USE_CUDA
-    DEMDOM.UpLoadDevice(Nproc,true);
+    // The coupled solver drives the DEM stages itself, so it also owns the velocity-Verlet
+    // bootstrap: the accelerations must exist before the first half kick and reach the
+    // device with the rest of the state.
+    if (DEMDOM.UseVelocityVerlet)
+    {
+        DEMDOM.InitVerletAccelerations();
+        DEMDOM.UpLoadDevice(Nproc,true,true);
+    }
+    else
+    {
+        DEMDOM.UpLoadDevice(Nproc,true);
+    }
     LBMDOM.UpLoadDevice(Nproc);
     UpLoadDevice(Nproc,true);
     cudaDeviceProp prop;
@@ -796,9 +826,13 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         << "  Number of faces                           =  " << DEMDOM.demaux.nfaces/2 << TERM_RST << std::endl;
 #endif
 
-    size_t iter_b = iter;
-    size_t iter_t = 0;
-    size_t numup  = 0;
+    // The DEM stages keep their own contact-list rebuild statistics, and the three stage
+    // pointers are chosen once here: a coupled domain never runs DEM::Domain::Solve, so
+    // neither would otherwise happen.
+    DEMDOM.SelectStages();
+    DEMDOM.IterUpBase = DEMDOM.iter;
+    DEMDOM.IterUp     = 0;
+    DEMDOM.NumUp      = 0;
 
     double tout = Time;
     while (Time<Tf)
@@ -834,51 +868,45 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         cudaReset<<<LBMDOM.Ncells/Nthread+1,Nthread>>>(LBMDOM.pIsSolid,pGammaf,pGamma,pOmeis,LBMDOM.plbmaux);
 
         DEMDOM.pReset<<<(DEMDOM.demaux.nparts+DEMDOM.demaux.ncoint)/Nthread+1,Nthread>>>(DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,DEMDOM.pInteractons,DEMDOM.pComInteractons,DEMDOM.pdemaux,DEMDOM.pExtraParams);
-        DEMDOM.pForceVV<<<DEMDOM.demaux.nvvint/Nthread+1,Nthread>>>(DEMDOM.pInteractons,DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVV, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
-        DEMDOM.pForceEE<<<DEMDOM.demaux.neeint/Nthread+1,Nthread>>>(DEMDOM.pEdgesCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsEE, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
-        DEMDOM.pForceVF<<<DEMDOM.demaux.nvfint/Nthread+1,Nthread>>>(DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsVF, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
-        DEMDOM.pForceFV<<<DEMDOM.demaux.nfvint/Nthread+1,Nthread>>>(DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pInteractons, DEMDOM.pComInteractons, DEMDOM.pDynInteractonsFV, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux,DEMDOM.pExtraParams);
-        //cudaDeviceSynchronize();
-        
-        //auto stop  = std::chrono::high_resolution_clock::now();
-        //auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
 
-        //std::cout << "DEM Calculation of forces " << duration.count() << std::endl;
-
-        //start = std::chrono::high_resolution_clock::now();
         cudaImprintLatticeVC<<<lbmdemaux.nvc/Nthread+1,Nthread>>>(pfBn,pPaCeV,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
         cudaImprintLatticeFC<<<lbmdemaux.nfc/Nthread+1,Nthread>>>(pPaCe,pPaCeF,DEMDOM.pFacesCU,DEMDOM.pFacidCU,DEMDOM.pVertsCU,DEMDOM.pParticlesCU,DEMDOM.pDynParticlesCU,LBMDOM.pRho,pGamma,pOmeis,LBMDOM.pF,DEMDOM.pdemaux,LBMDOM.plbmaux,plbmdemaux);
-        //cudaDeviceSynchronize();
-        //stop  = std::chrono::high_resolution_clock::now();
 
-        //duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
-
-        //std::cout << "LBM-DEM Imprint           " << duration.count() << std::endl;
-
-        //start = std::chrono::high_resolution_clock::now();
-
-        if (DEMDOM.pMove)
-            DEMDOM.pMove<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU,
-                    DEMDOM.pdemaux, DEMDOM.RotPar, DEMDOM.pExtraParams);
-        else
+        // The DEM iteration runs the same three stages as Domain::Solve -- chosen once,
+        // before the loop, by SelectStages() -- so the coupling supports both integrators
+        // without testing the flag here: the pre-force stage (velocity Verlet only) does
+        // the half kick, the drift and the list check, the force pass follows, and the post
+        // stage either finalises the velocities (velocity Verlet) or moves the particles
+        // (position Verlet).
+        //
+        // The fluid exchange is evaluated at the top of the step, on the fully updated DEM
+        // state (position, orientation, translational and angular velocity), which is the
+        // same state position Verlet exposes to the imprint: the force it produces then
+        // enters this step's force sum. Evaluating it after the drift instead (between the
+        // force pass and the post stage) leaves the exchange on a predicted state that is
+        // a full step ahead of the fluid, and the drag force grows without bound.
+        //
+        // A contact-list rebuild inside a stage invalidates the particle/cell map the
+        // imprint walks, so the rebuild counter is watched and the map is rebuilt whenever
+        // it moves.
+        if (DEMDOM.pPreForce != NULL)
         {
-            DEMDOM.pTranslate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
-            if (DEMDOM.RotPar) DEMDOM.pRotate<<<DEMDOM.demaux.nparts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pParticlesCU, DEMDOM.pDynParticlesCU, DEMDOM.pdemaux, DEMDOM.pExtraParams);
+            size_t const rebuilds_before_pre = DEMDOM.NumUp;
+            (DEMDOM.*(DEMDOM.pPreForce))();
+            if (DEMDOM.NumUp != rebuilds_before_pre)
+            {
+                ResetParCell();
+                UpLoadDevice(Nproc,false);
+            }
         }
-        DEM::MaxD        <<<DEMDOM.demaux.nverts/Nthread+1,Nthread>>>(DEMDOM.pVertsCU, DEMDOM.pVertsoCU, DEMDOM.pMaxDCU,
-                DEMDOM.pdemaux);
+        (DEMDOM.*(DEMDOM.pCalcForce))();
 
-        real maxdis = 0.0;
-        size_t nmaxblocks = DEMDOM.demaux.nverts/Nthread+1;
-        thrust::device_vector<real>::iterator it=thrust::max_element(DEMDOM.bMaxDCU.begin(),DEMDOM.bMaxDCU.begin()+nmaxblocks);
-        maxdis = *it;
-
-        if (maxdis>Alpha)
+        // Finalise the velocities (velocity Verlet) or move the particles and check the
+        // list (position Verlet); both stages own their contact-list rebuild.
+        size_t const rebuilds_before_post = DEMDOM.NumUp;
+        (DEMDOM.*(DEMDOM.pPostForce))();
+        if (DEMDOM.NumUp != rebuilds_before_post)
         {
-            numup++;
-            iter_t+= iter - iter_b;
-            iter_b = iter;
-            DEMDOM.UpdateContactsDevice();
             ResetParCell();
             UpLoadDevice(Nproc,false);
         }
@@ -938,7 +966,8 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
         #pragma omp parallel for schedule(static) num_threads(Nproc)
         for (size_t i=0; i<DEMDOM.Interactons.Size(); i++)
         {
-		    if (DEMDOM.Interactons[i]->CalcForce(dt,DEMDOM.Per,iter))
+		    if (DEMDOM.Interactons[i]->CalcForce(dt,DEMDOM.Per,iter,DEMDOM.ContactLaw,
+                    DEMDOM.SphereCoulombMode,DEMDOM.SphereTensileCutoff,DEMDOM.SphereFirstContactCorrection))
             {
                 String f_error(FileKey+"_error");
                 DEMDOM.Save     (f_error.CStr());
@@ -1010,9 +1039,9 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     if (ptReport!=NULL) (*ptReport) ((*this), UserData);
 
     printf("%s  Total number of iterations                                = %zd%s\n",TERM_CLR4,iter, TERM_RST);
-    if (numup>0)
+    if (DEMDOM.NumUp>0)
     {
-    printf("%s  Average number of iterations between contact list updates = %zd%s\n",TERM_CLR4,iter_t/numup, TERM_RST);
+        printf("%s  Average number of iterations between contact list updates = %zd%s\n",TERM_CLR4,DEMDOM.IterUp/DEMDOM.NumUp, TERM_RST);
     }
     printf("%s  Final CPU time       = %s\n",TERM_CLR2, TERM_RST);
 }

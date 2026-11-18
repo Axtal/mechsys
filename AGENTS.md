@@ -21,6 +21,14 @@ the handbook is the durable knowledge base for users and agents.
    - [`CUDA_OPTIMIZATION_CHANGES.md`](CUDA_OPTIMIZATION_CHANGES.md)
    - [`REDUCED_TEST_CU_03_PERFORMANCE.md`](REDUCED_TEST_CU_03_PERFORMANCE.md)
    - [`MPM_OPTIMIZATION_CHANGES.md`](MPM_OPTIMIZATION_CHANGES.md)
+5. **GPU capability is not guaranteed in an agent shell.** The `nvidia_*` kernel
+   modules can be loaded while the agent sandbox exposes no `/dev/nvidia*`
+   device nodes; then `nvidia-smi` reports "couldn't communicate with the
+   NVIDIA driver" and CUDA initialization fails even though the host GPU is
+   healthy. Run `ls /dev/nvidia*` before planning any CUDA case, and do not
+   report a GPU build or run you could not execute. When the nodes are absent,
+   restrict yourself to CPU targets (128 cores are available, no scheduler) and
+   ask the user to run GPU cases outside the sandbox.
 
 ## Memory maintenance (mandatory after every prompt)
 
@@ -118,11 +126,13 @@ make it fast.
 - `tclbm01` (2400x300, 40k steps) is flat for `Nthread=32..256`; 32 vs 256
   was 45.11 vs 45.72 s over three runs each (Welch p=0.11). Do not quote its
   small differences as a tuning gain.
-- CPU and GPU body-force conventions differ: CPU `StreamSC` adds
-  `0.5*dt*BForce` to the reported velocity, while the GPU fused kernel returns
-  the raw second moment. The raw GPU value carries a constant `-0.5*nu*phi`
-  bias in `K`; use `u_physical = u_raw + 0.5*dt*fx*phi` for permeability and
-  state which convention a number uses.
+- Velocity convention: in this tree **both** active paths report the raw
+  second moment, `u = sum_k f_k c_k / rho` – CPU `StreamSC` and the GPU fused
+  stream kernel. The `+0.5*dt*BForce` velocity lives in `StreamEFS_SRT`, which
+  `Solve` does not call (verified 2026-11-17: plane Poiseuille, CPU vs GPU
+  agree to 1.4e-16). So do not apply a blind "half-force" correction: measure
+  it. In a forced channel with bounce-back walls the raw profile equals the
+  analytical parabola plus a constant slip, see the handbook 5.1.
 - Device population addressing uses `FLBM::FIDX(Ncells,Nneigh,il,k,ic)` from
   `lib/flbm/lbm.cuh`; do not add local copies of the direction-major index
   formula in test kernels.
@@ -243,13 +253,26 @@ make it fast.
   percolation: `K=0` below `phi_c ~ 0.593`; percolating values are
   `K(0.60)=0.0422`, `K(0.70)=0.1163`, `K(0.85)=0.5441`. A `1024x1024` check
   changes `K` by <1% at `phi=0.60/0.65`.
-- Plane-Poiseuille validation: `/home/sergio/tflbm10_porous/validation/`
-  (`poiseuille.cu`, `run_validation.py`). Walls at `y=0.5` and `y=H+0.5`,
-  uniform `+x` force. The half-force corrected `K` converges to `H^2/12`:
-  relative error `1.56e-2` (H=8), `3.91e-3` (H=16), `9.77e-4` (H=32),
-  `1.99e-4` (H=64), `1.63e-5` (H=128); force linearity over 16x at H=32 is
-  `2e-12`. Scale `fx` with `H^2` to keep `u_max ~ 0.01`; `H=128` at `fx=1e-4`
-  is high-Mach and fails. This validates the half-force convention used above.
+- Random porous media / permeability: `/home/sergio/tflbm_porous/`
+  (`porous.cu`, `run_sweep.sh`, `validate_slabs.sh`). With the raw second
+  moment it reproduces `K=phi*H^2/12` exactly on periodic straight channels,
+  so no `+0.5*nu*phi` shift belongs in `K`. Averaged `K` has an accuracy floor
+  `|K|<~0.03` from D2Q9 diagonal corner leakage + staircase walls.
+- Plane-Poiseuille validation: `/home/sergio/tflbm_poiseuille/`
+  (`poiseuille.cu`, `analyze.py`, `plot.py`, `README.md`; the older
+  `tflbm10_porous/validation/` tree no longer exists). Walls at `y=0.5` and
+  `y=H+0.5` (half-way bounce-back: `H` = number of fluid rows, verified with
+  `nsolid=1/3/6`), uniform `+x` force, `Dom.Sc=0` to keep LES off. The profile
+  is exactly parabolic with `nu_fit = nu` and a constant slip
+  `u_raw = a/(2 nu) s(H-s) - c(tau) a`, `c = 1/(8 nu) - 6 nu + 1/2` (fits 23
+  runs to 4 digits, independent of `H`). At `tau=1` this makes
+  `K_raw = <u>nu/fx = H^2/12` to `1e-11` for `H=8..128` **with no correction**;
+  pointwise L2 error `7.13e-3/1.78e-3/4.46e-4/1.11e-4/2.79e-5` for
+  `H=8/16/32/64/128` (second order, `u_slip/u_max = (1-48nu^2+4nu)/H^2`), and
+  `|dK/K| <= 1.1e-3` for `0.56 <= tau <= 1.1` at H=32 (4x smaller at H=64).
+  Scale `fx` with `H^2` to keep `u_max ~ 0.01`. The old half-force-based
+  numbers (error `1.56e-2` at H=8 …) were produced by a tree whose reported
+  velocity differed; re-measure before applying `u+0.5*dt*fx` to a porous `K`.
 - Advection-diffusion point source: `/home/sergio/tflbm10_porous/solute_source/`.
   Two-layer `AdvectionDiffusion` (`nu={1/6,D}`): layer 0 is the fluid, layer 1
   the passive concentration. Set `BForce[1]=0.5*fx/Tau[1]` so the AD collision
@@ -334,7 +357,8 @@ under-resolved/qualitative.  Both middle planes are overlaid in
 100-frame animation is
 `/home/sergio/DATA/t01_L030_v1815_Lx005_padLz_video/t01_Lx005_fluid.gif`
 (poster `t01_Lx005_fluid_poster.png`); the video rerun took 1137.84 s and
-VisIt rendering 137.70 s.
+VisIt rendering 137.70 s.  Raw `*.h5`/`*.xmf` frames for both t01 runs
+were deleted; rerun with `RenderVideo=1` to regenerate fields.
 
 ## Exactness rules (critical)
 
@@ -464,6 +488,9 @@ These are easy to break accidentally:
 
 ## Preferred working style
 
+- Keep documentation in the existing root markdown files (`MECHSYS_HANDBOOK.md`,
+  `MEMORY.md`, `CPU_DEM_OPTIMIZATION_CHANGES.md`, ...). Do not add a `docs/`
+  tree or other new top-level structure; MechSys upstream has none.
 - Reply in English unless the user asks otherwise.
 - Give explicit commands, file paths, and measured numbers.
 - Distinguish “compiles”, “runs”, “matches baseline”, and “is faster”.

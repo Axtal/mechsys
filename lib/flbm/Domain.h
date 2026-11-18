@@ -674,19 +674,23 @@ inline void Domain::WriteXDMF(char const * FileKey)
         dims[0] = 3*Nx*Ny*Nz;
         dsname.Printf("Velocity_%d",j);
         H5LTmake_dataset_double(file_id,dsname.CStr(),1,dims,Vvec    );
-        dims[0] = 1;
-        int N[1];
-        N[0] = Nx;
-        dsname.Printf("Nx");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
-        dims[0] = 1;
-        N[0] = Ny;
-        dsname.Printf("Ny");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
-        dims[0] = 1;
-        N[0] = Nz;
-        dsname.Printf("Nz");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+        // The grid dimensions are one set per file, not one per layer.  Writing them
+        // inside the layer loop makes HDF5 report "name already exists" for every
+        // layer beyond the first (Nl>1), which is noise, not a data problem.
+        if (j==0)
+        {
+            dims[0] = 1;
+            int N[1];
+            N[0] = Nx;
+            dsname.Printf("Nx");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+            N[0] = Ny;
+            dsname.Printf("Ny");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+            N[0] = Nz;
+            dsname.Printf("Nz");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+        }
 
         delete [] Density ;
         delete [] Gammap  ;
@@ -844,19 +848,23 @@ inline void Domain::WriteXDMF_DEM(char const * FileKey)
         dims[0] = 3*Nx*Ny*Nz;
         dsname.Printf("Velocity_%d",j);
         H5LTmake_dataset_double(file_id,dsname.CStr(),1,dims,Vvec    );
-        dims[0] = 1;
-        int N[1];
-        N[0] = Nx;
-        dsname.Printf("Nx");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
-        dims[0] = 1;
-        N[0] = Ny;
-        dsname.Printf("Ny");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
-        dims[0] = 1;
-        N[0] = Nz;
-        dsname.Printf("Nz");
-        H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+        // The grid dimensions are one set per file, not one per layer.  Writing them
+        // inside the layer loop makes HDF5 report "name already exists" for every
+        // layer beyond the first (Nl>1), which is noise, not a data problem.
+        if (j==0)
+        {
+            dims[0] = 1;
+            int N[1];
+            N[0] = Nx;
+            dsname.Printf("Nx");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+            N[0] = Ny;
+            dsname.Printf("Ny");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+            N[0] = Nz;
+            dsname.Printf("Nz");
+            H5LTmake_dataset_int(file_id,dsname.CStr(),1,dims,N);
+        }
 
         delete [] Density ;
         delete [] Gammap  ;
@@ -2081,26 +2089,27 @@ inline void Domain::Save(char const *FileKey)
         dsname.Printf("bforce_%d",j);
         H5LTmake_dataset_double(file_id, dsname.CStr(),1, dims, bforce);
 
-        dims[0] = 1;
-        int N[1];
-        N[0] = Nneigh * Nx * Ny * Nz;
-        dsname.Printf("Ncell");
-        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+        // One set of grid dimensions per file, written with the first layer only.
+        if (j==0)
+        {
+            dims[0] = 1;
+            int N[1];
+            N[0] = Nneigh * Nx * Ny * Nz;
+            dsname.Printf("Ncell");
+            H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
 
-        dims[0] = 1;
-        N[0] = Nx;
-        dsname.Printf("Nx");
-        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+            N[0] = Nx;
+            dsname.Printf("Nx");
+            H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
 
-        dims[0] = 1;
-        N[0] = Ny;
-        dsname.Printf("Ny");
-        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+            N[0] = Ny;
+            dsname.Printf("Ny");
+            H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
 
-        dims[0] = 1;
-        N[0] = Nz;
-        dsname.Printf("Nz");
-        H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+            N[0] = Nz;
+            dsname.Printf("Nz");
+            H5LTmake_dataset_int(file_id, dsname.CStr(), 1, dims, N);
+        }
 
         delete[] f;
         delete[] solid;

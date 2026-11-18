@@ -69,6 +69,8 @@ int main(int argc, char **argv) try
     if (argc>=2) Nproc = atoi(argv[1]);
     size_t nthread = 256;
     if (argc>=3) nthread = atoi(argv[2]);
+    bool   vv    = (argc>=4)&&atoi(argv[3])!=0;
+    bool   eb    = (argc>=5)&&atoi(argv[4])!=0;
 
         
     double nu = 1.6;
@@ -115,6 +117,8 @@ int main(int argc, char **argv) try
     dom.PeriodicY= true;
     dom.PeriodicZ= true;
     double Tf = 2.0e3;
+    dom.SetDEMIntegrator   (vv);
+    dom.SetDEMEnergyBalance(eb);
     dom.Solve(Tf,Tf/200,Setup,Report,"tlbmdem_cu_02",true,Nproc);
 }
 MECHSYS_CATCH

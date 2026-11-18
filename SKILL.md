@@ -131,10 +131,11 @@ For one-off cases, use the configured standalone compiler:
   before collision; setting the host array once is not enough.
 - `dom.Nthread` controls the CUDA block size. The `Nproc` argument of
   `Domain::Solve` affects host packing/transfers on the GPU path.
-- CPU and GPU body-force conventions differ: CPU `StreamSC` adds
-  `0.5*dt*BForce` to the reported velocity, while the GPU fused kernel returns
-  the raw second moment. The raw GPU moment carries a `-0.5*nu*phi` bias in
-  permeability; use `u_physical = u_raw + 0.5*dt*fx*phi`.
+- Both active paths (CPU `StreamSC`, GPU fused stream) report the raw second
+  moment `u = sum_k f_k c_k/rho`; the `+0.5*dt*BForce` velocity is only in the
+  unused `StreamEFS_SRT`. Do not apply a blind half-force correction - measure
+  it. A forced channel with bounce-back walls returns the analytical parabola
+  plus a constant slip `-c(tau)a`, `c = 1/(8 nu) - 6 nu + 1/2`.
 - Keep one-off FLBM cases outside the checkout; do not add them to `tflbm/`
   unless they belong in the library test suite.
 - Obstacle channel case: `/home/sergio/tflbm_triangle/tclbm_obstacle.cu`

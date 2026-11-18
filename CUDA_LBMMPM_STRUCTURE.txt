@@ -1,0 +1,656 @@
+CUDA LBMMPM STRUCTURE
+=====================
+
+Purpose
+-------
+This note describes how the CUDA LBMMPM path is organized: host-side data
+packing, device buffers, upload/download points, kernel responsibilities, and
+the exact per-step launch order.  It describes the implementation in:
+
+  lib/lbmmpm/Domain.h          host orchestration and CUDA launch wrappers
+  lib/lbmmpm/lbmmpm.cuh        LBMMPM CUDA kernels and device helpers
+  lib/flbm/Domain.h            base LBM upload/download (pF, pRho, ...)
+  lib/flbm/lbm.cuh             FLBM::FIDX and FLBM device layout
+  lib/linalg/matvec.h          Mat3 class, including Mat3::SolAlt
+  tlbmmpm/tlbmmpm_cu_01.cu     elastic-beam CUDA example
+  tlbmmpm/tlbmmpm_cu_02.cu     settled-cube CUDA example
+  tlbmmpm/CMakeLists.txt       CUDA targets and compile flags
+
+The design follows the LBMDEM pattern: the host prepares compact work lists,
+the device owns the hot LBM and coupling arrays, and each phase is a separate
+kernel launch.  In this LBMMPM coupling the MPM material-point update
+(MPMDOM.OneStepCPI) remains a CPU step; only the LBM and the LBM/MPM
+imprint, refill, and immersed-boundary forcing are on the GPU.  Standalone
+`MPM::Domain::Solve` has a separate CUDA CPDI path; that path is not used by
+this LBMMPM coupling.
+
+
+1. File and name-space layout
+-----------------------------
+The device code is in namespace LBMMPM and is guarded by
+MECHSYS_LBMMPM_CUH.  It includes:
+
+  mechsys/flbm/lbm.cuh
+  mechsys/linalg/matvec.h
+
+The host declarations and the CUDA branches are in LBMMPM::Domain
+(lib/lbmmpm/Domain.h).  The CPU branch is unchanged and is selected when
+USE_CUDA is not defined.
+
+The example drivers include only:
+
+  #include <mechsys/lbmmpm/Domain.h>
+
+Under USE_CUDA, Domain.h includes lbmmpm.cuh, so the examples see the device
+launch wrappers through the Domain object.
+
+
+2. Device data map
+------------------
+The LBM arrays are inherited from FLBM::Domain.  The host stores their raw
+device pointers as:
+
+  pF, pFtemp       distribution functions, direction-major
+  pRho             density per cell
+  pVel             velocity per cell (real3)
+  pBForce          body force per cell (real3)
+  pIsSolid         static solid mask
+  plbmaux          FLBM::lbm_aux with Nx, Ny, Nz, Ncells, Nneigh, dx, dt, Cs,
+                   C[k], W[k], Op[k], EEk[k], ...
+
+The population layout is:
+
+  F[k*Ncells + ic]
+
+where k is the lattice direction and ic is the linear cell index:
+
+  ic = x + y*Nx + z*Nx*Ny
+
+Use FLBM::FIDX(Ncells,Nneigh,il,k,ic) for this addressing.  Do not introduce a
+second local index helper; tlbmmpm_cu_01.cu originally had a t01_idx duplicate
+and it was removed.
+
+The LBMMPM-specific arrays are:
+
+  pGamma        real per lattice cell; 0 fluid, 1 body, 2 facet overlap
+  pInside       bool per lattice cell; true while a cell is being refilled
+  pCellVerts    4 size_t vertex ids per MPM body cell
+  pFacVerts     3 size_t vertex ids per MPM boundary facet
+  pBodyPairs    BodyPair {body, cell} candidate list
+  pFacPairs     FacPair  {facet, cell} candidate list
+  pCornerPos    real3 position per MPM corner/vertex
+  pCornerVel    real3 velocity per MPM corner/vertex
+  pCornerH      real3 accumulated hydrodynamic force per corner
+
+These three arrays are the flattened form of MPMDOM.Corners, not
+MPM::Particle::Corners.  MPMDOM.Corners is an Array<Corner *>, one entry per
+body-mesh vertex; its index is the body-mesh vertex ID:
+
+  MPMDOM.Corners[ic] -> pCornerPos[ic], pCornerVel[ic], pCornerH[ic]
+
+pCellVerts and pFacVerts store body-mesh vertex IDs.  The kernels use those IDs
+to index pCornerPos.  MPM::Particle::Corners[4] is a different array: it is the
+per-material-point connectivity to four MPM corners and is used only by the
+CPU MPM update (MPMDOM.OneStepCPI) in this coupling; it is deliberately not
+uploaded here.  (The standalone MPM CUDA CPDI path does upload it as part of
+ParticleCU.)
+
+The corresponding thrust::device_vector members are bGamma, bInside,
+bCellVerts, bFacVerts, bBodyPairs, bFacPairs, bCornerPos, bCornerVel and
+bCornerH.  Raw pointers are refreshed after every host-to-device assignment.
+
+BodyPair and FacPair store unsigned int ids.  They are compact lists: one
+device thread handles one pair.  The host builds them from the same AABBs and
+trunc/ceil bounds used by the CPU loops.  Facet candidates skip IsSolid cells;
+body candidates do not (the CPU body loop does not skip them either).
+
+
+3. What stays on the CPU
+------------------------
+The MPM body representation is never copied to the device wholesale:
+
+  MPMDOM.BodyMesh->Cells, Verts
+  MPMDOM.BFac
+  MPMDOM.Corners
+  MPMDOM.Particles                 (including Particle::Corners[4])
+  Corner::Nodes[8], Corner::Sfunc[8]
+  MPMDOM.OneStepCPI()
+
+The device receives only:
+  - vertex ids for body cells and boundary facets (pCellVerts/pFacVerts),
+  - current MPMDOM.Corners positions, velocities and force accumulators
+    (pCornerPos/pCornerVel/pCornerH),
+  - the current LBM/MPM overlap candidates.
+
+The particle-to-corner connectivity is not needed for the GPU imprint/refill/
+IBB work.  The CPU MPM step uses Particle::Corners to scatter to Corner::Nodes
+and gather with Corner::Sfunc after the GPU has downloaded h.
+
+After the GPU coupling, the corner force h is copied back to
+MPMDOM.Corners[ic]->h and the CPU MPM step advances the body.  The next step
+uploads the new corner positions and rebuilds the candidate lists because the
+body has moved.
+
+
+4. Initial host-to-device upload
+--------------------------------
+Domain::Solve() performs:
+
+  MPMDOM.BoundaryMesh();
+  Reset();
+
+  #ifdef USE_CUDA
+      UpLoadDevice(Nproc);
+      UpdateDeviceCorners();
+      ImprintLatticeCUDA();
+  #else
+      ImprintLattice();
+  #endif
+
+The extra UpdateDeviceCorners + ImprintLatticeCUDA before the output loop is
+important: the CPU path imprints the initial body before frame 0000.  Without
+the extra GPU imprint, frame 0000 has Gamma=0 in the initial body region and the
+first HDF5 output differs.
+
+Domain::UpLoadDevice(Nc):
+
+  1. Calls LBMDOM.UpLoadDevice(Nc), which uploads F, Ftemp, Rho, Vel, BForce,
+     IsSolid, and the FLBM auxiliary data.
+  2. Records nCorners, nBodyCells, nFacets.
+  3. Flattens host Gamma[][][] and Inside[][][] into cell-major host vectors and
+     uploads them to bGamma/bInside.
+  4. Flattens body-cell vertex ids: 4 per body cell -> bCellVerts.
+  5. Flattens facet vertex ids: 3 per facet -> bFacVerts.
+  6. Calls BuildBodyPairs() and BuildFacetPairs().
+  7. Uploads corner positions, velocities and zero h to bCornerPos,
+     bCornerVel, bCornerH.
+  8. Sets the raw pointers pGamma, pInside, ..., pCornerH.
+
+The upload is done once per Solve() call, not once per step.  Moving corner
+state and pair lists are refreshed by UpdateDeviceCorners() every step.
+
+Domain::UpdateDeviceCorners():
+
+  1. BuildBodyPairs() and BuildFacetPairs() again, using the current body AABBs.
+  2. Copies current MPMDOM.Corners positions and velocities into host vectors.
+  3. Assigns them to bCornerPos/bCornerVel.
+  4. Zeroes pCornerH with cudaMemset.
+
+The GPU Reset() branch only clears the host MPMDOM.Corners[*]->h and calls
+MPMDOM.UpdateMesh().  It does not reset the device LBM arrays; the coupling
+kernels do the device-side reset and refill.
+
+Domain::DnLoadDevice(Nc):
+
+  1. Calls LBMDOM.DnLoadDevice(Nc), which copies device Rho and Vel back to the
+     host Rho/Vel arrays.  It does not copy F.
+  2. Copies bGamma back into host LBMDOM.Gamma.
+  3. Output uses host Rho, Vel and Gamma; no host F is downloaded.
+
+Domain::DownloadCornerForces():
+
+  Copies bCornerH to a host vector and writes MPMDOM.Corners[ic]->h.  It is
+  called at the end of ImprintLatticeCUDA(), after cudaDeviceSynchronize().
+
+
+5. Per-step launch order
+------------------------
+The CUDA branch of Domain::Solve() is:
+
+  Reset();
+  UpdateDeviceCorners();
+  ImprintLatticeCUDA();
+
+  cudaCollideMPM<15>       (reconstructs Rho/Vel, then collides)
+  swap pF / pFtemp
+  cudaStreamMPM
+  swap pF / pFtemp
+
+  MPMDOM.OneStepCPI();       // CPU MPM update
+
+Then the outer loop advances Time and iter.  There is no independent device
+clock increment; the outer solve loop owns the clock.
+
+ImprintLatticeCUDA() launches these kernels in one default stream, in this
+order:
+
+  cudaMemsetAsync(pGamma,0,Ncells*sizeof(real))
+  cudaImprintCells
+  cudaRefill
+  cudaMarkFacets
+  cudaImprintFacets
+  cudaDeviceSynchronize()
+  DownloadCornerForces()
+
+The order is not arbitrary:
+
+  - Gamma must be zeroed before body marking.
+  - Body cells (Gamma=1, Inside=true) must be known before refill.
+  - Refill computes F/Rho/Vel for the body cells.
+  - cudaMarkFacets sets Gamma=2 for every facet-overlapped cell before the
+    force kernel reads Gamma of a neighbour.  Combining marking and forcing in
+    one kernel raced marking writes against Gamma[ns] reads and silently lost
+    surface forces.
+  - cudaImprintFacets performs the IBB forcing and accumulates corner h.
+  - Only after the device work is complete can h be downloaded and used by the
+    CPU MPM step.
+
+All launches use B = Nthread (default 256) and a grid of N/B + 1 blocks, with a
+thread guard for the final partial block.  Nproc affects host packing and
+download threading; Nthread is the CUDA block size.
+
+
+6. Kernel responsibilities
+--------------------------
+cudaResetGamma
+  One thread per lattice cell; Gamma[ic]=0.  The host now issues
+  cudaMemsetAsync(pGamma,...) instead; the kernel remains as the reference
+  implementation and is no longer launched.
+
+cudaImprintCells
+  One thread per (body cell, candidate lattice cell) pair.
+  Reads the four body-cell corner positions through pCellVerts, performs the
+  same tetrahedron test as the CPU (lbmmpm_inside_tetra), and sets:
+      Gamma[ic]=1
+      Inside[ic]=true
+  when the cell centre is inside the tetrahedron.
+
+cudaRefill
+  One thread per lattice cell that has Gamma<0.5 and Inside=true.
+  Mirrors the CPU ImprintLattice refill:
+    - accumulates 2*F[nf] - F[nff] from valid fluid neighbours,
+    - divides by the active-neighbour count,
+    - writes fabs(Ft)/naem back to F,
+    - recomputes Rho and Vel,
+    - clears Inside[ic].
+  It also clears the body flags after refill, matching the CPU pass.
+
+cudaMarkFacets
+  One thread per (facet, candidate cell) pair.
+  Computes the normalized facet normal and calls lbmmpm_facet_hit().  The hit
+  test uses the CPU strict inequalities:
+      r > 0, r <= 1,
+      s > 0, t > 0, s+t < 1,
+      dot(xn-x0, normal) > 0
+  It scans directions k=1..Nneigh-1 and stops at the first hit, setting
+  Gamma[ic]=2.  This pass only marks; it does not force.
+
+cudaImprintFacets
+  One thread per (facet, candidate cell) pair.
+  Repeats the facet intersection test and, for every valid direction k (not
+  just the first one), applies the same IBB formula as the CPU:
+    - interpolate wall velocity vw from the facet corners,
+    - locate the opposite neighbour nf and solid neighbour ns,
+    - skip if ns is not a solid/marked cell,
+    - compute newF for the opposite direction ko,
+    - write it to F,
+    - compute the hydrodynamic force Fv,
+    - distribute (1-s-t), s, t of Fv to the three corners with atomicAdd.
+  Both the CPU `ImprintLattice` path and the CUDA kernel clamp a negative
+  `newF` to zero.  They still differ in loop/atomic order, so the GPU force is
+  not bitwise equal to the CPU.
+
+cudaVelDen
+  Legacy standalone reconstruction of Rho/Vel.  It remains in the header for
+  reference but is no longer launched: cudaCollideMPM reconstructs the same
+  pre-collision state before applying the collision.
+
+cudaCollideMPM<NN>
+  One thread per cell.  NN is fixed to 15 (D3Q15).  For every fluid cell it
+  first reconstructs rho, Vel and the collision velocity (the old cudaVelDen
+  work), so the caller does not launch a separate reconstruction kernel.  It
+  uses precomputed 1/Cs and 1/rho, writes the equilibrium polynomial with
+  those reciprocals, then builds the non-equilibrium populations and Q.
+  The entropic scale is the same fixed-point iteration as the CPU routine,
+  but the trial writes to Ftemp are deferred until the final alpha is known;
+  the loop count is capped at 16, unlike the CPU routine which can throw a
+  fatal after several failed attempts.  Solid cells do bounce-back:
+      Ftemp[k] = F[op[k]], Rho=0, Vel=0.
+  Negative-noneq directions can become negative only after alpha is reduced,
+  so the fixed-point loop must not be replaced by a single scan at alpha=1.
+
+cudaStreamMPM
+  One thread per cell.  Streams every direction to the periodic neighbour.
+  The index wrap uses two conditional adds/subtracts instead of `%`, and
+  writes Ftemp[FIDX(...,dest)] from F[FIDX(...,ic)].  It is used for the
+  periodic LBM domains; the t01 example imposes inlet/outlet/top conditions in
+  its own Setup kernels before this streaming step.
+
+Device helpers
+  lbmmpm_cross        cross product
+  lbmmpm_inside_tetra tetrahedron containment with 1e-8 relative tolerance
+  Mat3::SolAlt        CPU-equivalent 3x3 inverse/selection without exceptions,
+                      defined with the other 3-D matrix operations in
+                      lib/linalg/matvec.h
+  lbmmpm_facet_hit    normalized facet hit test and barycentric coordinates
+  FLBM::FIDX          direction-major F addressing; reuse it, do not duplicate
+
+
+7. Boundary and body-force drivers
+----------------------------------
+The examples add a small number of device kernels outside the library:
+
+tlbmmpm_cu_01.cu
+  t01_inlet    prescribed velocity at x=0
+  t01_outlet   prescribed density at x=Nx-1
+  t01_top      free-slip/reflection at z=Nz-1
+  UserData carries dVel, a device copy of the inlet profile; Setup launches the
+  three kernels every step.  They read/write F through FLBM::FIDX with the
+  cell index already computed in the kernel.
+
+tlbmmpm_cu_02.cu
+  setBForce writes BForce=Rho*fluidforce for every cell.  Because the outer
+  Setup callback runs before each coupling step, the device force is refreshed
+  every step; setting the host BForce once would not be enough.
+
+These example kernels are intentionally not in lbmmpm.cuh: they are case
+boundary conditions, not part of the LBMMPM coupling library.
+
+
+8. Build and compile flags
+---------------------------
+From a configured checkout:
+
+  cd /home/sergio/mechsys/tlbmmpm
+  make -j8 tlbmmpm_cu_01 tlbmmpm_cu_02
+
+The CUDA targets are listed in tlbmmpm/CMakeLists.txt under CUDAPROGS.  They
+receive the normal MechSys flags plus:
+
+  -DUSE_CUDA
+  -maxrregcount=128
+  --fmad=false
+
+--fmad=false is required for CPU/GPU parity on facet edges.  The CPU SolAlt
+returns exact zeros on some edge cases; FMA contraction changes the device
+inverse by about 1e-16 and changes which surface cells are marked.  Without the
+flag, reduced and full t02 Gamma differed on 145 and 176 cells respectively.
+The CMake targets set it; for a one-off source build use:
+
+  NVCC_PREPEND_FLAGS=--fmad=false \
+      /home/sergio/mechsys/mechsyscc case.cu
+
+CUDA LBMMPM currently supports D3Q15 only.  Solve() checks:
+
+  if (LBMDOM.Nneigh != 15)
+      throw new Fatal("LBMMPM CUDA currently supports D3Q15 only");
+
+
+9. What is uploaded when, in one picture
+----------------------------------------
+  Solve() start
+    BoundaryMesh, Reset (CPU mesh/corner state)
+    UpLoadDevice
+      base LBM arrays + Gamma/Inside + ids + pair lists + corners
+    UpdateDeviceCorners
+      rebuild pairs, upload moving x/v, zero device h
+    ImprintLatticeCUDA
+      reset/mark/refill/facet mark/facet force -> download h
+
+  each step
+    Setup callback on the host
+      may launch case boundary/body-force kernels directly on pF/pBForce
+    Reset (CPU)
+      corner h=0, MPMDOM.UpdateMesh()
+    UpdateDeviceCorners
+      new pair lists, new corner x/v, h=0
+    ImprintLatticeCUDA
+      coupling kernels, h download
+    cudaCollideMPM<15>
+    swap
+    cudaStreamMPM
+    swap
+    MPMDOM.OneStepCPI (CPU)
+    Time/iter advance
+
+  output step
+    DnLoadDevice
+      base Rho/Vel download + Gamma download
+    host WriteXDMF / report
+
+
+10. 2026-11-06 hot-path optimization
+------------------------------------
+The CUDA LBMMPM hot path was tuned without changing the coupling order.  The
+measured RTX A6000, double-precision, `Nthread=256`, `-maxrregcount=128
+--fmad=false` results (`Solve` printed by Domain::Solve):
+
+  t02 full window (241x61x61, Tf=200, 1001 steps): 4.993 s -> 4.062 s (1.23x)
+  t01 full window (200x200x200, Tf=0.01, 139 steps): 10.664 s -> 8.938 s (1.19x)
+
+Both are clean, no-instrumentation runs with the same source case and one
+output frame.  The t02 reduced case is dominated by fixed setup/output and is
+not a useful speedup measurement.
+
+Profiled t02 phases before/after (1001 steps, instrumentation adds a small
+synchronization cost):
+
+  reset     0.0155 -> 0.0139 s
+  update    0.2391 -> 0.2461 s
+  imprint   0.4272 -> 0.4264 s
+  LBM       3.7527 -> 2.8287 s
+  MPM CPU   0.0839 -> 0.0769 s
+  collide   2.9762 -> 2.4204 s
+  stream    0.3903 -> 0.3971 s
+
+The useful changes are:
+
+  - fused Rho/Vel reconstruction into cudaCollideMPM (no cudaVelDen launch);
+  - reciprocal Cs/rho and a polynomial equilibrium, removing repeated
+    divisions from the collision;
+  - a limiter fixed-point loop with no intermediate Ftemp stores;
+  - branch-based periodic wrap in cudaStreamMPM;
+  - cudaMemsetAsync instead of the Gamma-reset kernel.
+
+Rejected experiments: a one-pass alpha=1 limiter was faster but differed from
+the CPU fixed point because a negative-noneq population can cross the tolerance
+after alpha is reduced; dynamic-shared NonEq reduced spills but did not speed
+up the kernel; `-maxrregcount` 64/72/80/96/160/192 and `Nthread=128/512` were
+within run-to-run noise.  The checked-in defaults remain 128 registers and
+`Nthread=256`.
+
+The optimized t02 `frame 0000` datasets are byte-identical to baseline.  Later
+frames are not bitwise: repeated baseline GPU runs already differ by about
+7.2e-4 relative in Density_0 and 2.2e-3 in Velocity_0, and optimized-vs-baseline
+is of the same order (7.2e-4 / 2.2e-3).  The reduced t01 final beam deflection
+differs by 5.6e-6 m (5.6e-5 relative); LBM Gamma can differ by a few cells once
+the moving body reaches a new cell.  The GPU CD diagnostic remains unusable as
+an external validation quantity, but the case's own diagnostic was recorded
+for the full settled cube.
+
+Reference: P. Zhang, S. Sun, Y. Chen, W. Cui, S.A. Galindo-Torres,
+"Coupled material point Lattice Boltzmann method for modeling
+fluid-structure interactions with large deformations," Computer Methods in
+Applied Mechanics and Engineering 385 (2021) 114040,
+doi:10.1016/j.cma.2021.114040 (CMAME 2021).  The built-in
+`CD(formula)=128*Re^-0.8/5.5` is CMAME 2021 Eq. (38) for a cube
+(`beta_s=1`).  Its validation box is the same 241x61x61 periodic box but
+uses `b=2.5e-5` and a six-tet body; stock `tlbmmpm_cu_02` uses `b=0.25` and
+24 tets, so its CD is not a paper-equivalent result.
+
+A `tlbmmpm_cu_02` run with `.res`-only output (no HDF5) covered 100,000 steps (`Tf=20,000`, `dt=0.2`) in 5m54.3s `Solve`
+on the RTX A6000.  Over the 99
+output frames: `Re` 1.06 -> 37.99, `CD` 41.11 -> 0.913, and the built-in
+`CD(formula)=128*Re^-0.8/5.5` 22.25 -> 1.268.  The formula is a cube drag
+correlation, not exact cube theory.  The final point is -28.0%
+relative; the last 20% of the run averages `CD=0.928` vs formula `1.286`
+(-27.8%).  A GPU body-force sweep at full length gave:
+
+  bforce     final Re    final CD    Eq. (38)   error
+  2.5e-5     0.00545     4657        1505       +209%
+  2.5e-3     0.545       46.58       37.82      +23.2%
+  2.5e-2     5.217       5.224       6.208      -15.8%
+  0.1        17.8        1.796       2.325      -22.8%
+  0.25       37.99       0.913       1.268      -28.0%
+
+At matched Re the CD is force-dependent (Re=2: 13.22/15.00/19.19 for
+b=0.025/0.1/0.25), so these constant-force trajectories are not quasi-steady
+and instantaneous points are not a clean validation of Eq. (38).  The low-Re
+agreement is not recovered just by lowering `bforce`; a fixed-Re controller
+or a time-averaged terminal state is required.  The formula is the case's empirical correlation, not an exact cube
+drag theory.  Do not confuse `tlbmmpm_cu_01` (elastic beam) with
+`tlbmmpm_cu_02` (settled cube).
+
+Velocity inlet/outlet test (one-off, not yet in the library): a D3Q15
+Zou-He velocity inlet at `x=0` and a zero-gradient outlet at `x=Nx-1`
+(y,z periodic).  At `Re=100` the six-tet cube gives `CD=0.3201`
+(`-45.2%` vs Eq. 38), the 24-tet cube `0.3933` (`-32.7%`); at
+`Re=5,10,20,50,100` the six-tet errors are `-26.2,-29.8,-31.8,-36.1,
+-45.2%`.  No Re matched, so no full sweep was run.  A density outlet was
+unstable.  Original `tlbmmpm_cu_02` body-force sweep (stock 24-tet, original
+`nu=0.0020833`, 241x61x61, LES Sc=0.17): b=0.25 -> Re 37.99; b=0.80 ->
+Re 95.54; b=0.84 -> Re 98.91 (1.1% below 100).  At b=0.84, CD=0.3551
+vs Eq. (38) 0.5897 (-39.8%).  VisIt clip animation and frames:
+`/tmp/lbm_cube_stock/final/cu02_cube_clip.gif`,
+`visit_cu02_cube_clip.py`, `lbm.visit`, `mpm.visit`,
+`cu02_CD_vs_formula.png`.  Final CD errors: b=0.25 -28.0%,
+b=0.80 -39.4%, b=0.84 -39.8% versus Eq. (38).
+
+The facet force term uses the full `-2 rho W Cs C` contribution in both
+`cudaImprintFacets` and the CPU `ImprintLattice`; the former empirical
+`ForceCorrection` member, its 0.6 default, and the `lbmmpm_aux` upload were
+removed.  Historical FC=0.6 results (full b=0.84 Re=99.160, CD=0.585829 vs
+Eq.38 0.588541, -0.46%) are not reproducible without re-adding that scaling.
+The historical coefficient-1 result was CD=0.3551 (-39.8%); coefficient 0
+gave +59.4%.
+
+Low-viscosity alternative: `nu=2.0803e-6` and `bforce=2.5e-5` (source
+convention -> `fluidforce=6.25e-10`), six-tet, LES Sc=0.17, full 100,000
+steps: `Re=10.553`, `CD=-9170` vs Eq. (38) `3.533`.  The drag is
+sign-changing and reaches `-2.4e6`/`+2.2e5`; it is unstable.  The 24-tet
+20k check is also negative; Sc=2 gives 161.5 at 20k; direct physical
+`fluidforce=2.5e-5` gives Re=4251.  That combination is not runnable with
+the present low-Tau SRT/MPM coupling.
+
+LES is implemented in the GPU path: `cudaCollideMPM` computes
+`Q` and `tau=0.5*(tau+sqrt(tau*tau+6*Q*Sc/rho))`, with `Sc=0.17` uploaded
+from `FLBM::Domain`.  Runtime check: Sc=0 -> CD 0.2682, Sc=0.17 -> 0.3117
+after 1,000 steps at Re=100, so LES is active.  The formula mirrors CPU
+`CollideMPM`, but uses `Sc` (first power), while `cudaCollideSW` uses
+`Sc*Sc`; this inconsistency should be checked.  All velocity-BC runs above
+already used LES.  At the low viscosity the run is still wild, and Sc=2
+does not cure it; LES is not the missing piece.
+
+The current viscosity is `0.0020833`, ~1000x the low-viscosity alternative
+`2.0803e-6`; at `Re=100` this is Mach 0.116 and `Tau=0.625`, versus Mach
+1.2e-4 and `Tau=0.500125`.  The low viscosity and an intermediate `nu=1e-4`
+were unstable with the present SRT/coupling.
+
+A manual six-tet/8-corner cube was built (6 material points, 12 boundary
+facets, total volume exactly `1.45^3`).  With source `bforce=0.843` the full
+100,000-step GPU run reaches `Re=100.03` at `t=19800`; `CD=0.30258` versus
+Eq. (38) `0.58444`, **-48.2%**.  At matched Re the six-tet body is worse than
+the stock 24-tet body (Re=38: -35.0% vs -28.0%; Re=20: -28.1% vs -22.1%).
+Changing the mesh alone therefore does not recover the match; the
+force/coupling normalization remains different.
+
+A domain-size check with the same body force and cube separated the two
+directions:
+
+  grid            final Re   final CD   formula   error
+  241x61x61        37.99      0.9130     1.2681   -28.0%  (full run)
+  361x61x61        35.73      0.9926     1.3318   -25.5%  (to t=9800)
+  481x61x61        38.84      0.9364     1.2458   -24.8%  (to t=9800)
+  241x81x81        39.36      0.7144     1.2325   -42.0%  (to t=9800)
+  241x91x91        42.00      0.6414     1.1703   -45.2%  (to t=9800)
+
+At matched `Re=30`, the errors are -25.5% (61), -24.1% (361), -23.2% (481),
+-39.2% (81), and -41.5% (91).  At `Re=35`: -27.0%, -25.3%, -24.1%, -40.7%,
+and -43.1%.  Thus:
+
+  - **Streamwise length helps modestly.**  `nx=361` and `481` increase CD at
+    matched Re and reduce the error by about 1.4-3.3 percentage points.  The
+    improvement is real but small; the formula is still not matched.
+  - **Transverse width hurts.**  `ny=nz=81/91` lower the blockage, raise the
+    mean velocity at fixed time, lower CD, and move it much farther below the
+    formula.  Do not use a wider box as a fix.
+
+The 361/481/81/91 runs were stopped at `t=9800` (50,000 steps); their CD was
+still drifting, so the full-run baseline remains the reference.  A larger
+streamwise box is the only direction that improved the match; testing a
+smaller transverse box or a different correlation/normalization is still open.
+
+11a. Legacy ImprintLattice check
+--------------------------------
+The legacy 2020-source copy at `/home/sergio/mechsysv1/lib/lbmmpm/Domain.h`
+has one extra active line in `ImprintLattice`, immediately before the facet
+force is formed:
+
+    LBMDOM.F[0][nxs][nys][nzs][k] = LBMDOM.F[0][nx][ny][nz][k];
+
+The current CPU checkout still comments that line out; it was disabled in
+commit `e1ad057` ("hertz and Ladd models added", 2024-07-23).  The CUDA
+`cudaImprintFacets` now reactivates it as
+`F[k*Nc+ns] = Fk; Fns = Fk;` immediately before the facet force.  The line
+overwrites the solid-neighbour population with the incident fluid population
+before the force is evaluated.  This is an experimental branch: concurrent
+facet threads can target the same solid cell, so the CUDA write is a data
+race.  With the current full facet force it raises the stock cube drag to
+`CD=5.174` at `b=0.25` (+316% vs Eq. 38) and `CD=1.883` at `b=0.84`
+(+229%); the historical FC=0.6 values were `5.494` (+341%) and `2.069`
+(+261%).  Disable it for validation.
+The older CPU t02 comparison remains as a warning:
+
+  variant                        Re at t=980   CD      formula
+  current (line disabled)           5.012      6.830    6.410
+  old line enabled                  5.017     31.524    6.404
+  force-only use of Fk              5.012     28.590    6.410
+
+The old line raises drag by a factor of ~4.6 at `Re~5` and makes the match
+much worse.  A force-only variant that uses `F[nx][ny][nz][k]` in place of
+`F[nxs][nys][nzs][k]` is nearly as bad.
+
+Running the legacy CPU `tlbmmpm02` to `t=19800` with 64 OpenMP threads gives
+`b=0.25`: Re=38.666, CD=4.87784 vs Eq.38 1.25021 (+290.2%, 32m45s wall);
+`b=0.84`: Re=100.838, CD=1.96453 vs Eq.38 0.580694 (+238.3%, 32m19s wall).
+Thus the legacy cube itself is inaccurate under the current 64-thread build;
+this is not only a CUDA race.  The cube source is unchanged from rev 2189,
+but the local run used tip legacy headers plus the current gmsh
+`mesh/unstructured.h` because the clean rev-2189 mesh/tetgen build is broken.
+Results: `/tmp/legacy_cube/run_b025/tlbmmpm02.res`,
+`/tmp/legacy_cube/run_b084/tlbmmpm02.res`,
+`/tmp/legacy_cube/legacy_vs_current_CD.png`.
+
+11. Correctness and limitations
+-------------------------------
+- MechSys host/CPU code is `double`; CUDA precision is selected by
+  `USE_GPU_DOUBLE`, which `mechsyscc` and CMake turn on by default.
+- Frame 0000: in the benchmark comparisons, after the initial imprint all
+  common LBM and MPM HDF5 dataset payloads are byte-identical between CPU and
+  CUDA.  Whole HDF5 files are not
+  byte-identical because HDF5 writes object timestamps/metadata; compare
+  datasets, not file MD5.
+- Later frames are not bitwise.  The CPU facet loops and the GPU pair/atomic
+  updates use different order; cudaImprintFacets uses atomicAdd for corner h.
+  t02 Gamma often remains exact, but Density/Velocity differ after one step,
+  and moving t01 MPM fields diverge.  GPU CD is not a validated replacement
+  for CPU CD.
+- Both the CPU and GPU paths use `newF=0` when the IBB formula would produce a
+  negative population.  Residual CPU/GPU differences come from loop order and
+  the GPU atomicAdd corner accumulation, not from this clamp.
+- The CUDA path does not update host F; only Rho, Vel and Gamma are downloaded
+  for output.
+- The MPM body solve remains CPU.  GPU speedup is therefore largest on the LBM
+  grid (full t02) and smaller when the CPU MPM step dominates (t01).
+- Pair ids are unsigned int.  This is fine for the current grids but is not a
+  general 64-bit pair representation.
+
+
+12. Checklist for adding or changing a kernel
+----------------------------------------------
+1. Put the __global__ kernel and any __device__ helper in lbmmpm.cuh, under
+   the existing LBMMPM namespace and include guard.
+2. Add the host wrapper/declaration in Domain.h and keep the CPU branch
+   untouched.
+3. Add or reuse a thrust::device_vector buffer; refresh the raw pointer after
+   every host assignment.
+4. Keep the default-stream launch order documented above.  If a kernel reads a
+   field another kernel writes, either separate the launches or prove the
+   dependency is safe.
+5. Use FLBM::FIDX for F addressing and pass a precomputed cell index where
+   possible.
+6. Use Nthread for block size and guard against N/B+1 overrun.
+7. Rebuild both CUDA examples and, for facet changes, compare Gamma and output
+   datasets against the CPU; do not rely on whole-file HDF5 equality.
+8. If behavior changes, update this file and MECHSYS_HANDBOOK.md section 9.5.
+

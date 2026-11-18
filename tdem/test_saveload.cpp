@@ -26,7 +26,14 @@
 // something Save or Load failed to carry.  (On the GPU the contact forces accumulate with
 // atomicAdd, so the two will not agree to the last bit; use Nproc=1 on the CPU path.)
 //
-// Usage:  test_saveload [Nproc] [K] [M]
+// Usage:  test_saveload [Nproc] [K] [M] [integrator] [energy]
+//
+//   integrator  0 = position Verlet (default), 1 = velocity Verlet
+//   energy      0 = baseline contact kernels (default), 1 = energy tracks
+//
+// Both options must survive the round trip: the half-step velocities and the
+// acceleration state of velocity Verlet, and the accumulated Evis/Efric work of the
+// energy tracks, are part of what Save writes and Load restores.
 
 // MechSys
 #include <mechsys/dem/domain.h>
@@ -36,6 +43,8 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <cstring>
 
 using Util::PI;
 using DEM::Domain;
@@ -46,11 +55,15 @@ int main(int argc, char ** argv) try
     size_t Nproc = (argc>1)?atoi(argv[1]):1;     // 1 = serial and deterministic
     size_t K     = (argc>2)?atoi(argv[2]):300;   // steps before saving
     size_t M     = (argc>3)?atoi(argv[3]):300;   // steps after loading
+    bool   vv    = (argc>4)&&atoi(argv[4])!=0;   // 0 position Verlet, 1 velocity Verlet
+    bool   eb    = (argc>5)&&atoi(argv[5])!=0;   // 1 = energy tracks (dissipation accounting)
     double dt    = 1.0e-5;
 
     printf("\n=== test_saveload ===\n");
     printf("  Nproc=%zu   save after %zu steps (t=%g), then %zu more (t=%g)\n",
            Nproc,K,K*dt,M,(K+M)*dt);
+    printf("  integrator: %s   energy tracks: %s\n",
+           vv?"velocity Verlet":"position Verlet", eb?"on":"off");
 
     // ---------------------------------------------------------------------------------
     // The scene: test_01's sliding block, plus a pair of stacked spheres away from the
@@ -65,6 +78,8 @@ int main(int argc, char ** argv) try
     // Starting it lower embeds it in the floor and the Kn=1e8 contact fires it away.
     // ---------------------------------------------------------------------------------
     Domain dom;
+    dom.UseVelocityVerlet = vv;
+    dom.SetEnergyBalance  (eb);
     dom.AddCube  (-1,Vec3_t(-5.0,0.0,0.7),0.1,1.0,1.0,PI/2.0,&OrthoSys::e0);  // the block
     dom.AddPlane (-2,OrthoSys::O,0.1,100.0,100.0,1.0);                        // the floor
     dom.AddSphere(-3,Vec3_t(2.0,0.0,0.40),0.3,1.0);                           // lower sphere
@@ -99,6 +114,8 @@ int main(int argc, char ** argv) try
 
     Domain ld;
     ld.Load("test_saveload");
+    ld.UseVelocityVerlet = vv;   // runtime choices, not part of the saved state
+    ld.SetEnergyBalance  (eb);
 
     // ---- the two must agree exactly going in ----------------------------------------
     double dx=0.0,dv=0.0,dxb=0.0,dw=0.0,dwb=0.0,dq=0.0;
@@ -190,6 +207,53 @@ int main(int argc, char ** argv) try
         }
         printf("  %s sphere history   Fdvv non-zero=%zu max=%.4e   Fdr non-zero=%zu max=%.4e\n",
                nm[q],nvv,mvv,nrr,mrr);
+    }
+
+    // The energy tracks live in every contact record (the cumulative dissipation
+    // counters plus the dashpot-force split) and in the domain totals summed from them.
+    // They are part of the checkpoint, so a mismatch here is the same failure as one in x.
+    if (eb)
+    {
+        // Per contact, keyed by the pair id, the fields the energy tracks fill.
+        std::vector<size_t> keys;
+        for (auto it=dom.PairtoCInt.begin(); it!=dom.PairtoCInt.end(); ++it) keys.push_back(it->first);
+        std::sort(keys.begin(),keys.end());
+        bool   same_pairs = dom.PairtoCInt.size()==ld.PairtoCInt.size();
+        double dc = 0.0;
+        double se[2] = {0.0,0.0}, sf[2] = {0.0,0.0};
+        for (size_t k=0; k<keys.size(); k++)
+        {
+            auto jt = ld.PairtoCInt.find(keys[k]);
+            if (jt==ld.PairtoCInt.end()) { same_pairs=false; continue; }
+            DEM::CInteracton * a = dom.PairtoCInt[keys[k]];
+            DEM::CInteracton * b = jt->second;
+            dc = std::max(dc,fabs(a->Epot -b->Epot ));
+            dc = std::max(dc,fabs(a->dEvis-b->dEvis));
+            dc = std::max(dc,fabs(a->dEfric-b->dEfric));
+            for (int kk=0;kk<3;kk++)
+            {
+                dc = std::max(dc,fabs(a->Fndpot(kk)-b->Fndpot(kk)));
+                dc = std::max(dc,fabs(a->Ftdpot(kk)-b->Ftdpot(kk)));
+            }
+            dc = std::max(dc,fabs(double(a->Nc)-double(b->Nc)));
+            dc = std::max(dc,fabs(a->NormalOverlap-b->NormalOverlap));
+            // PairtoCInt is an unordered_map, so its iteration order is not the same in the
+            // two domains; sum the totals in this canonical (sorted key) order instead.
+            se[0] += a->dEvis;  se[1] += b->dEvis;
+            sf[0] += a->dEfric; sf[1] += b->dEfric;
+        }
+        printf("  contact tracks      %zu contacts, pairs=%s, max field difference=%.3e   %s\n",
+               keys.size(),same_pairs?"MATCH":"*** DIFFERS ***",dc,
+               (dc==0.0&&same_pairs)?"BIT IDENTICAL":"*** DIFFERS ***");
+
+        // The domain totals are those same sums, so in a canonical order they must agree.
+        double de = std::max(fabs(se[0]-se[1]),fabs(sf[0]-sf[1]));
+        printf("  energy totals       Evis dom=%.12e ld=%.12e   Efric dom=%.12e ld=%.12e   %s\n",
+               se[0],se[1],sf[0],sf[1],de==0.0?"BIT IDENTICAL":"*** DIFFERS ***");
+        printf("  reported totals     Evis dom=%.12e ld=%.12e   Efric dom=%.12e ld=%.12e   "
+               "(summed by CalcEnergy in map order)\n",dom.Evis,ld.Evis,dom.Efric,ld.Efric);
+
+        ok = ok && dc==0.0 && same_pairs && de==0.0;
     }
 
     printf("\n  RESULT: %s\n", ok?"PASS - the reloaded domain is bit-for-bit the same"

@@ -209,6 +209,10 @@ int main(int argc, char **argv) try
     double dthoot= 4.0;     
     if (argc>=3) Nproc=atoi(argv[2]);
     if (argc>=4) dthoot=atof(argv[3]);
+    bool velocityVerlet = false;
+    if (argc>=5) velocityVerlet = atoi(argv[4])!=0;
+    bool energyBalance  = false;
+    if (argc>=6) energyBalance  = atoi(argv[5])!=0;
     String filekey  (argv[1]);
     String filename (filekey+".inp");
     if (!Util::FileExists(filename)) throw new Fatal("File <%s> not found",filename.CStr());
@@ -290,6 +294,8 @@ int main(int argc, char **argv) try
     size_t cl = 0;
     if (contactlaw=="hertz") cl=1;
     DEM::Domain dom(&dat,cl);
+    dom.UseVelocityVerlet = velocityVerlet;
+    dom.SetEnergyBalance  (energyBalance);
     dom.Alpha=verlet;
     dat.p0 = p0;
     dom.Dilate = true;

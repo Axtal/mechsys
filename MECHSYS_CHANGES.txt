@@ -1,0 +1,132 @@
+MECHSYS CHANGES - SAVE/LOAD CONTINUATION SUPPORT
+================================================
+
+Repository: /home/sergio/mechsys
+State:      uncommitted working-tree changes
+
+Final status: no functional change was kept in Domain::Load.  An eager
+FreePar/NoFreePar rebuild was tried and then removed because Solve() already
+owns that derived state.  The remaining MechSys changes are comments,
+regression coverage, and documentation.
+
+
+1. CODE: lib/dem/domain.h
+----------------------------
+
+A. Domain::Save (around line 1740)
+
+Comments only; no data-format change.  `xb` and `wb` were already written to
+the HDF5 checkpoint.  The comment now states the contract explicitly:
+
+    Persist both Verlet references.  Load restores them verbatim and does
+    not call InitializeVelocity(), so a continuation starts from the same
+    integrator history as the run that wrote the file.
+
+B. Domain::Load (around line 2532)
+
+Comments only; no functional change.  The comment records two facts:
+
+- A loaded domain is already initialised.  Load preserves the saved `xb` and
+  `wb`; it does not reinitialize the particles.
+- Particles added AFTER a load are therefore NOT initialized by the next
+  Solve().  The caller must call InitializeVelocity(dt) after adding or
+  repositioning one.
+- `FreePar`, `NoFreePar` and `Particle::Index` are derived state.  Solve()
+  clears and rebuilds them after Initialize(), so Load intentionally leaves
+  them alone.  Code that inspects or extends a loaded domain before the first
+  Solve() must rebuild that partition itself.
+
+An earlier version rebuilt FreePar/NoFreePar/Index inside Load.  That was
+redundant for Load()-then-Solve() and has been reverted.
+
+
+2. TEST: tdem/test_saveload.cpp
+--------------------------------
+
+Extended coverage, without changing the library contract:
+
+- compare `wb` as well as `xb`, `x`, `v`, `w` and `Q`;
+- compare all constraint flags:
+  `vxf`, `vyf`, `vzf`, `wxf`, `wyf`, `wzf`, `FixFree`, `Eroded`, `Closed`,
+  `Cluster`;
+- continue both the in-memory and loaded domains for the same number of steps
+  and compare `dwb` after the continuation as well;
+- after the continuation Solve(), compare `FreePar`, `NoFreePar` and
+  `Particle::Index`; these are intentionally not asserted immediately after
+  Load because Solve() owns their rebuild.
+
+Regression command and result:
+
+    cd /home/sergio/mechsys/tdem
+    make -j8 test_saveload
+    ./test_saveload 1 300 300
+
+Measured output:
+
+    at the checkpoint   max|dx|=0.000e+00 max|dv|=0.000e+00
+                        max|dxb|=0.000e+00 max|dw|=0.000e+00
+                        max|dwb|=0.000e+00 max|dQ|=0.000e+00
+                        flags=MATCH   BIT IDENTICAL
+    after 300 more      BIT IDENTICAL
+    free partition      ld: 3 free / 1 fixed   dom: 3 free / 1 fixed   MATCH
+    RESULT: PASS - the reloaded domain is bit-for-bit the same
+
+Test exit status: 0.
+
+
+3. MEMORY / HANDBOOK UPDATES
+-----------------------------
+
+MEMORY.md, section 2c "Save/Load state" (around line 123)
+
+  Documents that Save/Load persist xb and wb; that FreePar/NoFreePar/Index are
+  derived and rebuilt by Solve(); that a normal Load-then-Solve needs no Load
+  rebuild; that a pre-Solve caller must rebuild the partition itself; and that
+  particles added after Load need InitializeVelocity(dt).
+
+MECHSYS_HANDBOOK.md, section 3.8 "Save/load and continuation" (around line 327)
+
+  Documents the complete checkpoint contents, the Load contract, the fact that
+  the derived partition is owned by Solve(), the pre-Solve caller
+  responsibility, the added-particle limitation, the append behavior of Load,
+  and the bit-identical test result.
+
+No avalanche/ricepile experiment details were added to MEMORY.md; those belong
+in the avalanche project documentation.
+
+
+4. OUTSIDE MECHSYS (not a MechSys library change)
+--------------------------------------------------
+
+The large-pile continuation also required a fix in
+/home/sergio/avalanche_dem/src/ricepile.cpp, not in MechSys:
+
+    dom.Xmin = -cfg.exit_margin;
+    dom.Xmax =  cfg.cell_Lx + cfg.exit_margin;
+
+The previous restore code used +/-0.5*cell_Lx, which clipped the discharge
+side of the base (the base spans x=0..cell_Lx) and eventually caused a
+spurious base/box overlap.  The avalanche driver also rebuilds its own
+free/fixed partition in RestorePile() before the first Solve(); it does not
+depend on Load() doing so.
+
+A Python renderer was also added at
+/home/sergio/avalanche_dem/analysis/render_frames_3d.py for GIF rendering from
+the driver's frames CSV.  It is not part of MechSys.
+
+
+5. OTHER WORKING-TREE CHANGES - NOT PART OF THIS SAVE/LOAD WORK
+----------------------------------------------------------------
+
+`git status` in /home/sergio/mechsys also shows pre-existing or unrelated
+changes.  They are intentionally not described as part of the Save/Load work:
+
+  modified: AGENTS.md
+  modified: MECHSYS_HANDBOOK.md   (section 3.7 and ttt notes, in addition to 3.8)
+  modified: MEMORY.md             (unrelated cleanup in addition to 2c)
+  untracked: CPU_DEM_OPTIMIZATION_CHANGES.md
+  untracked: CUDA_OPTIMIZATION_CHANGES.md
+  untracked: REDUCED_TEST_CU_03_PERFORMANCE.md
+  untracked: tlbmdem/tlbmdem01, tlbmdem/tlbmdem02, tlbmdem/tlbmdem_cu_01
+
+No commit was created.

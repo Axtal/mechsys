@@ -31,7 +31,15 @@ using DEM::Domain;
 
 int main(int argc, char **argv) try
 {
+    // Optional trailing arguments select the integrator and the contact energy
+    // tracks; the defaults reproduce the original position-Verlet run.
+    bool velocityVerlet = false;
+    if (argc>=2) velocityVerlet = atoi(argv[1])!=0;
+    bool energyBalance  = false;
+    if (argc>=3) energyBalance  = atoi(argv[2])!=0;
     DEM::Domain dom;
+    dom.UseVelocityVerlet = velocityVerlet;
+    dom.SetEnergyBalance  (energyBalance);
     double dt = 1.0e-5;     // time step
     double g = 9.8;         // gravity acceleration
     double velocity = 10.0; // velocity of the sliding block.

@@ -62,8 +62,16 @@ void Report (DEM::Domain & dom, void *UD)
 
 int main(int argc, char **argv) try
 {
+    // Optional trailing arguments select the integrator and the contact energy
+    // tracks; the defaults reproduce the original position-Verlet run.
+    bool velocityVerlet = false;
+    if (argc>=2) velocityVerlet = atoi(argv[1])!=0;
+    bool energyBalance  = false;
+    if (argc>=3) energyBalance  = atoi(argv[2])!=0;
     UserData dat;
     DEM::Domain dom(&dat);
+    dom.UseVelocityVerlet = velocityVerlet;
+    dom.SetEnergyBalance  (energyBalance);
     double dt = 1.0e-5;      // time step
     double g = 980.0;        // gravity acceleration
     double angveltab = 10.0; // angular velocity of the sliding block

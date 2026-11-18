@@ -51,6 +51,8 @@ int main(int argc, char **argv) try
 {
     size_t Nproc = 0.75*omp_get_max_threads();
     if (argc>=2) Nproc = atoi(argv[1]);
+    bool   vv    = (argc>=3)&&atoi(argv[2])!=0;
+    bool   eb    = (argc>=4)&&atoi(argv[3])!=0;
 
         
     size_t nx  = 100;
@@ -134,6 +136,8 @@ int main(int argc, char **argv) try
 
 
     double Tf = 4.0e4;
+    dom.SetDEMIntegrator   (vv);
+    dom.SetDEMEnergyBalance(eb);
     dom.Solve(Tf,Tf/400,Setup,Report,"tlbmdem_cu_04",true,Nproc);
 }
 MECHSYS_CATCH
